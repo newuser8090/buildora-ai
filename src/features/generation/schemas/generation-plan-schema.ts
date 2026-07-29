@@ -1,0 +1,113 @@
+import { z } from "zod";
+
+// ---------------------------------------------------------------------------
+// Planned section schema
+// ---------------------------------------------------------------------------
+
+export const PlannedSectionSchema = z.object({
+  type: z.string().min(1),
+  order: z.number().int().min(1),
+  props: z.record(z.string(), z.unknown()).default({}),
+});
+
+// ---------------------------------------------------------------------------
+// Theme style — validate as string, constrained
+// ---------------------------------------------------------------------------
+
+const ThemeStyleEnum = z.string().refine(
+  (v) => ["modern", "minimal", "dark", "light", "luxury", "startup"].includes(v),
+  { message: "Invalid theme style" },
+);
+
+// ---------------------------------------------------------------------------
+// Full GenerationPlan schema (what Gemini outputs)
+// ---------------------------------------------------------------------------
+
+export const GenerationPlanSchema = z.object({
+  websiteType: z
+    .string()
+    .refine(
+      (v) =>
+        ["saas", "portfolio", "agency", "restaurant", "ecommerce"].includes(v),
+      { message: "Invalid website type" },
+    )
+    .default("saas"),
+  brandName: z.string().min(1, "Brand name is required").default("MyBrand"),
+  theme: ThemeStyleEnum.default("modern"),
+  sections: z.array(PlannedSectionSchema).min(1, "At least one section required"),
+});
+
+export type GeminiPlanInput = z.infer<typeof GenerationPlanSchema>;
+
+// ---------------------------------------------------------------------------
+// Project validation schema
+// ---------------------------------------------------------------------------
+
+const PalleteSchema = z.object({
+  background: z.string(),
+  foreground: z.string(),
+  primary: z.string(),
+  primaryForeground: z.string(),
+  secondary: z.string(),
+  secondaryForeground: z.string(),
+  muted: z.string(),
+  mutedForeground: z.string(),
+  accent: z.string(),
+  accentForeground: z.string(),
+  border: z.string(),
+  card: z.string(),
+  cardForeground: z.string(),
+});
+
+export const ThemeSchema = z.object({
+  palette: PalleteSchema,
+  typography: z.object({
+    fontFamily: z.string(),
+    headingFont: z.string(),
+    baseSize: z.string(),
+    scale: z.number(),
+  }),
+  spacing: z.object({
+    sectionPadding: z.string(),
+    containerMaxWidth: z.string(),
+    gap: z.string(),
+  }),
+  radius: z.object({
+    sm: z.string(),
+    md: z.string(),
+    lg: z.string(),
+    xl: z.string(),
+    full: z.string(),
+  }),
+  shadows: z.object({
+    sm: z.string(),
+    md: z.string(),
+    lg: z.string(),
+    xl: z.string(),
+  }),
+});
+
+const BaseSectionSchema = z.object({
+  id: z.string().min(1),
+  type: z.string().min(1),
+  order: z.number().int(),
+  visible: z.boolean(),
+  props: z.record(z.string(), z.unknown()),
+  styles: z.record(z.string(), z.unknown()),
+});
+
+const PageSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  slug: z.string().min(1),
+  sections: z.array(BaseSectionSchema).min(1),
+});
+
+export const ProjectSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  theme: ThemeSchema,
+  pages: z.array(PageSchema).min(1),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
