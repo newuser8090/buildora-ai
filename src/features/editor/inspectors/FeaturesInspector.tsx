@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { Field } from "@/components/ui/Field";
 import { SharedSectionControls } from "./SharedSectionControls";
+import { InspectorAssetField } from "@/features/assets/components/InspectorAssetField";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import type { BaseSection, FeaturesSectionProps } from "@/types/section";
 
@@ -100,6 +101,20 @@ export function FeaturesInspector({
                   }}
                 />
               </Field>
+              <InspectorAssetField
+                label={`Feature ${i + 1} image`}
+                value={feature.iconImage}
+                allowedTypes={["image"]}
+                onChange={(ref) => {
+                  const updated = [...props.features];
+                  updated[i] = { ...updated[i], iconImage: ref };
+                  update({ features: updated });
+                }}
+                description="Optional feature image/icon. Restores emoji fallback when cleared."
+                allowAltText
+                onFocus={handleFocus}
+                onBlur={handleBlur}
+              />
             </div>
           ))}
         </div>

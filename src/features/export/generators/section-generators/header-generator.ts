@@ -3,23 +3,34 @@ import type { OutputFile } from "../../pipeline/types";
 // ---------------------------------------------------------------------------
 // Header section generator
 //
-// Produces a reusable component with navigation links and optional CTA.
-// React handles HTML escaping at runtime — no manual safe() needed.
+// Produces a reusable component with navigation links, optional CTA,
+// and optional logo image (standard <img>, not next/image).
+// React handles HTML escaping at runtime.
 // ---------------------------------------------------------------------------
 
 export function generateHeaderComponent(): OutputFile {
   const content = `export interface HeaderProps {
   logoText: string;
+  logoSrc?: string;
+  logoAlt?: string;
   navLinks: { text: string; href: string }[];
   ctaText?: string;
   ctaHref?: string;
 }
 
-export function Header({ logoText, navLinks, ctaText, ctaHref }: HeaderProps) {
+export function Header({ logoText, logoSrc, logoAlt, navLinks, ctaText, ctaHref }: HeaderProps) {
   return (
     <header className="border-b border-border px-6 py-4">
       <div className="mx-auto flex max-w-6xl items-center justify-between">
-        <span className="text-xl font-bold text-foreground">{logoText}</span>
+        {logoSrc ? (
+          <img
+            src={logoSrc}
+            alt={logoAlt || logoText}
+            className="h-10 w-auto object-contain"
+          />
+        ) : (
+          <span className="text-xl font-bold text-foreground">{logoText}</span>
+        )}
         <nav className="flex items-center gap-6">
           {navLinks.map((link) => (
             <a

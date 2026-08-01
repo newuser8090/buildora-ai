@@ -1,10 +1,21 @@
 "use client";
 
+import { useSectionAssets } from "@/features/editor/hooks/useSectionAssets";
+import { resolveAsset } from "@/features/assets/services/asset-resolver";
+import { ResolvedAssetImage } from "@/features/assets/components/ResolvedAssetImage";
 import type { BaseSection } from "@/types/section";
 import type { HeroSectionProps } from "@/types/section";
 
 export function HeroSection({ section }: { section: BaseSection }) {
   const props = section.props as unknown as HeroSectionProps;
+  const assets = useSectionAssets();
+
+  // Resolve hero image and background image
+  const heroImg = resolveAsset(props.heroImage, assets);
+  const bgImg = resolveAsset(props.backgroundImage, assets);
+
+  // Use legacy image URL as fallback for content image
+  const contentImgSrc = heroImg.src || (typeof props.image === "string" ? props.image : undefined);
 
   // Safety: ensure render-critical fields exist
   const headline = typeof props.headline === "string" ? props.headline : "Welcome";
@@ -16,13 +27,20 @@ export function HeroSection({ section }: { section: BaseSection }) {
     ? props.secondaryCta.text
     : null;
 
+  // Background style — use resolved asset or fall back to theme
+  const sectionStyle: Record<string, unknown> = {
+    padding: "6rem 0",
+    textAlign: "center",
+  };
+  if (bgImg.src) {
+    sectionStyle.backgroundImage = `url("${bgImg.src.replace(/"/g, "'")}")`;
+    sectionStyle.backgroundSize = "cover";
+    sectionStyle.backgroundPosition = "center";
+    sectionStyle.position = "relative";
+  }
+
   return (
-    <section
-      style={{
-        padding: "6rem 0",
-        textAlign: "center",
-      }}
-    >
+    <section style={sectionStyle}>
       <div
         style={{
           maxWidth: "720px",
@@ -30,6 +48,19 @@ export function HeroSection({ section }: { section: BaseSection }) {
           padding: "0 2rem",
         }}
       >
+        {/* Content image (AssetRef or legacy URL) */}
+        {contentImgSrc && (
+          <div style={{ marginBottom: "1.5rem", display: "flex", justifyContent: "center" }}>
+            <ResolvedAssetImage
+              src={contentImgSrc}
+              alt={heroImg.alt || "Hero image"}
+              fit="contain"
+              maxHeight="400px"
+              style={{ borderRadius: "0.75rem" }}
+            />
+          </div>
+        )}
+
         <h1
           style={{
             fontSize: "clamp(2rem, 5vw, 3.5rem)",

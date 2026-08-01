@@ -7,6 +7,11 @@ export interface OutputFile {
   path: string;
   /** File content as a string */
   content: string;
+  /**
+   * Encoding of `content`. Defaults to "utf-8".
+   * "base64" indicates that `content` is a base64-encoded binary payload.
+   */
+  encoding?: "utf-8" | "base64";
 }
 
 // ---------------------------------------------------------------------------

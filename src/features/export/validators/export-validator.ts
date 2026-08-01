@@ -2,6 +2,7 @@ import type { Project } from "@/types/project";
 import { AnySectionSchema } from "@/features/editor/schemas/section-schemas";
 import { ProjectSchema, ThemeSchema } from "@/features/generation/schemas/generation-plan-schema";
 import { sectionRegistry } from "@/features/editor/registry/section-registry";
+import { buildExportAssetManifest } from "../generators/asset-export-manifest";
 import type { ExportValidation } from "../pipeline/types";
 
 // ---------------------------------------------------------------------------
@@ -13,6 +14,7 @@ import type { ExportValidation } from "../pipeline/types";
 //   - Unsupported section types
 //   - Missing required props on sections
 //   - Malformed theme
+//   - Invalid or unsupported referenced assets
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -23,8 +25,6 @@ export function validateProjectForExport(project: Project): ExportValidation {
   const errors: string[] = [];
 
   // 0. Read known types from the singleton registry
-  //    Fall back to a hardcoded list if the registry is empty
-  //    (e.g. in test environments where section registration hasn't run)
   const KNOWN_TYPES_FALLBACK = [
     "header", "hero", "features", "pricing", "faq", "cta", "footer",
   ];
@@ -86,6 +86,19 @@ export function validateProjectForExport(project: Project): ExportValidation {
           );
         }
       }
+    }
+  }
+
+  // 4. Asset validation — check referenced assets via manifest builder
+  const assetManifest = buildExportAssetManifest(project);
+  for (const assetError of assetManifest.errors) {
+    errors.push(`Asset (blocking): ${assetError}`);
+  }
+  // Warnings are non-blocking — logged for information but don't fail validation
+  for (const warning of assetManifest.warnings) {
+    // Non-blocking warnings are surfaced but don't fail the export
+    if (process.env.NODE_ENV !== "production") {
+      console.warn(`[Buildora Export] ${warning}`);
     }
   }
 

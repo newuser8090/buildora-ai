@@ -1,10 +1,18 @@
 "use client";
 
+import { useSectionAssets } from "@/features/editor/hooks/useSectionAssets";
+import { resolveAsset } from "@/features/assets/services/asset-resolver";
+import { ResolvedAssetImage } from "@/features/assets/components/ResolvedAssetImage";
 import type { BaseSection } from "@/types/section";
 import type { FooterSectionProps } from "@/types/section";
 
 export function FooterSection({ section }: { section: BaseSection }) {
   const props = section.props as unknown as FooterSectionProps;
+  const assets = useSectionAssets();
+
+  // Resolve logo image
+  const logo = resolveAsset(props.logoImage, assets);
+  const showLogoImage = logo.src && !logo.missing;
 
   // Safety: ensure render-critical fields exist
   const text = typeof props.text === "string" ? props.text : "© All rights reserved.";
@@ -29,14 +37,27 @@ export function FooterSection({ section }: { section: BaseSection }) {
           gap: "1rem",
         }}
       >
-        <span
-          style={{
-            fontSize: "0.875rem",
-            color: "var(--muted-foreground, #737373)",
-          }}
-        >
-          {text}
-        </span>
+        {/* Logo — image takes precedence over text */}
+        {showLogoImage ? (
+          <ResolvedAssetImage
+            src={logo.src}
+            alt={logo.alt}
+            fit="contain"
+            width="auto"
+            maxHeight="2rem"
+            style={{ flexShrink: 0 }}
+            fallback={<span style={{ fontSize: "0.875rem", color: "var(--muted-foreground, #737373)" }}>{text}</span>}
+          />
+        ) : (
+          <span
+            style={{
+              fontSize: "0.875rem",
+              color: "var(--muted-foreground, #737373)",
+            }}
+          >
+            {text}
+          </span>
+        )}
 
         {links.length > 0 && (
           <nav style={{ display: "flex", gap: "1.5rem" }}>

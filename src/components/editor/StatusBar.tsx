@@ -7,6 +7,9 @@ import {
   Smartphone,
   Circle,
   Sparkles,
+  Loader2,
+  AlertCircle,
+  CheckCircle2,
 } from "lucide-react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 
@@ -37,9 +40,25 @@ export function StatusBar() {
   const setZoom = useEditorStore((s) => s.setZoom);
   const project = useEditorStore((s) => s.project);
   const selectedSectionId = useEditorStore((s) => s.selectedSectionId);
+  const saveStatus = useEditorStore((s) => s.saveStatus);
+  const isDirty = useEditorStore((s) => s.isDirty);
+  const isHydrated = useEditorStore((s) => s.isHydrated);
+  const persistenceError = useEditorStore((s) => s.persistenceError);
 
   const hasProject = project.pages.length > 0;
   const sectionCount = project.pages[0]?.sections.length ?? 0;
+
+  // Determine save status display
+  const saveIndicator = (() => {
+    if (saveStatus === "hydrating") return { icon: Loader2, text: "Hydrating...", className: "text-blue-400" };
+    if (saveStatus === "saving") return { icon: Loader2, text: "Saving...", className: "text-accent" };
+    if (saveStatus === "error") return { icon: AlertCircle, text: persistenceError?.message ?? "Save failed", className: "text-red-400" };
+    if (saveStatus === "unsaved" || isDirty) return { icon: Circle, text: "Unsaved changes", className: "text-yellow-400" };
+    if (saveStatus === "saved") return { icon: CheckCircle2, text: "Saved", className: "text-green-400" };
+    return { icon: Circle, text: "Ready", className: "text-text-dim" };
+  })();
+
+  const SaveIcon = saveIndicator.icon;
 
   return (
     <footer className="flex h-9 items-center justify-between border-t border-border bg-secondary px-4">
@@ -80,12 +99,20 @@ export function StatusBar() {
         </button>
       </div>
 
-      {/* ---- Center: Status + source ---- */}
+      {/* ---- Center: Status + save status ---- */}
       <div className="flex items-center gap-3 text-xs text-text-dim">
-        <div className="flex items-center gap-1.5">
-          <Circle className="h-1.5 w-1.5 fill-text-dim text-text-dim" />
-          <span>Ready</span>
-        </div>
+        {isHydrated && (
+          <div className="flex items-center gap-1.5">
+            <SaveIcon className={cn("h-3 w-3", saveIndicator.className, saveStatus === "saving" && "animate-spin")} />
+            <span className={cn("text-xs", saveIndicator.className)}>{saveIndicator.text}</span>
+          </div>
+        )}
+        {!isHydrated && saveStatus !== "hydrating" && (
+          <div className="flex items-center gap-1.5">
+            <Circle className="h-1.5 w-1.5 fill-text-dim text-text-dim" />
+            <span>Ready</span>
+          </div>
+        )}
 
         {hasProject && sectionCount > 0 && (
           <>

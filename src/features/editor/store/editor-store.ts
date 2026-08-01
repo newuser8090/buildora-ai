@@ -1,6 +1,10 @@
 import { create } from "zustand";
 import type { Project, Viewport } from "@/types/project";
 import type { BaseSection } from "@/types/section";
+import type { Asset } from "@/features/assets/types";
+import type { PersistenceError } from "@/features/persistence/types";
+import { clearAssetReferences } from "@/features/assets/services/reference-cleanup";
+import { getCanonicalExtension } from "@/features/assets/services/file-validator";
 
 // ---------------------------------------------------------------------------
 // History stack
@@ -35,6 +39,17 @@ export interface EditorState {
   // History
   history: History;
 
+  // ---- Persistence state ----
+
+  isHydrated: boolean;
+  isDirty: boolean;
+  activeProjectId: string;
+  revision: number;
+  saveStatus: "hydrating" | "idle" | "unsaved" | "saving" | "saved" | "error";
+  lastSavedAt: string | null;
+  persistenceError: PersistenceError | null;
+  hydrationError: PersistenceError | null;
+
   // ---- Internal (not persisted) ----
 
   /** Active editing session. When set, mutations update project in place
@@ -67,6 +82,24 @@ export interface EditorState {
   reorderSection: (pageId: string, sectionId: string, newOrder: number) => void;
   duplicateSection: (sectionId: string) => void;
   deleteSection: (sectionId: string) => void;
+
+  // Asset management
+  getAsset: (assetId: string) => Asset | undefined;
+  addAsset: (asset: Asset) => void;
+  removeAsset: (assetId: string, options?: { clearReferences?: boolean }) => void;
+  replaceAsset: (assetId: string, replacement: Asset) => void;
+  renameAsset: (assetId: string, name: string) => { success: boolean; error?: string };
+
+  // Persistence actions
+  hydrateProject: (project: Project, revision: number) => void;
+  setSaveStatus: (status: EditorState["saveStatus"]) => void;
+  setDirty: (dirty: boolean) => void;
+  setRevision: (revision: number) => void;
+  setActiveProjectId: (id: string) => void;
+  setPersistenceError: (error: PersistenceError | null) => void;
+  setHydrationError: (error: PersistenceError | null) => void;
+  setLastSavedAt: (timestamp: string | null) => void;
+  markSaved: (savedAt?: string) => void;
 
   // History
   undo: () => void;
@@ -161,6 +194,7 @@ const EMPTY_PROJECT: Project = {
       xl: "0 20px 25px rgba(0,0,0,0.15)",
     },
   },
+  assets: [],
   pages: [],
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
@@ -180,12 +214,22 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   isGenerating: false,
   generationProgress: 0,
   history: createHistory(EMPTY_PROJECT),
+  isHydrated: false,
+  isDirty: false,
+  activeProjectId: "",
+  revision: 0,
+  saveStatus: "idle" as const,
+  lastSavedAt: null,
+  persistenceError: null,
+  hydrationError: null,
   _editingSession: null,
 
   // ---- Actions ----
 
   initProject: (project) => {
     const cloned = cloneProject(project);
+    // Normalize legacy projects without the assets field
+    if (!cloned.assets) cloned.assets = [];
     // Create a clean history with the new project as the first entry
     // This ensures generation is represented as one history change
     const initialHistory: History = {
@@ -221,6 +265,148 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
 
   setGenerating: (isGenerating) => set({ isGenerating }),
   setGenerationProgress: (progress) => set({ generationProgress: progress }),
+
+  // ---- Asset management ----
+
+  getAsset: (assetId) => {
+    return get().project.assets.find((a) => a.id === assetId);
+  },
+
+  addAsset: (asset) => {
+    set(
+      withHistory(get(), (project) => {
+        project.assets.push(asset);
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
+  },
+
+  removeAsset: (assetId, options) => {
+    const shouldClear = options?.clearReferences ?? true;
+    set(
+      withHistory(get(), (project) => {
+        if (shouldClear) {
+          // Clear all references to this asset across all sections
+          const cleaned = clearAssetReferences(project, assetId);
+          project.pages = cleaned.pages;
+        }
+        // Remove the asset
+        project.assets = project.assets.filter((a) => a.id !== assetId);
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
+  },
+
+  replaceAsset: (assetId, replacement) => {
+    set(
+      withHistory(get(), (project) => {
+        const idx = project.assets.findIndex((a) => a.id === assetId);
+        if (idx === -1) return;
+        // Preserve the original ID and createdAt
+        project.assets[idx] = {
+          ...replacement,
+          id: assetId,
+          createdAt: project.assets[idx].createdAt,
+        };
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
+  },
+
+  renameAsset: (assetId, name) => {
+    if (!name || typeof name !== "string") {
+      return { success: false, error: "Name must be a non-empty string." };
+    }
+
+    const trimmed = name.trim();
+    if (trimmed.length === 0) {
+      return { success: false, error: "Asset name cannot be empty." };
+    }
+
+    const asset = get().project.assets.find((a) => a.id === assetId);
+    if (!asset) {
+      return { success: false, error: "Asset not found." };
+    }
+
+    // Check extension compatibility if the new name has a different extension
+    const newExtMatch = trimmed.match(/\.([a-zA-Z0-9]+)$/);
+    const newExt = newExtMatch ? `.${newExtMatch[1].toLowerCase()}` : undefined;
+
+    if (newExt) {
+      // Check that the new extension is valid for the asset's MIME type.
+      // .jpeg and .jpg are both valid JPEG extensions — this check uses
+      // the canonical extension (getCanonicalExtension returns ".jpg" for
+      // "image/jpeg"), so renaming a .jpeg file to .jpg is allowed.
+      const expectedExt = getCanonicalExtension(asset.mimeType);
+      if (expectedExt && newExt !== expectedExt) {
+        return {
+          success: false,
+          error: `Cannot rename to "${trimmed}": extension "${newExt}" conflicts with ${asset.mimeType}. Expected extension: ${expectedExt}.`,
+        };
+      }
+    }
+
+    set(
+      withHistory(get(), (project) => {
+        const a = project.assets.find((a) => a.id === assetId);
+        if (!a) return;
+        a.name = trimmed;
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
+
+    return { success: true };
+  },
+
+  // ---- Persistence actions ----
+
+  hydrateProject: (project, revision) => {
+    const cloned = cloneProject(project);
+    if (!cloned.assets) cloned.assets = [];
+    const initialHistory: History = {
+      past: [],
+      present: cloned,
+      future: [],
+    };
+    set({
+      project: cloned,
+      history: initialHistory,
+      revision,
+      activeProjectId: project.id,
+      isHydrated: true,
+      isDirty: false,
+      saveStatus: "saved",
+      selectedPageId: project.pages[0]?.id ?? null,
+      selectedSectionId: null,
+      hydrationError: null,
+      persistenceError: null,
+    });
+  },
+
+  setSaveStatus: (status) => set({ saveStatus: status }),
+
+  setDirty: (dirty) => {
+    set({ isDirty: dirty, saveStatus: dirty ? "unsaved" : "saved" });
+  },
+
+  setRevision: (revision) => set({ revision }),
+
+  setActiveProjectId: (id) => set({ activeProjectId: id }),
+
+  setPersistenceError: (error) => set({ persistenceError: error }),
+
+  setHydrationError: (error) => set({ hydrationError: error }),
+
+  setLastSavedAt: (timestamp) => set({ lastSavedAt: timestamp }),
+
+  markSaved: (savedAt?: string) => {
+    set({
+      isDirty: false,
+      saveStatus: "saved",
+      lastSavedAt: savedAt ?? new Date().toISOString(),
+      persistenceError: null,
+    });
+  },
 
   // ---- Editing session ----
 

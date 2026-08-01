@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AssetRefSchema } from "@/features/assets/schemas/asset-schema";
 
 // ---------------------------------------------------------------------------
 // Canonical link item schema
@@ -17,6 +18,11 @@ export const FeatureItemSchema = z.object({
   title: z.string().min(1, "Feature title is required"),
   description: z.string().min(1, "Feature description is required"),
   icon: z.string().default("Zap"),
+});
+
+// Extended feature item with optional asset reference
+export const FeatureItemWithAssetSchema = FeatureItemSchema.extend({
+  iconImage: AssetRefSchema.optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -47,6 +53,7 @@ export const FaqItemSchema = z.object({
 
 export const HeaderSectionPropsSchema = z.object({
   logoText: z.string().default("Brand"),
+  logoImage: AssetRefSchema.optional(),
   navLinks: z.array(LinkItemSchema).default([]),
   ctaText: z.string().optional(),
   ctaHref: z.string().optional(),
@@ -58,12 +65,14 @@ export const HeroSectionPropsSchema = z.object({
   primaryCta: LinkItemSchema.default({ text: "Get Started", href: "#" }),
   secondaryCta: LinkItemSchema.optional(),
   image: z.string().optional(),
+  heroImage: AssetRefSchema.optional(),
+  backgroundImage: AssetRefSchema.optional(),
 });
 
 export const FeaturesSectionPropsSchema = z.object({
   title: z.string().default("Features"),
   subtitle: z.string().optional(),
-  features: z.array(FeatureItemSchema).default([]),
+  features: z.array(FeatureItemWithAssetSchema).default([]),
 });
 
 export const PricingSectionPropsSchema = z.object({
@@ -82,11 +91,13 @@ export const CtaSectionPropsSchema = z.object({
   subheadline: z.string().optional(),
   ctaText: z.string().default("Get Started"),
   ctaHref: z.string().default("#"),
+  backgroundImage: AssetRefSchema.optional(),
 });
 
 export const FooterSectionPropsSchema = z.object({
   text: z.string().default("© All rights reserved."),
   links: z.array(LinkItemSchema).default([]),
+  logoImage: AssetRefSchema.optional(),
 });
 
 // ---------------------------------------------------------------------------

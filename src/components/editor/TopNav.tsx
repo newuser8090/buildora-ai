@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import {
   Sparkles,
   Undo2,
@@ -9,9 +10,15 @@ import {
   Download,
   CircleUser,
   Loader2,
+  ImageIcon,
+  ArrowLeft,
 } from "lucide-react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
-import { exportProject } from "@/features/export/pipeline/export-pipeline";
+import { AssetManager } from "@/features/assets/components/AssetManager";
+import { saveNowViaController } from "@/features/persistence/services/project-controller";
+import { ProjectExportService } from "@/features/projects/services/project-export-service";
+import { downloadProjectFile } from "@/features/projects/utils/download-project-file";
+import { mapProjectTransferErrorToMessage } from "@/features/projects/types/project-transfer";
 import { cn } from "@/utils/cn";
 
 const iconButton =
@@ -23,6 +30,10 @@ const iconButtonDisabled =
 export function TopNav() {
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [assetManagerOpen, setAssetManagerOpen] = useState(false);
+
+  // Guards double exports even before React re-renders the disabled state.
+  const exportingRef = useRef(false);
 
   const undo = useEditorStore((s) => s.undo);
   const redo = useEditorStore((s) => s.redo);
@@ -30,25 +41,140 @@ export function TopNav() {
   const canRedo = useEditorStore((s) => s.canRedo());
   const project = useEditorStore((s) => s.project);
 
-  const handleExport = async () => {
+  const saveStatus = useEditorStore((s) => s.saveStatus);
+  const isHydrated = useEditorStore((s) => s.isHydrated);
+  const isDirty = useEditorStore((s) => s.isDirty);
+
+  const router = useRouter();
+
+  const handleSave = useCallback(async () => {
+    await saveNowViaController();
+  }, []);
+
+  // Mount guard for back-navigation. StrictMode-safe: the ref is re-set to
+  // true on every effect setup so a dev-mode simulated unmount/remount does
+  // not permanently flip it to false (which would block back-navigation).
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  const [backNavBusy, setBackNavBusy] = useState(false);
+  const [backNavError, setBackNavError] = useState<string | null>(null);
+  const [showDiscardBackNav, setShowDiscardBackNav] = useState(false);
+
+  const handleBackToDashboard = useCallback(async () => {
+    if (!mountedRef.current || backNavBusy) return;
+
+    if (isDirty) {
+      setBackNavBusy(true);
+      setBackNavError(null);
+      const result = await saveNowViaController();
+      if (!mountedRef.current) return;
+      setBackNavBusy(false);
+
+      if (!result.success) {
+        // Save failed — block navigation and show options
+        setBackNavError("Failed to save. Retry or discard unsaved changes.");
+        return;
+      }
+    }
+
+    if (!mountedRef.current) return;
+    router.push("/");
+  }, [isDirty, router, backNavBusy]);
+
+  const handleDiscardBackToDashboard = useCallback(() => {
+    if (!mountedRef.current) return;
+    setShowDiscardBackNav(true);
+  }, []);
+
+  const handleConfirmDiscardBackNav = useCallback(async () => {
+    if (!mountedRef.current) return;
+    setShowDiscardBackNav(false);
+    setBackNavError(null);
+    router.push("/");
+  }, [router]);
+
+  // ---- Export current project as .buildora.json ----
+  const handleExport = useCallback(async () => {
+    // Export the current in-memory state (even if dirty).
+    // Does not force persistence first.
+    // Does not mark the project saved.
+    // Does not change revision or dirty state.
+    if (exportingRef.current) return;
+    exportingRef.current = true;
+
+    if (!project || !project.id) {
+      exportingRef.current = false;
+      // No-project state maps to a structured transfer error.
+      setExportError(
+        mapProjectTransferErrorToMessage({
+          code: "PROJECT_NOT_FOUND",
+          message: "No active project to export.",
+        }),
+      );
+      return;
+    }
+
     setExportError(null);
     setExporting(true);
+
+    // Yield so a second synchronous click in the same tick is blocked by the
+    // exportingRef guard (and an unmount before completion skips feedback).
+    await Promise.resolve();
+
     try {
-      const result = await exportProject(project);
-      if (!result.success) {
-        setExportError(result.error ?? "Export failed");
+      const exportService = new ProjectExportService();
+      const result = exportService.exportProject(project);
+
+      if (!mountedRef.current) return;
+
+      if (!result.ok) {
+        setExportError(result.error.message);
+        return;
+      }
+
+      const downloadResult = downloadProjectFile(result.filename, result.content);
+      if (!mountedRef.current) return;
+      if (!downloadResult.ok) {
+        setExportError(downloadResult.error.message);
       }
     } catch (err) {
-      setExportError(err instanceof Error ? err.message : "Export failed");
+      if (mountedRef.current) {
+        setExportError(err instanceof Error ? err.message : "Export failed");
+      }
     } finally {
-      setExporting(false);
+      exportingRef.current = false;
+      if (mountedRef.current) {
+        setExporting(false);
+      }
     }
-  };
+  }, [project]);
 
   return (
     <header className="flex h-12 items-center gap-3 border-b border-border bg-secondary px-4">
       {/* ---- Left: Brand + Project ---- */}
       <div className="flex items-center gap-3">
+        {/* Back to dashboard */}
+        <button
+          onClick={handleBackToDashboard}
+          disabled={backNavBusy}
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+          title="Back to Dashboard"
+          aria-label="Back to Dashboard"
+          type="button"
+        >
+          {backNavBusy ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <ArrowLeft className="h-4 w-4" />
+          )}
+        </button>
+
+        <div className="h-4 w-px bg-border" />
+
         <div className="flex items-center gap-2">
           <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent">
             <Sparkles className="h-3.5 w-3.5 text-white" />
@@ -98,12 +224,30 @@ export function TopNav() {
         <div className="mx-1.5 h-4 w-px bg-border" />
 
         <button
+          onClick={() => setAssetManagerOpen(true)}
           className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-sm text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
-          title="Save"
+          title="Manage assets"
           type="button"
         >
-          <Save className="h-4 w-4" />
-          <span className="hidden sm:inline text-xs">Save</span>
+          <ImageIcon className="h-4 w-4" />
+          <span className="hidden sm:inline text-xs">Assets</span>
+        </button>
+
+        <button
+          onClick={handleSave}
+          disabled={saveStatus === "saving" || saveStatus === "hydrating" || !isHydrated}
+          className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-sm text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+          title={saveStatus === "saving" ? "Saving..." : saveStatus === "saved" ? "Saved" : "Save (Ctrl+S)"}
+          type="button"
+        >
+          {saveStatus === "saving" ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Save className="h-4 w-4" />
+          )}
+          <span className="hidden sm:inline text-xs">
+            {saveStatus === "saving" ? "Saving..." : saveStatus === "saved" ? "Saved" : "Save"}
+          </span>
         </button>
 
         <button
@@ -111,7 +255,7 @@ export function TopNav() {
           onClick={handleExport}
           disabled={exporting}
           className="flex h-8 items-center gap-2 rounded-lg bg-primary/10 px-2.5 text-sm text-primary transition-all duration-200 hover:bg-primary/20 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-          title={exporting ? "Exporting..." : "Export project as ZIP"}
+          title={exporting ? "Exporting..." : "Export project as .buildora.json"}
           type="button"
         >
           {exporting ? (
@@ -137,6 +281,76 @@ export function TopNav() {
           >
             Dismiss
           </button>
+        </div>
+      )}
+
+      {/* ---- Asset Manager modal ---- */}
+      {assetManagerOpen && (
+        <AssetManager onClose={() => setAssetManagerOpen(false)} />
+      )}
+
+      {/* ---- Back-nav error toast ---- */}
+      {backNavError && (
+        <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-300 shadow-lg">
+          <p>{backNavError}</p>
+          <div className="mt-2 flex items-center gap-3">
+            <button
+              onClick={() => { setBackNavError(null); handleBackToDashboard(); }}
+              className="text-xs font-medium underline hover:no-underline"
+              type="button"
+            >
+              Retry Save
+            </button>
+            <button
+              onClick={handleDiscardBackToDashboard}
+              className="text-xs font-medium text-red-400 underline hover:no-underline"
+              type="button"
+            >
+              Discard Changes
+            </button>
+            <button
+              onClick={() => setBackNavError(null)}
+              className="text-xs text-text-dim underline hover:no-underline"
+              type="button"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ---- Discard confirmation dialog ---- */}
+      {showDiscardBackNav && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="discard-back-title"
+        >
+          <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-elevated">
+            <h3 id="discard-back-title" className="text-lg font-semibold text-text-primary">
+              Discard Unsaved Changes?
+            </h3>
+            <p className="mt-2 text-sm text-text-muted leading-relaxed">
+              You have unsaved changes in the editor. Returning to the dashboard will discard those changes. This action cannot be undone.
+            </p>
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <button
+                onClick={() => setShowDiscardBackNav(false)}
+                className="flex h-9 items-center rounded-lg border border-border px-4 text-sm font-medium text-text-muted transition-all duration-200 hover:bg-card hover:text-text-primary"
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDiscardBackNav}
+                className="flex h-9 items-center rounded-lg bg-red-600 px-4 text-sm font-medium text-white transition-all duration-200 hover:bg-red-500"
+                type="button"
+              >
+                Discard Changes
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

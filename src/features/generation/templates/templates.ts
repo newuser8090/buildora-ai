@@ -398,7 +398,8 @@ const TEMPLATES: Record<WebsiteType, (brand: string) => PlannedSection[]> = {
 export function getTemplateSections(
   type: WebsiteType,
   brand: string,
-  _theme: string, // eslint-disable-line @typescript-eslint/no-unused-vars
+  // Intentionally unused (underscore prefix signals this to no-unused-vars).
+  _theme: string,
 ): PlannedSection[] {
   const generator = TEMPLATES[type] ?? TEMPLATES.saas;
   return generator(brand);

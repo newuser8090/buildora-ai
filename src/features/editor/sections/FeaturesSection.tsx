@@ -1,5 +1,8 @@
 "use client";
 
+import { useSectionAssets } from "@/features/editor/hooks/useSectionAssets";
+import { resolveAsset } from "@/features/assets/services/asset-resolver";
+import { ResolvedAssetImage } from "@/features/assets/components/ResolvedAssetImage";
 import type { BaseSection } from "@/types/section";
 import type { FeaturesSectionProps } from "@/types/section";
 
@@ -20,6 +23,7 @@ function resolveIcon(name: string) {
 
 export function FeaturesSection({ section }: { section: BaseSection }) {
   const props = section.props as unknown as FeaturesSectionProps;
+  const assets = useSectionAssets();
 
   // Safety: ensure render-critical fields exist
   const title = typeof props.title === "string" ? props.title : "Features";
@@ -78,6 +82,10 @@ export function FeaturesSection({ section }: { section: BaseSection }) {
               const featureDescription = typeof feature.description === "string" ? feature.description : "";
               const featureIcon = typeof feature.icon === "string" ? feature.icon : "Zap";
 
+              // Resolve per-feature iconImage independently
+              const iconImg = feature.iconImage ? resolveAsset(feature.iconImage, assets) : undefined;
+              const showIconImage = iconImg?.src && !iconImg.missing;
+
               return (
                 <div
                   key={featureTitle}
@@ -102,11 +110,28 @@ export function FeaturesSection({ section }: { section: BaseSection }) {
                 >
                   <div
                     style={{
-                      fontSize: "1.5rem",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      width: "3rem",
+                      height: "3rem",
                       marginBottom: "0.75rem",
+                      borderRadius: "0.5rem",
+                      overflow: "hidden",
                     }}
                   >
-                    {resolveIcon(featureIcon)}
+                    {showIconImage ? (
+                      <ResolvedAssetImage
+                        src={iconImg!.src}
+                        alt={iconImg!.alt || featureTitle}
+                        fit="contain"
+                        width="100%"
+                        maxHeight="3rem"
+                        fallback={<span style={{ fontSize: "1.5rem" }}>{resolveIcon(featureIcon)}</span>}
+                      />
+                    ) : (
+                      <span style={{ fontSize: "1.5rem" }}>{resolveIcon(featureIcon)}</span>
+                    )}
                   </div>
                   <h3
                     style={{

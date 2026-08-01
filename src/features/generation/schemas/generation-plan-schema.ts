@@ -87,6 +87,25 @@ export const ThemeSchema = z.object({
   }),
 });
 
+const AssetSourceSchema = z.object({
+  type: z.literal("data-url"),
+  value: z.string().min(1),
+});
+
+const AssetSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  type: z.enum(["image", "logo", "background", "icon", "illustration"]),
+  mimeType: z.string().min(1),
+  extension: z.string().min(1),
+  size: z.number().int().nonnegative(),
+  width: z.number().int().nonnegative().optional(),
+  height: z.number().int().nonnegative().optional(),
+  source: AssetSourceSchema,
+  createdAt: z.string().min(1),
+  altText: z.string().optional(),
+});
+
 const BaseSectionSchema = z.object({
   id: z.string().min(1),
   type: z.string().min(1),
@@ -108,6 +127,7 @@ export const ProjectSchema = z.object({
   name: z.string().min(1),
   theme: ThemeSchema,
   pages: z.array(PageSchema).min(1),
+  assets: z.array(AssetSchema).default([]),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

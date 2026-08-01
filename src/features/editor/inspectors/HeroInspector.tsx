@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { Field } from "@/components/ui/Field";
 import { SharedSectionControls } from "./SharedSectionControls";
+import { InspectorAssetField } from "@/features/assets/components/InspectorAssetField";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import type { BaseSection, HeroSectionProps } from "@/types/section";
 
@@ -63,6 +64,26 @@ export function HeroInspector({
           onChange={(e) => update({ subheadline: e.target.value })}
         />
       </Field>
+
+      <InspectorAssetField
+        label="Content image"
+        value={props.heroImage}
+        allowedTypes={["image"]}
+        onChange={(ref) => update({ heroImage: ref })}
+        description="Main hero image. AssetRef takes precedence over legacy image URL."
+        recommendedDimensions="1200×800px"
+        allowAltText
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+      />
+
+      <InspectorAssetField
+        label="Background image"
+        value={props.backgroundImage}
+        allowedTypes={["image", "background"]}
+        onChange={(ref) => update({ backgroundImage: ref })}
+        description="Decorative background. Falls back to theme background color."
+      />
 
       <Field label="Primary button label">
         <Input

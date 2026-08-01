@@ -78,6 +78,7 @@ export function generateProject(plan: GenerationPlan): Project {
     id: `proj-${Date.now()}`,
     name: `${plan.brandName} — ${capitalize(plan.websiteType)}`,
     theme,
+    assets: [],
     pages: [
       {
         id: "page-1",

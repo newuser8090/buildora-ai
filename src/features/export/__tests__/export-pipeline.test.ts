@@ -188,6 +188,324 @@ describe("App generators", () => {
     const heroCount = (file.content.match(/Hero /g) || []).length;
     expect(heroCount).toBeGreaterThan(0);
   });
+
+  it("page.tsx resolves AssetRef to /assets/ paths when manifest is provided", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const manifest: any = {
+      valid: true,
+      errors: [],
+      entries: [
+        {
+          assetId: "logo-1",
+          asset: { id: "logo-1", name: "brand.png", type: "logo" as const, mimeType: "image/png", extension: ".png", size: 1024, source: { type: "data-url" as const, value: "data:image/png;base64,aGVsbG8=" }, createdAt: "2026-01-01T00:00:00.000Z" },
+          filename: "brand.png",
+          publicPath: "/assets/brand.png",
+        },
+      ],
+      byAssetId: new Map([
+        ["logo-1", {
+          assetId: "logo-1",
+          asset: { id: "logo-1", name: "brand.png", type: "logo" as const, mimeType: "image/png", extension: ".png", size: 1024, source: { type: "data-url" as const, value: "data:image/png;base64,aGVsbG8=" }, createdAt: "2026-01-01T00:00:00.000Z" },
+          filename: "brand.png",
+          publicPath: "/assets/brand.png",
+        }],
+      ]),
+    };
+
+    const projectWithAssetRef = {
+      ...MOCK_PROJECT,
+      pages: [
+        {
+          ...MOCK_PROJECT.pages[0],
+          sections: [
+            {
+              ...MOCK_PROJECT.pages[0].sections[0],
+              props: {
+                logoText: "Brand",
+                logoImage: { assetId: "logo-1", altText: "Brand logo" },
+                navLinks: [],
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const file = generatePage(projectWithAssetRef, manifest);
+    // Should contain resolved /assets/ path
+    expect(file.content).toContain('/assets/brand.png');
+    // Should use alt text from AssetRef
+    expect(file.content).toContain('Brand logo');
+    // Should NOT contain the raw AssetRef object
+    expect(file.content).not.toContain('logoImage');
+    expect(file.content).not.toContain('assetId');
+  });
+
+  it("page.tsx falls back to existing props when no manifest is provided", () => {
+    const file = generatePage(MOCK_PROJECT);
+    // Without manifest, AssetRef fields are serialized as-is (not resolved)
+    expect(file.content).toContain('logoText="Buildora"');
+    // No /assets/ paths since no manifest
+    expect(file.content).not.toContain("/assets/");
+  });
+
+  it("page.tsx resolves Feature item AssetRefs to iconSrc/iconAlt", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const manifest: any = {
+      valid: true,
+      errors: [],
+      entries: [
+        {
+          assetId: "feat-icon",
+          asset: { id: "feat-icon", name: "icon.svg", type: "icon" as const, mimeType: "image/svg+xml", extension: ".svg", size: 512, source: { type: "data-url" as const, value: "data:image/svg+xml;base64,PHN2Zy8+" }, createdAt: "2026-01-01T00:00:00.000Z" },
+          filename: "icon.svg",
+          publicPath: "/assets/icon.svg",
+        },
+      ],
+      byAssetId: new Map([
+        ["feat-icon", {
+          assetId: "feat-icon",
+          asset: { id: "feat-icon", name: "icon.svg", type: "icon" as const, mimeType: "image/svg+xml", extension: ".svg", size: 512, source: { type: "data-url" as const, value: "data:image/svg+xml;base64,PHN2Zy8+" }, createdAt: "2026-01-01T00:00:00.000Z" },
+          filename: "icon.svg",
+          publicPath: "/assets/icon.svg",
+        }],
+      ]),
+    };
+
+    const project = {
+      ...MOCK_PROJECT,
+      pages: [
+        {
+          ...MOCK_PROJECT.pages[0],
+          sections: [
+            {
+              ...MOCK_PROJECT.pages[0].sections[2], // features section
+              props: {
+                title: "Features",
+                subtitle: "Our features",
+                features: [
+                  { title: "Fast", description: "Lightning", icon: "Zap", iconImage: { assetId: "feat-icon", altText: "Lightning icon" } },
+                  { title: "Secure", description: "Safe", icon: "Shield" },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const file = generatePage(project, manifest);
+    // First feature should have iconSrc and iconAlt from manifest
+    expect(file.content).toContain('/assets/icon.svg');
+    expect(file.content).toContain('Lightning icon');
+    // Second feature (no iconImage) should not have iconSrc
+    expect(file.content).toContain('Shield');
+    // Should NOT contain raw AssetRef objects
+    expect(file.content).not.toContain('iconImage');
+  });
+
+  it("generated page.tsx does not contain next/image imports", () => {
+    const file = generatePage(MOCK_PROJECT);
+    expect(file.content).not.toContain("next/image");
+    expect(file.content).not.toContain("Image");
+  });
+
+  // -----------------------------------------------------------------------
+  // Hero legacy URL fallback tests
+  // -----------------------------------------------------------------------
+
+  it("legacy Hero image URL exports when no AssetRef exists", () => {
+    const project = {
+      ...MOCK_PROJECT,
+      pages: [
+        {
+          ...MOCK_PROJECT.pages[0],
+          sections: [
+            {
+              ...MOCK_PROJECT.pages[0].sections[1], // Hero section
+              props: {
+                headline: "Legacy Hero",
+                subheadline: "Works without assets",
+                primaryCta: { text: "Go", href: "#" },
+                image: "https://legacy.example.com/hero.jpg",
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const file = generatePage(project);
+    // Legacy image URL should be in the generated output
+    expect(file.content).toContain("https://legacy.example.com/hero.jpg");
+    expect(file.content).toContain("legacyImageSrc");
+  });
+
+  it("valid Hero AssetRef takes precedence over legacy URL", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const manifest: any = {
+      valid: true,
+      errors: [],
+      warnings: [],
+      entries: [
+        {
+          assetId: "hero-1",
+          asset: { id: "hero-1", name: "hero.png", type: "image" as const, mimeType: "image/png", extension: ".png", size: 1024, source: { type: "data-url" as const, value: "data:image/png;base64,aGVsbG8=" }, createdAt: "2026-01-01T00:00:00.000Z" },
+          filename: "hero.png",
+          publicPath: "/assets/hero.png",
+        },
+      ],
+      byAssetId: new Map([
+        ["hero-1", { assetId: "hero-1", asset: { id: "hero-1", name: "hero.png", type: "image" as const, mimeType: "image/png", extension: ".png", size: 1024, source: { type: "data-url" as const, value: "data:image/png;base64,aGVsbG8=" }, createdAt: "2026-01-01T00:00:00.000Z" }, filename: "hero.png", publicPath: "/assets/hero.png" }],
+      ]),
+    };
+
+    const project = {
+      ...MOCK_PROJECT,
+      pages: [
+        {
+          ...MOCK_PROJECT.pages[0],
+          sections: [
+            {
+              ...MOCK_PROJECT.pages[0].sections[1], // Hero section
+              props: {
+                headline: "Priority",
+                primaryCta: { text: "Go", href: "#" },
+                heroImage: { assetId: "hero-1", altText: "Asset hero" },
+                image: "https://legacy.example.com/old.jpg",
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const file = generatePage(project, manifest);
+    // Should contain the /assets/ path from the manifest (AssetRef path)
+    expect(file.content).toContain("/assets/hero.png");
+    // heroSrc takes precedence over legacyImageSrc in the component
+    expect(file.content).toContain('heroSrc="/assets/hero.png"');
+    // Should NOT contain raw AssetRef objects
+    expect(file.content).not.toContain('"heroImage"');
+    expect(file.content).not.toContain('"assetId"');
+  });
+
+  it("missing Hero AssetRef falls back to legacy URL", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const manifest: any = {
+      valid: true,
+      errors: [],
+      warnings: ["Hero content image \"missing-hero\" not found. Falling back to legacy image URL."],
+      entries: [],
+      byAssetId: new Map(),
+    };
+
+    const project = {
+      ...MOCK_PROJECT,
+      pages: [
+        {
+          ...MOCK_PROJECT.pages[0],
+          sections: [
+            {
+              ...MOCK_PROJECT.pages[0].sections[1], // Hero section
+              props: {
+                headline: "Fallback",
+                primaryCta: { text: "Go", href: "#" },
+                heroImage: { assetId: "missing-hero" },
+                image: "https://legacy.example.com/fallback.jpg",
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const file = generatePage(project, manifest);
+    // Should contain legacy URL as legacyImageSrc
+    expect(file.content).toContain("legacyImageSrc");
+    expect(file.content).toContain("https://legacy.example.com/fallback.jpg");
+    // Should NOT have heroSrc (no valid AssetRef)
+    expect(file.content).not.toContain('heroSrc="/assets');
+    // Should NOT contain raw AssetRef
+    expect(file.content).not.toContain("heroImage");
+  });
+
+  it("old project without assets exports with its Hero URL intact", () => {
+    const project = {
+      ...MOCK_PROJECT,
+      assets: undefined as unknown as never[],
+      pages: [
+        {
+          ...MOCK_PROJECT.pages[0],
+          sections: [
+            {
+              ...MOCK_PROJECT.pages[0].sections[1], // Hero section
+              props: {
+                headline: "Old Site",
+                primaryCta: { text: "Go", href: "#" },
+                image: "https://cdn.example.com/old-hero.jpg",
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const file = generatePage(project);
+    // Without manifest, the legacy image prop stays and gets serialized
+    expect(file.content).toContain("https://cdn.example.com/old-hero.jpg");
+  });
+
+  it("projects with assets: [] export with Hero URL intact", () => {
+    const project = {
+      ...MOCK_PROJECT,
+      assets: [],
+      pages: [
+        {
+          ...MOCK_PROJECT.pages[0],
+          sections: [
+            {
+              ...MOCK_PROJECT.pages[0].sections[1], // Hero section
+              props: {
+                headline: "Empty Assets",
+                primaryCta: { text: "Go", href: "#" },
+                image: "https://cdn.example.com/empty-hero.jpg",
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const file = generatePage(project);
+    expect(file.content).toContain("https://cdn.example.com/empty-hero.jpg");
+    expect(file.content).not.toContain("data:image/");
+  });
+
+  it("legacy URL is safely escaped in generated output", () => {
+    const project = {
+      ...MOCK_PROJECT,
+      pages: [
+        {
+          ...MOCK_PROJECT.pages[0],
+          sections: [
+            {
+              ...MOCK_PROJECT.pages[0].sections[1], // Hero section
+              props: {
+                headline: "Safe",
+                primaryCta: { text: "Go", href: "#" },
+                image: "https://example.com/?q=hello&world=1",
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const file = generatePage(project);
+    // URL with & should be properly escaped or preserved
+    expect(file.content).toContain("hello");
+  });
 });
 
 // ---------------------------------------------------------------------------

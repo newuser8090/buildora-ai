@@ -1,5 +1,6 @@
 import type { BaseSection } from "./section";
 import type { Theme } from "./theme";
+import type { Asset } from "@/features/assets/types";
 
 // ---------------------------------------------------------------------------
 // Project
@@ -10,6 +11,8 @@ export interface Project {
   name: string;
   theme: Theme;
   pages: Page[];
+  /** Project assets (images, logos, backgrounds, icons, etc.) */
+  assets: Asset[];
   createdAt: string;
   updatedAt: string;
 }
