@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { Field } from "@/components/ui/Field";
 import { SharedSectionControls } from "./SharedSectionControls";
+import { InspectorAssetField } from "@/features/assets/components/InspectorAssetField";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import type { BaseSection, CtaSectionProps } from "@/types/section";
 
@@ -63,6 +64,14 @@ export function CtaInspector({
           onChange={(e) => update({ subheadline: e.target.value })}
         />
       </Field>
+
+      <InspectorAssetField
+        label="Background image"
+        value={props.backgroundImage}
+        allowedTypes={["image", "background"]}
+        onChange={(ref) => update({ backgroundImage: ref })}
+        description="Optional background image. Does not replace theme background color."
+      />
 
       <Field label="Button label">
         <Input

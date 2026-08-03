@@ -1,15 +1,23 @@
 "use client";
 
+import { useSectionAssets } from "@/features/editor/hooks/useSectionAssets";
+import { resolveAsset } from "@/features/assets/services/asset-resolver";
+import { ResolvedAssetImage } from "@/features/assets/components/ResolvedAssetImage";
 import type { BaseSection } from "@/types/section";
 import type { HeaderSectionProps } from "@/types/section";
 
 export function HeaderSection({ section }: { section: BaseSection }) {
   const props = section.props as unknown as HeaderSectionProps;
+  const assets = useSectionAssets();
 
   // Safety: ensure render-critical fields exist
   const logoText = typeof props.logoText === "string" ? props.logoText : "Brand";
   const navLinks = Array.isArray(props.navLinks) ? props.navLinks : [];
   const ctaText = typeof props.ctaText === "string" ? props.ctaText : null;
+
+  // Resolve logo image
+  const logo = resolveAsset(props.logoImage, assets);
+  const showLogoImage = logo.src && !logo.missing;
 
   return (
     <header
@@ -28,16 +36,28 @@ export function HeaderSection({ section }: { section: BaseSection }) {
           justifyContent: "space-between",
         }}
       >
-        {/* Logo */}
-        <span
-          style={{
-            fontWeight: 700,
-            fontSize: "1.25rem",
-            color: "var(--foreground, #0a0a0a)",
-          }}
-        >
-          {logoText}
-        </span>
+        {/* Logo — image takes precedence over text */}
+        {showLogoImage ? (
+          <ResolvedAssetImage
+            src={logo.src}
+            alt={logo.alt}
+            fit="contain"
+            width="auto"
+            maxHeight="2.5rem"
+            style={{ flexShrink: 0 }}
+            fallback={<span style={{ fontWeight: 700, fontSize: "1.25rem", color: "var(--foreground, #0a0a0a)" }}>{logoText}</span>}
+          />
+        ) : (
+          <span
+            style={{
+              fontWeight: 700,
+              fontSize: "1.25rem",
+              color: "var(--foreground, #0a0a0a)",
+            }}
+          >
+            {logoText}
+          </span>
+        )}
 
         {/* Nav links */}
         <nav style={{ display: "flex", gap: "1.5rem", alignItems: "center" }}>

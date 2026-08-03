@@ -7,6 +7,7 @@ import {
   assertNoGenerationRequests,
   assertNoFailedRequests,
 } from "./helpers/runtime-audit";
+import { createSaaSProjectAndOpenEditor } from "./helpers/projects";
 
 // ---------------------------------------------------------------------------
 // Shared mock project builder
@@ -67,13 +68,25 @@ async function generateWebsite(page: Page) {
 }
 
 // ---------------------------------------------------------------------------
+// Open the editor through the real dashboard flow (shared helper)
+//
+// The editor lives at /editor/[projectId]; the dashboard (/) creates projects
+// from templates and navigates there on success. Every test gets a fresh
+// browser context (empty IndexedDB), so we create a project from the SaaS
+// template each time.
+// ---------------------------------------------------------------------------
+
+async function openEditor(page: Page): Promise<void> {
+  await createSaaSProjectAndOpenEditor(page);
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 test.describe("Editor basic", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await openEditor(page);
   });
 
   test("empty editor renders without page overflow", async ({ page }) => {
@@ -172,8 +185,7 @@ test.describe("Editor basic", () => {
 
 test.describe("Editor sections", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await openEditor(page);
   });
 
   test("Hero section can be selected", async ({ page }) => {
@@ -233,8 +245,12 @@ test.describe("Editor sections", () => {
   test("Footer link text can be edited", async ({ page }) => {
     const audit = attachRuntimeAudit(page);
     const preview = await generateWebsite(page);
-    const wrappers = page.locator('[data-testid="section-wrapper"]');
-    await wrappers.nth(await wrappers.count() - 1).click();
+    const footerSection = preview
+      .locator('[data-testid="section-wrapper"]')
+      .filter({ hasText: "© 2026 MyBrand" });
+
+    await footerSection.scrollIntoViewIfNeeded();
+    await footerSection.click({ force: true });
     await expect(page.locator('[data-testid="inspector-panel"]')).toBeVisible();
     const linkInput = page.locator('[data-testid="inspector-panel"] input').nth(1);
     await linkInput.fill("EditedLink");
@@ -245,9 +261,14 @@ test.describe("Editor sections", () => {
 
   test("Footer link href can be edited", async ({ page }) => {
     const audit = attachRuntimeAudit(page);
-    await generateWebsite(page);
-    const wrappers = page.locator('[data-testid="section-wrapper"]');
-    await wrappers.nth(await wrappers.count() - 1).click();
+    const preview = await generateWebsite(page);
+
+    const footerSection = preview
+      .locator('[data-testid="section-wrapper"]')
+      .filter({ hasText: "© 2026 MyBrand" });
+
+    await footerSection.scrollIntoViewIfNeeded();
+    await footerSection.click({ force: true });
     const hrefInput = page.locator('[data-testid="inspector-panel"] input').nth(2);
     await hrefInput.fill("/edited-href");
     await expect(hrefInput).toHaveValue("/edited-href");
@@ -268,7 +289,7 @@ test.describe("Editor sections", () => {
     audit.detach();
   });
 
-  test("selection clears after delete", async ({ page }) => {
+  test("selection moves to the neighbor after delete", async ({ page }) => {
     const audit = attachRuntimeAudit(page);
     await generateWebsite(page);
     const wrappers = page.locator('[data-testid="section-wrapper"]');
@@ -276,7 +297,12 @@ test.describe("Editor sections", () => {
     await page.waitForTimeout(200);
     await page.locator('[data-testid="inspector-panel"]').getByText("Delete").click();
     await page.waitForTimeout(500);
-    await expect(page.locator('[data-testid="selected-section"]')).toHaveCount(0, { timeout: 3000 });
+    // Phase H policy: deleting a section selects the nearest next section
+    // (Pricing takes the deleted slot) instead of clearing the selection.
+    await expect(page.locator('[data-testid="selected-section"]')).toHaveCount(1, { timeout: 3000 });
+    await expect(
+      page.locator('[data-testid="selected-section"]').getByText("Pricing").first(),
+    ).toBeVisible();
     assertRuntimeClean(audit.state);
     audit.detach();
   });
@@ -342,8 +368,7 @@ test.describe("Editor sections", () => {
 
 test.describe("Viewport and zoom", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await openEditor(page);
   });
 
   test("desktop viewport sets CSS width to 1440px", async ({ page }) => {
@@ -404,8 +429,7 @@ test.describe("Viewport and zoom", () => {
 
 test.describe("Chat and history", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await openEditor(page);
   });
 
   test("chat history persists after regenerating", async ({ page }) => {
@@ -443,8 +467,7 @@ test.describe("Chat and history", () => {
 test.describe("Security", () => {
   test("API key is not exposed client-side", async ({ page }) => {
     const audit = attachRuntimeAudit(page);
-    await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await openEditor(page);
 
     // Check page HTML source
     const html = await page.content();
@@ -508,8 +531,7 @@ test.describe("Security", () => {
 
 test.describe("Editor network isolation", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await openEditor(page);
   });
 
   test("no generation request during inspector editing", async ({ page }) => {
@@ -585,8 +607,7 @@ test.describe("Editor network isolation", () => {
 test.describe("Real pipeline", () => {
   test("generation succeeds with available provider", async ({ page }) => {
     const audit = attachRuntimeAudit(page);
-    await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await openEditor(page);
 
     const responsePromise = page.waitForResponse(
       (resp) => resp.url().includes("/api/generate") && resp.status() === 200,

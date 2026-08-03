@@ -3,6 +3,7 @@
 import { type ReactNode, useCallback, useRef } from "react";
 import { Copy, Trash2 } from "lucide-react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
+import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
 import type { BaseSection } from "@/types/section";
 
 // ---------------------------------------------------------------------------
@@ -38,6 +39,7 @@ export function SelectableSection({
 }: SelectableSectionProps) {
   const selectedId = useEditorStore((s) => s.selectedSectionId);
   const selectSection = useEditorStore((s) => s.selectSection);
+  const setSelectionSource = useEditorUiStore((s) => s.setSelectionSource);
   const duplicateSection = useEditorStore((s) => s.duplicateSection);
   const deleteSection = useEditorStore((s) => s.deleteSection);
 
@@ -47,9 +49,10 @@ export function SelectableSection({
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
+      setSelectionSource("canvas");
       selectSection(section.id);
     },
-    [section.id, selectSection],
+    [section.id, selectSection, setSelectionSource],
   );
 
   const handleDuplicate = useCallback(
@@ -71,6 +74,7 @@ export function SelectableSection({
   return (
     <div
       ref={containerRef}
+      data-section-id={section.id}
       data-testid={isSelected ? "selected-section" : "section-wrapper"}
       onClick={handleClick}
       className="group/selectable relative transition-all duration-200 motion-reduce:transition-none"

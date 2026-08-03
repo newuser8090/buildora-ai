@@ -11,6 +11,8 @@ export interface BaseSection {
   styles: Record<string, unknown>;
 }
 
+import type { AssetRef } from "@/features/assets/types";
+
 // ---------------------------------------------------------------------------
 // Typed props for each known section type
 // Each type is a plain object — no hardcoding into the model.
@@ -18,6 +20,8 @@ export interface BaseSection {
 
 export interface HeaderSectionProps {
   logoText: string;
+  /** Optional logo image asset */
+  logoImage?: AssetRef;
   navLinks: { text: string; href: string }[];
   ctaText?: string;
   ctaHref?: string;
@@ -28,7 +32,12 @@ export interface HeroSectionProps {
   subheadline: string;
   primaryCta: { text: string; href: string };
   secondaryCta?: { text: string; href: string };
+  /** Hero image (URL string or legacy field) */
   image?: string;
+  /** Optional hero image asset */
+  heroImage?: AssetRef;
+  /** Optional background image asset */
+  backgroundImage?: AssetRef;
 }
 
 export interface FeaturesSectionProps {
@@ -38,6 +47,8 @@ export interface FeaturesSectionProps {
     title: string;
     description: string;
     icon: string;
+    /** Optional icon image asset */
+    iconImage?: AssetRef;
   }[];
 }
 
@@ -67,11 +78,15 @@ export interface CtaSectionProps {
   subheadline?: string;
   ctaText: string;
   ctaHref: string;
+  /** Optional background image asset */
+  backgroundImage?: AssetRef;
 }
 
 export interface FooterSectionProps {
   text: string;
   links: { text: string; href: string }[];
+  /** Optional footer logo image asset */
+  logoImage?: AssetRef;
 }
 
 // ---------------------------------------------------------------------------

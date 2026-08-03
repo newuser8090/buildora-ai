@@ -10,8 +10,12 @@ import {
   Type,
   PaintBucket,
   Maximize,
+  Layers,
+  SlidersHorizontal,
 } from "lucide-react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
+import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
+import { PageStructurePanel } from "@/features/editor/components/PageStructurePanel";
 import { inspectorRegistry } from "@/features/editor/registry/inspector-registry";
 import { sectionRegistry } from "@/features/editor/registry/section-registry";
 import type { BaseSection } from "@/types/section";
@@ -212,28 +216,123 @@ function InspectorSlot({
 }
 
 // ---------------------------------------------------------------------------
-// RightSidebar
+// RightSidebar — Structure / Design tabs
+//
+// Tab selection is ephemeral UI state (editor-ui-store), never part of the
+// Project model and never persisted. Selecting a section on canvas does NOT
+// forcibly switch tabs; adding a section switches to Design once.
 // ---------------------------------------------------------------------------
+
+interface TabDefinition {
+  id: "structure" | "design";
+  label: string;
+  icon: typeof Layers;
+}
+
+const TABS: TabDefinition[] = [
+  { id: "structure", label: "Structure", icon: Layers },
+  { id: "design", label: "Design", icon: SlidersHorizontal },
+];
+
+function TabList() {
+  const tab = useEditorUiStore((s) => s.rightSidebarTab);
+  const setTab = useEditorUiStore((s) => s.setRightSidebarTab);
+
+  return (
+    <div
+      role="tablist"
+      aria-label="Editor panels"
+      className="flex border-b border-border"
+    >
+      {TABS.map((t) => {
+        const Icon = t.icon;
+        const active = tab === t.id;
+        return (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            id={`right-tab-${t.id}`}
+            aria-selected={active}
+            aria-controls={`right-panel-${t.id}`}
+            tabIndex={active ? 0 : -1}
+            data-testid={`right-tab-${t.id}`}
+            onClick={() => setTab(t.id)}
+            onKeyDown={(e) => {
+              // Arrow-key tab navigation (roving tabindex)
+              const idx = TABS.findIndex((x) => x.id === t.id);
+              let next: TabDefinition | null = null;
+              if (e.key === "ArrowRight") next = TABS[idx + 1] ?? TABS[0];
+              if (e.key === "ArrowLeft") next = TABS[idx - 1] ?? TABS[TABS.length - 1];
+              if (next) {
+                e.preventDefault();
+                setTab(next.id);
+                document.getElementById(`right-tab-${next.id}`)?.focus();
+              }
+            }}
+            className={cn(
+              "flex flex-1 items-center justify-center gap-1.5 py-2.5 text-xs font-medium transition-colors",
+              active
+                ? "border-b-2 border-accent text-text-primary"
+                : "text-text-dim hover:text-text-primary",
+            )}
+          >
+            <Icon className="h-3.5 w-3.5" />
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 export function RightSidebar() {
   const selectedSectionId = useEditorStore((s) => s.selectedSectionId);
+  const tab = useEditorUiStore((s) => s.rightSidebarTab);
 
   return (
-    <aside className="flex w-[300px] flex-shrink-0 min-h-0 flex-col border-l border-border bg-secondary">
-      {/* ---- Header ---- */}
-      <div className="border-b border-border px-5 py-4 flex-none">
-        <h2 className="text-sm font-semibold text-text-primary">Properties</h2>
-        <p className="mt-0.5 text-xs text-text-dim">
-          {selectedSectionId
-            ? "Editing selected section"
-            : "Customize your website appearance and content"}
-        </p>
-      </div>
+    <aside
+      className="flex w-[300px] flex-shrink-0 min-h-0 flex-col border-l border-border bg-secondary"
+      aria-label="Editor sidebar"
+    >
+      {/* ---- Tabs ---- */}
+      <TabList />
 
-      {/* ---- Content ---- */}
-      <div className="flex-1 min-h-0 overflow-y-auto">
-        <InspectorPanel />
-      </div>
+      {/* ---- Panels ---- */}
+      {tab === "structure" ? (
+        <div
+          role="tabpanel"
+          id="right-panel-structure"
+          aria-labelledby="right-tab-structure"
+          data-testid="structure-panel"
+          className="min-h-0 flex-1"
+        >
+          <PageStructurePanel />
+        </div>
+      ) : (
+        <div
+          role="tabpanel"
+          id="right-panel-design"
+          aria-labelledby="right-tab-design"
+          data-testid="design-panel"
+          className="flex min-h-0 flex-1 flex-col"
+        >
+          {/* ---- Header ---- */}
+          <div className="border-b border-border px-5 py-4 flex-none">
+            <h2 className="text-sm font-semibold text-text-primary">Properties</h2>
+            <p className="mt-0.5 text-xs text-text-dim">
+              {selectedSectionId
+                ? "Editing selected section"
+                : "Customize your website appearance and content"}
+            </p>
+          </div>
+
+          {/* ---- Content ---- */}
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <InspectorPanel />
+          </div>
+        </div>
+      )}
     </aside>
   );
 }

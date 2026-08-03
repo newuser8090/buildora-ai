@@ -4,6 +4,7 @@ import { useCallback } from "react";
 import { Input } from "@/components/ui/Input";
 import { Field } from "@/components/ui/Field";
 import { SharedSectionControls } from "./SharedSectionControls";
+import { InspectorAssetField } from "@/features/assets/components/InspectorAssetField";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import type { BaseSection, FooterSectionProps } from "@/types/section";
 
@@ -52,6 +53,15 @@ export function FooterInspector({
           onChange={(e) => update({ text: e.target.value })}
         />
       </Field>
+
+      <InspectorAssetField
+        label="Logo image"
+        value={props.logoImage}
+        allowedTypes={["image", "logo"]}
+        onChange={(ref) => update({ logoImage: ref })}
+        description="Optional footer logo. Falls back to site name text."
+        allowAltText
+      />
 
       <Field label="Links">
         <div className="flex flex-col gap-2">

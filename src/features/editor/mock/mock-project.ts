@@ -44,6 +44,7 @@ export const MOCK_PROJECT: Project = {
       xl: "0 20px 25px rgba(0,0,0,0.15)",
     },
   },
+  assets: [],
   pages: [
     {
       id: "page-1",

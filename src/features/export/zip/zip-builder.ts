@@ -6,6 +6,7 @@ import type { OutputFile, ExportResult } from "../pipeline/types";
 //
 // Takes an array of OutputFiles and produces a downloadable ZIP archive.
 // The ZIP root is a single sanitised folder named after the project.
+// Supports both UTF-8 text files and base64-encoded binary files.
 // ---------------------------------------------------------------------------
 
 const MAX_OUTPUT_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
@@ -30,7 +31,10 @@ export async function buildZipBlob(
   let totalSize = 0;
 
   for (const file of files) {
-    const contentSize = new TextEncoder().encode(file.content).length;
+    // Calculate size for limit checking
+    const contentSize = file.encoding === "base64"
+      ? estimateBinaryLength(file.content)
+      : new TextEncoder().encode(file.content).length;
     totalSize += contentSize;
 
     if (totalSize > MAX_OUTPUT_SIZE_BYTES) {
@@ -42,10 +46,26 @@ export async function buildZipBlob(
 
     // Ensure file path uses forward slashes (ZIP standard)
     const normalizedPath = file.path.replace(/\\/g, "/");
-    root.file(normalizedPath, file.content);
+
+    if (file.encoding === "base64") {
+      // Binary file — use JSZip's base64 option
+      root.file(normalizedPath, file.content, { base64: true });
+    } else {
+      // Text file — normal string content
+      root.file(normalizedPath, file.content);
+    }
   }
 
   return await zip.generateAsync({ type: "blob" });
+}
+
+/**
+ * Estimate the original byte size from a base64-encoded string.
+ * Each base64 char = 6 bits = 0.75 bytes. Padding '=' chars reduce size.
+ */
+function estimateBinaryLength(base64: string): number {
+  const padding = (base64.match(/=+$/)?.[0]?.length) || 0;
+  return Math.floor((base64.length * 3) / 4) - padding;
 }
 
 // ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ import { useCallback } from "react";
 import { Input } from "@/components/ui/Input";
 import { Field } from "@/components/ui/Field";
 import { SharedSectionControls } from "./SharedSectionControls";
+import { InspectorAssetField } from "@/features/assets/components/InspectorAssetField";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import type { BaseSection, HeaderSectionProps } from "@/types/section";
 
@@ -52,6 +53,17 @@ export function HeaderInspector({
           onChange={(e) => update({ logoText: e.target.value })}
         />
       </Field>
+
+      <InspectorAssetField
+        label="Logo image"
+        value={props.logoImage}
+        allowedTypes={["image", "logo"]}
+        onChange={(ref) => update({ logoImage: ref })}
+        description="Optional logo image. Clears the brand name visual when set."
+        allowAltText
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+      />
 
       <Field label="Navigation links">
         <div className="flex flex-col gap-2">

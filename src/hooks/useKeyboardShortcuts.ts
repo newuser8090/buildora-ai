@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
+import { saveNowViaController } from "@/features/persistence/services/project-controller";
 
 // ---------------------------------------------------------------------------
 // Elements where keyboard shortcuts should be suppressed
@@ -28,6 +29,13 @@ export function useKeyboardShortcuts() {
   const deleteSection = useEditorStore((s) => s.deleteSection);
   const duplicateSection = useEditorStore((s) => s.duplicateSection);
   const project = useEditorStore((s) => s.project);
+  const saveStatus = useEditorStore((s) => s.saveStatus);
+  const isSavingRef = useRef(false);
+
+  // Track isSaving across renders without re-creating the effect
+  useEffect(() => {
+    isSavingRef.current = saveStatus === "saving";
+  }, [saveStatus]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -35,6 +43,15 @@ export function useKeyboardShortcuts() {
       if (isTyping(event)) return;
 
       const ctrl = event.ctrlKey || event.metaKey;
+
+      // Ctrl+S / Cmd+S → Save
+      if (ctrl && event.key === "s") {
+        event.preventDefault();
+        if (!isSavingRef.current) {
+          saveNowViaController().catch(() => {});
+        }
+        return;
+      }
 
       // Ctrl+Z → Undo
       if (ctrl && event.key === "z" && !event.shiftKey) {

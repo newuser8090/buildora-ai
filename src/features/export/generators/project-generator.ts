@@ -11,10 +11,15 @@ import {
   generateNextConfig,
   generatePostcssConfig,
 } from "./static-files-generator";
+import { buildExportAssetManifest, generateAssetFiles } from "./asset-export-manifest";
 
 // ---------------------------------------------------------------------------
 // Project generator — orchestrates all generators to produce the complete
 // set of OutputFiles for a given Project.
+//
+// For projects with assets, an asset manifest is built and the public/assets/
+// files are included. The manifest is passed to the page generator so section
+// AssetRef fields are resolved to /assets/ public paths.
 //
 // The caller is responsible for validation before calling this function.
 // ---------------------------------------------------------------------------
@@ -28,6 +33,9 @@ export interface GeneratedProject {
 
 export function generateExportProject(project: Project): GeneratedProject {
   const folderName = sanitiseFolderName(project.name);
+
+  // Build asset manifest for referenced assets (if any)
+  const assetManifest = buildExportAssetManifest(project);
 
   const files: OutputFile[] = [
     // Static boilerplate
@@ -43,8 +51,11 @@ export function generateExportProject(project: Project): GeneratedProject {
     // Section components — reusable templates
     ...generateAllSectionComponents(),
 
-    // Page — renders sections with serialized props
-    generatePage(project),
+    // Page — renders sections with serialized props (pass manifest for asset resolution)
+    generatePage(project, assetManifest.valid ? assetManifest : undefined),
+
+    // Asset files — public/assets/ files for referenced assets
+    ...(assetManifest.valid ? generateAssetFiles(assetManifest) : []),
   ];
 
   return { folderName, files };
