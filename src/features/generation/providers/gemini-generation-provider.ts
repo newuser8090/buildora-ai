@@ -87,7 +87,11 @@ Return JSON with shape:
 // Sanitize prompt
 // ---------------------------------------------------------------------------
 
-function sanitizePrompt(prompt: string): string {
+/**
+ * Sanitize a prompt before it reaches the provider: enforce the length cap
+ * and strip control characters. Shared by create and edit providers.
+ */
+export function sanitizePrompt(prompt: string): string {
   return prompt.slice(0, MAX_PROMPT_LENGTH).replace(/[\0-\x1F\x7F]/g, "");
 }
 
@@ -170,10 +174,16 @@ function ensureRequiredSections(
 // Single call to Gemini
 // ---------------------------------------------------------------------------
 
-async function callGemini(
+/**
+ * Perform a single Gemini content-generation call and return the parsed JSON.
+ * Shared by the create and edit providers; the edit provider supplies its own
+ * system instruction.
+ */
+export async function callGemini(
   sanitized: string,
   model: string,
   apiKey: string,
+  systemInstruction: string = SYSTEM_INSTRUCTION,
 ): Promise<Record<string, unknown>> {
   const client = new GoogleGenAI({ apiKey });
 
@@ -181,7 +191,7 @@ async function callGemini(
     model,
     contents: [{ role: "user", parts: [{ text: sanitized }] }],
     config: {
-      systemInstruction: SYSTEM_INSTRUCTION,
+      systemInstruction,
       temperature: 0.7,
       maxOutputTokens: 4096,
     },

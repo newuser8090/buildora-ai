@@ -2,9 +2,16 @@ import { NextResponse } from "next/server";
 import { generateProject } from "@/features/generation/generators/project-generator";
 import { geminiProvider } from "@/features/generation/providers/gemini-generation-provider";
 import { ruleBasedProvider } from "@/features/generation/providers/rule-based-generation-provider";
+import { geminiEditProvider } from "@/features/generation/providers/gemini-edit-provider";
+import { ruleBasedEditProvider } from "@/features/generation/providers/rule-based-edit-provider";
 import { logger } from "@/lib/logger";
 import { ProjectSchema } from "@/features/generation/schemas/generation-plan-schema";
 import { AnySectionSchema } from "@/features/editor/schemas/section-schemas";
+import {
+  EditTargetSchema,
+  type ValidatedEditTarget,
+} from "@/features/ai-editing/schemas/edit-schemas";
+import { orchestrateEdit } from "@/features/ai-editing/services/edit-orchestrator";
 import type { Project } from "@/types/project";
 
 // ---------------------------------------------------------------------------
@@ -13,7 +20,8 @@ import type { Project } from "@/types/project";
 
 interface GenerateRequest {
   prompt: string;
-  mode?: "create" | "modify";
+  mode: "create" | "modify";
+  target?: ValidatedEditTarget;
 }
 
 const MAX_PROMPT_LENGTH = 4000;
@@ -23,7 +31,7 @@ function validateRequest(body: unknown): GenerateRequest | string {
     return "Invalid request body";
   }
 
-  const { prompt, mode } = body as Record<string, unknown>;
+  const { prompt, mode, target } = body as Record<string, unknown>;
 
   if (typeof prompt !== "string" || prompt.trim().length === 0) {
     return "Prompt is required";
@@ -37,7 +45,18 @@ function validateRequest(body: unknown): GenerateRequest | string {
     return 'Mode must be "create" or "modify"';
   }
 
-  return { prompt: prompt.trim(), mode: mode as "create" | undefined };
+  if (mode === "modify") {
+    const targetResult = EditTargetSchema.safeParse(target);
+    if (!targetResult.success) {
+      const issues = targetResult.error.issues
+        .map((i) => i.path.join(".") + ": " + i.message)
+        .join("; ");
+      return `Invalid edit target: ${issues}`;
+    }
+    return { prompt: prompt.trim(), mode: "modify", target: targetResult.data };
+  }
+
+  return { prompt: prompt.trim(), mode: "create" };
 }
 
 // ---------------------------------------------------------------------------
@@ -88,7 +107,12 @@ export async function POST(request: Request) {
       );
     }
 
-    const { prompt } = validated;
+    const { prompt, mode, target } = validated;
+
+    // ---- Modify mode (AI editing): revise a section's content ----
+    if (mode === "modify" && target) {
+      return handleModify(target, prompt, request, startTime);
+    }
 
     // 2. Check force-local flag (server-only env var, never exposed to client)
     // Test header x-buildora-force-local accepted for integration testing
@@ -195,6 +219,40 @@ export async function POST(request: Request) {
       { status: 500 },
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Modify mode — AI editing of a section's content
+// ---------------------------------------------------------------------------
+
+async function handleModify(
+  target: ValidatedEditTarget,
+  prompt: string,
+  request: Request,
+  startTime: number,
+) {
+  const forceLocal =
+    process.env.BUILDORA_FORCE_LOCAL_GENERATION === "true" ||
+    request.headers.get("x-buildora-force-local") === "true";
+
+  const { source, edits, warnings } = await orchestrateEdit(target, prompt, {
+    gemini: geminiEditProvider,
+    ruleBased: ruleBasedEditProvider,
+    forceLocal,
+    log: (level, msg) => logger[level]("API", msg),
+  });
+
+  logger.info(
+    "API",
+    `Modify success (${Date.now() - startTime}ms) — ${edits.length} edit(s)`,
+  );
+
+  return NextResponse.json({
+    success: true,
+    source,
+    edits,
+    warnings,
+  });
 }
 
 // ---------------------------------------------------------------------------

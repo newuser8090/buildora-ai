@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { attachRuntimeAudit, assertRuntimeClean } from "./helpers/runtime-audit";
+import { createSaaSProjectAndOpenEditor } from "./helpers/projects";
 
 // ---------------------------------------------------------------------------
 // Fallback Isolation Test
@@ -21,8 +22,8 @@ test.describe("Fallback Isolation", () => {
 
   test("forced-local generation uses rule-based provider", async ({ page }) => {
     const audit = attachRuntimeAudit(page);
-    await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    // The editor lives at /editor/[projectId]; reach it through the dashboard.
+    await createSaaSProjectAndOpenEditor(page);
 
     // Intercept the API request to inject the force-local header
     await page.route("**/api/generate", async (route) => {
