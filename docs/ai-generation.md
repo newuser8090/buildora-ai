@@ -71,6 +71,64 @@ If Gemini fails (missing key, timeout, rate limit, invalid JSON, blocked content
 3. Set `GEMINI_API_KEY=your_key_here`
 4. Restart the development server
 
+## AI Editing (modify mode)
+
+Beyond whole-site generation (`mode: "create"`), Buildora supports **targeted AI editing** of a selected section's content from a natural-language instruction (`mode: "modify"`).
+
+### Flow
+
+```
+Select a section in the preview
+  → AI Assistant composer shows an edit chip ("Editing: Hero section")
+  → User prompt: "make it more playful"
+  → Client: POST /api/generate { mode: "modify", prompt, target: { kind, sectionId, type, props, context } }
+  → Server: Gemini edit provider (or rule-based fallback) → revised section props
+  → Server: per-type Zod validation (AnySectionSchema) — invalid edits fall back to original props
+  → Client: updateSectionProps(sectionId, props) — one undoable history entry
+```
+
+### Providers
+
+| Provider | Description |
+|----------|-------------|
+| `geminiEditProvider` | Real AI via Google Gemini — receives the section type, current props, and the instruction; returns revised props JSON |
+| `ruleBasedEditProvider` | Deterministic fallback — tone/intent keyword detection with structure-preserving copy templates |
+
+### Modify request
+
+```json
+{
+  "prompt": "make it more playful",
+  "mode": "modify",
+  "target": {
+    "kind": "section",
+    "sectionId": "s-hero",
+    "type": "hero",
+    "props": { "headline": "..." },
+    "context": { "brandName": "Acme" }
+  }
+}
+```
+
+### Modify response
+
+```json
+{
+  "success": true,
+  "source": "gemini",
+  "edits": [{ "type": "hero", "props": { "headline": "...", "subheadline": "..." } }],
+  "warnings": []
+}
+```
+
+### Editing guarantees
+
+- **Structure preserved** — hrefs, prices, plan names, and asset references survive edits (the rule-based editor preserves them by construction; Gemini is instructed to preserve them)
+- **Validated** — every edit is validated against the per-type section schema; invalid output keeps the original content
+- **Undoable** — an applied edit is a single history entry
+- **Backward compatible** — `mode: "create"` is unchanged; `mode` defaults to `"create"` when omitted
+- The Regenerate quick action sends a default rewrite instruction for the selected section
+
 ## Security
 
 - The API key is never sent to the browser

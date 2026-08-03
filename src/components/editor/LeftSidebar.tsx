@@ -1,14 +1,32 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Bot, Send, Sparkles, Loader2, User, ChevronDown } from "lucide-react";
+import {
+  Bot,
+  Send,
+  Sparkles,
+  Loader2,
+  User,
+  ChevronDown,
+  Wand2,
+  RefreshCw,
+  X,
+} from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useGeneration } from "@/features/generation/hooks/useGeneration";
+import { useAiEdit } from "@/features/ai-editing/hooks/useAiEdit";
 import { useChatStore } from "@/features/chat/store/chat-store";
+import { useEditorStore } from "@/features/editor/store/editor-store";
+import { sectionLabel } from "@/features/ai-editing/rules/rule-based-editor";
+import type { EditTarget } from "@/features/ai-editing/types";
 import {
   STAGE_INFO,
   STAGE_ORDER,
 } from "@/features/generation/services/generation-service";
+
+// Instruction used by the in-chip Regenerate quick action.
+const REGENERATE_INSTRUCTION =
+  "Rewrite this section's copy with fresh, high-quality content for the same purpose.";
 
 // ---------------------------------------------------------------------------
 // Example prompt cards
@@ -28,7 +46,31 @@ const examples = [
 export function LeftSidebar() {
   const [input, setInput] = useState("");
   const { generate, isLoading, stage, completedStages } = useGeneration();
+  const { edit, isEditing } = useAiEdit();
   const messages = useChatStore((s) => s.messages);
+
+  // Selected section → edit target. When a section is selected, chat messages
+  // route to the AI-editing (modify) flow instead of full regeneration.
+  const project = useEditorStore((s) => s.project);
+  const selectedSectionId = useEditorStore((s) => s.selectedSectionId);
+  const clearSelection = useEditorStore((s) => s.clearSelection);
+
+  const selectedSection = selectedSectionId
+    ? project.pages.flatMap((p) => p.sections).find((s) => s.id === selectedSectionId)
+    : undefined;
+
+  const editTarget: EditTarget | null = selectedSection
+    ? {
+        kind: "section",
+        sectionId: selectedSection.id,
+        type: selectedSection.type,
+        label: sectionLabel(selectedSection.type),
+        props: selectedSection.props,
+        context: {
+          brandName: project.name.split(" — ")[0] || project.name,
+        },
+      }
+    : null;
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -62,17 +104,28 @@ export function LeftSidebar() {
     }
   }, [messagesLength, lastContent, isNearBottom]);
 
-  const handleGenerate = async () => {
+  const isBusy = isLoading || isEditing;
+
+  const handleSubmit = async () => {
     const prompt = input.trim();
-    if (!prompt || isLoading) return;
+    if (!prompt || isBusy) return;
     setInput("");
-    await generate(prompt);
+    if (editTarget) {
+      await edit(prompt, editTarget);
+    } else {
+      await generate(prompt);
+    }
+  };
+
+  const handleRegenerate = async () => {
+    if (!editTarget || isBusy) return;
+    await edit(REGENERATE_INSTRUCTION, editTarget);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      handleGenerate();
+      handleSubmit();
     }
   };
 
@@ -284,6 +337,39 @@ export function LeftSidebar() {
 
       {/* ---- Prompt composer ---- */}
       <div className="border-t border-border px-4 py-4 flex-none">
+        {/* Edit-target chip — shown while a section is selected */}
+        {editTarget && (
+          <div
+            data-testid="edit-target-chip"
+            className="mb-3 flex items-center gap-2 rounded-xl border border-accent/25 bg-accent/[0.06] px-3 py-2"
+          >
+            <Wand2 className="h-3.5 w-3.5 shrink-0 text-accent" />
+            <span className="min-w-0 flex-1 truncate text-xs text-text-primary">
+              Editing:{" "}
+              <span className="font-medium text-accent">{editTarget.label}</span>
+            </span>
+            <button
+              type="button"
+              onClick={handleRegenerate}
+              disabled={isBusy}
+              data-testid="regenerate-section"
+              className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium text-accent transition-colors hover:bg-accent/10 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <RefreshCw className="h-3 w-3" />
+              Regenerate
+            </button>
+            <button
+              type="button"
+              onClick={() => clearSelection()}
+              disabled={isBusy}
+              aria-label="Stop editing section"
+              className="flex h-5 w-5 items-center justify-center rounded-md text-text-dim transition-colors hover:bg-border hover:text-text-primary disabled:opacity-40"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        )}
+
         <div className="relative">
           <textarea
             ref={textareaRef}
@@ -292,20 +378,26 @@ export function LeftSidebar() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             data-testid="prompt-input"
-            placeholder="Describe your website..."
-            disabled={isGenerating}
+            placeholder={
+              editTarget
+                ? `Describe how to edit the ${(editTarget.label ?? "section").toLowerCase()}...`
+                : "Describe your website..."
+            }
+            disabled={isBusy}
             className="w-full resize-none rounded-2xl border border-border bg-base px-4 py-3 pr-12 text-sm text-text-primary placeholder:text-text-dim transition-all duration-200 focus:border-accent/40 focus:outline-none focus:ring-2 focus:ring-accent/10 disabled:opacity-50"
             style={{ maxHeight: "160px" }}
-            aria-label="Website description"
+            aria-label={editTarget ? "Edit instruction" : "Website description"}
           />
           <button
-            onClick={handleGenerate}
-            disabled={isGenerating || !input.trim()}
+            onClick={handleSubmit}
+            disabled={isBusy || !input.trim()}
             className="absolute bottom-3 right-3 flex h-8 w-8 items-center justify-center rounded-xl bg-accent text-white transition-all duration-200 hover:bg-accent-hover active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
-            aria-label="Send message"
+            aria-label={editTarget ? "Apply edit" : "Send message"}
           >
-            {isGenerating ? (
+            {isBusy ? (
               <Loader2 className="h-4 w-4 animate-spin" />
+            ) : editTarget ? (
+              <Wand2 className="h-4 w-4" />
             ) : (
               <Send className="h-4 w-4" />
             )}
@@ -314,15 +406,20 @@ export function LeftSidebar() {
 
         <button
           data-testid="generate-button"
-          onClick={handleGenerate}
-          disabled={isGenerating || !input.trim()}
+          onClick={handleSubmit}
+          disabled={isBusy || !input.trim()}
           className="mt-3 flex h-9 w-full items-center justify-center gap-2 rounded-xl bg-accent text-sm font-medium text-white transition-all duration-200 hover:bg-accent-hover active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed"
           type="button"
         >
-          {isGenerating ? (
+          {isBusy ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" />
-              Generating...
+              {isEditing ? "Editing..." : "Generating..."}
+            </>
+          ) : editTarget ? (
+            <>
+              <Wand2 className="h-4 w-4" />
+              Apply Edit
             </>
           ) : (
             <>

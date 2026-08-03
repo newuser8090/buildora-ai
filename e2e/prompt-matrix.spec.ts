@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { attachRuntimeAudit, assertRuntimeClean } from "./helpers/runtime-audit";
+import { createSaaSProjectAndOpenEditor } from "./helpers/projects";
 import { writeFileSync, mkdirSync } from "fs";
 
 // ---------------------------------------------------------------------------
@@ -49,6 +50,13 @@ const PROMPTS: { id: number; category: string; text: string }[] = [
 test.describe("Prompt Matrix", () => {
   test.describe.configure({ mode: "serial" });
 
+  // These prompts hit the real generation API (Gemini with rule-based
+  // fallback), which can take up to the provider's 30s timeout. Allow far
+  // more than the default 30s test timeout.
+  test.beforeEach(() => {
+    test.setTimeout(90_000);
+  });
+
   for (const promptDef of PROMPTS) {
     test(`prompt ${promptDef.id}: ${promptDef.category}`, async ({ page }) => {
       const audit = attachRuntimeAudit(page);
@@ -69,8 +77,9 @@ test.describe("Prompt Matrix", () => {
       };
 
       try {
-        await page.goto("/");
-        await page.waitForLoadState("networkidle");
+        // The editor lives at /editor/[projectId]; reach it through the
+        // dashboard (each test gets a fresh context with empty IndexedDB).
+        await createSaaSProjectAndOpenEditor(page);
 
         // Submit the prompt
         const textarea = page.locator('[data-testid="prompt-input"]');
@@ -114,21 +123,19 @@ test.describe("Prompt Matrix", () => {
           result.notes.push("Preview check failed");
         }
 
-        // Editor interaction test: select and edit a section
+        // Editor interaction test: select a section and confirm the inspector
         try {
-          // Try to find and click a section heading
-          const sectionElements = preview.locator("h1, h2, h3, span");
+          // Click the first section heading (matching editor.spec's pattern);
+          // header nav spans are skipped since they may not be click targets.
+          const sectionElements = preview.locator("h1, h2, h3");
           const sectionCount = await sectionElements.count();
           if (sectionCount > 0) {
-            // Click on the first section-like element
-            await sectionElements.first().click({ timeout: 3000 });
+            await sectionElements.first().click({ timeout: 5000 });
             await page.waitForTimeout(300);
-            // Check that inspector panel shows
             const inspector = page.locator('[data-testid="inspector-panel"]');
-            const inspectorVisible = await inspector.isVisible();
-            result.editorInteractionPassed = inspectorVisible;
+            result.editorInteractionPassed = await inspector.isVisible();
           } else {
-            result.notes.push("No section elements found for interaction");
+            result.notes.push("No section headings found for interaction");
           }
         } catch (err) {
           result.notes.push(`Editor interaction failed: ${(err as Error).message}`);
