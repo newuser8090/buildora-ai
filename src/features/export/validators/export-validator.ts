@@ -2,6 +2,7 @@ import type { Project } from "@/types/project";
 import { AnySectionSchema } from "@/features/editor/schemas/section-schemas";
 import { ProjectSchema, ThemeSchema } from "@/features/generation/schemas/generation-plan-schema";
 import { sectionRegistry } from "@/features/editor/registry/section-registry";
+import { validateRoutingForExport } from "@/features/routing/routes";
 import { buildExportAssetManifest } from "../generators/asset-export-manifest";
 import type { ExportValidation } from "../pipeline/types";
 
@@ -87,6 +88,12 @@ export function validateProjectForExport(project: Project): ExportValidation {
         }
       }
     }
+  }
+
+  // 3b. Routing validation — homepage/root policy, slug format, reserved
+  //     paths, and duplicate routes
+  for (const routingError of validateRoutingForExport(project.pages)) {
+    errors.push(`Routing: ${routingError}`);
   }
 
   // 4. Asset validation — check referenced assets via manifest builder

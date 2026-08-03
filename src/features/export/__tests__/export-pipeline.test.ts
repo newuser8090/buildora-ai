@@ -13,6 +13,7 @@ import {
 } from "../generators/static-files-generator";
 import {
   escapeJsxText,
+  escapeJsxStringLiteral,
   sanitiseFolderName,
   sanitiseFilename,
 } from "../formatters/jsx-formatter";
@@ -30,6 +31,17 @@ describe("JSX formatter", () => {
 
   it("escapes curly braces used in JSX expressions", () => {
     expect(escapeJsxText("Hello {world}")).toBe("Hello &#123;world&#125;");
+  });
+
+  it("escapeJsxStringLiteral escapes quotes, backslashes and template sequences", () => {
+    const input = 'He said "hi" \\ ${x}`';
+    expect(escapeJsxStringLiteral(input)).toBe('He said \\"hi\\" \\\\ \\${x}\\\`');
+  });
+
+  it("escapeJsxStringLiteral escapes line terminators", () => {
+    expect(escapeJsxStringLiteral("Line one\nLine two\r\nThree")).toBe(
+      "Line one\\nLine two\\nThree",
+    );
   });
 
   it("sanitises folder names", () => {

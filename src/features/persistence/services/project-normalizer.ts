@@ -76,10 +76,15 @@ export function normalizeProject(input: unknown): ProjectNormalizationResult {
     }
 
     // Normalize each page
-    for (const page of project.pages as Record<string, unknown>[]) {
+    (project.pages as Record<string, unknown>[]).forEach((page, index) => {
       if (!page.id || typeof page.id !== "string") page.id = generateId();
       if (!page.title || typeof page.title !== "string") page.title = "Untitled";
-      if (!page.slug || typeof page.slug !== "string") page.slug = "/";
+      if (!page.slug || typeof page.slug !== "string") {
+        // Only the first page defaults to the root slug. Non-home pages get a
+        // slug derived from their title so legacy imports never collide with
+        // the homepage route (the export validator would reject them).
+        page.slug = index === 0 ? "/" : fallbackSlugFromTitle(page.title as string, index);
+      }
 
       // Ensure sections is an array
       if (!Array.isArray(page.sections)) {
@@ -95,7 +100,7 @@ export function normalizeProject(input: unknown): ProjectNormalizationResult {
         if (!section.props || typeof section.props !== "object") section.props = {};
         if (!section.styles || typeof section.styles !== "object") section.styles = {};
       }
-    }
+    });
 
     // Remove transient/undefined fields that are not part of Project
     const allowedKeys = [
@@ -130,6 +135,22 @@ export function normalizeProject(input: unknown): ProjectNormalizationResult {
 
 function generateId(): string {
   return `proj-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+/**
+ * Derive a fallback slug for a non-home page missing one. Mirrors the editor's
+ * title-to-slug policy ("About" → "/about"); a title that would resolve to
+ * the root (e.g. "Home") becomes "/home" instead so it never shadows the
+ * homepage route.
+ */
+function fallbackSlugFromTitle(title: string, index: number): string {
+  const slug = title
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!slug) return `page-${index + 1}`;
+  return slug === "home" ? "/home" : `/${slug}`;
 }
 
 function createMinimalTheme() {

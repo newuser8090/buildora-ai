@@ -318,4 +318,28 @@ describe("PageTabs menu behavior", () => {
     fireEvent.click(screen.getByTestId("page-action-move-left"));
     expect(screen.queryByTestId("page-menu-page-2-items")).toBeNull();
   });
+
+  it("opens the metadata dialog from the menu", () => {
+    renderTabs();
+    openMenu("page-2");
+    fireEvent.click(screen.getByTestId("page-action-edit-meta"));
+    expect(screen.getByRole("dialog", { name: "Page settings" })).toBeTruthy();
+  });
+
+  it("saves metadata through the dialog", () => {
+    renderTabs();
+    openMenu("page-2");
+    fireEvent.click(screen.getByTestId("page-action-edit-meta"));
+    fireEvent.change(screen.getByTestId("page-meta-title"), {
+      target: { value: "About SEO" },
+    });
+    fireEvent.click(screen.getByTestId("page-meta-save"));
+    const page = useEditorStore
+      .getState()
+      .project.pages.find((p) => p.id === "page-2")!;
+    expect(page.meta).toEqual({ title: "About SEO" });
+    expect(
+      screen.queryByRole("dialog", { name: "Page settings" }),
+    ).toBeNull();
+  });
 });

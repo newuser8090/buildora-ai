@@ -21,11 +21,13 @@ import {
   MoreHorizontal,
   Pencil,
   Plus,
+  Settings2,
   Trash2,
   type LucideIcon,
 } from "lucide-react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { ConfirmDialog } from "@/features/projects/components/ConfirmDialog";
+import { PageMetaDialog } from "./PageMetaDialog";
 import { cn } from "@/utils/cn";
 import type { Page } from "@/types/project";
 
@@ -94,6 +96,7 @@ export function PageTabs() {
   const [renameValue, setRenameValue] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Page | null>(null);
+  const [metaPage, setMetaPage] = useState<Page | null>(null);
 
   const menuRef = useRef<HTMLDivElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -355,6 +358,15 @@ export function PageTabs() {
                     onClick={() => startRename(page.id)}
                   />
                   <MenuItem
+                    testId="page-action-edit-meta"
+                    icon={Settings2}
+                    label="Edit meta"
+                    onClick={() => {
+                      setMenuPageId(null);
+                      setMetaPage(page);
+                    }}
+                  />
+                  <MenuItem
                     testId="page-action-move-left"
                     icon={ArrowLeft}
                     label="Move Left"
@@ -432,6 +444,12 @@ export function PageTabs() {
         destructive
         onConfirm={handleDeleteConfirm}
         onCancel={() => setDeleteTarget(null)}
+      />
+
+      {/* ---- Per-page metadata dialog ---- */}
+      <PageMetaDialog
+        page={metaPage}
+        onClose={() => setMetaPage(null)}
       />
     </>
   );

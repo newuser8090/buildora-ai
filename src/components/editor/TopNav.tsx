@@ -8,6 +8,7 @@ import {
   Redo2,
   Save,
   Download,
+  Package,
   CircleUser,
   Loader2,
   ImageIcon,
@@ -18,6 +19,7 @@ import { AssetManager } from "@/features/assets/components/AssetManager";
 import { saveNowViaController } from "@/features/persistence/services/project-controller";
 import { ProjectExportService } from "@/features/projects/services/project-export-service";
 import { downloadProjectFile } from "@/features/projects/utils/download-project-file";
+import { exportProject as exportSiteZip } from "@/features/export/pipeline/export-pipeline";
 import { mapProjectTransferErrorToMessage } from "@/features/projects/types/project-transfer";
 import { cn } from "@/utils/cn";
 
@@ -30,10 +32,13 @@ const iconButtonDisabled =
 export function TopNav() {
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [exportingSite, setExportingSite] = useState(false);
+  const [exportSiteError, setExportSiteError] = useState<string | null>(null);
   const [assetManagerOpen, setAssetManagerOpen] = useState(false);
 
   // Guards double exports even before React re-renders the disabled state.
   const exportingRef = useRef(false);
+  const exportingSiteRef = useRef(false);
 
   const undo = useEditorStore((s) => s.undo);
   const redo = useEditorStore((s) => s.redo);
@@ -96,6 +101,44 @@ export function TopNav() {
     setBackNavError(null);
     router.push("/");
   }, [router]);
+
+  // ---- Export the site as a multi-page ZIP ----
+  const handleExportSite = useCallback(async () => {
+    // Generates one route file per page (app/<slug>/page.tsx), per-page
+    // metadata, cross-page internal links, and downloads the ZIP.
+    if (exportingSiteRef.current) return;
+    exportingSiteRef.current = true;
+
+    if (!project || !project.id) {
+      exportingSiteRef.current = false;
+      setExportSiteError("No active project to export.");
+      return;
+    }
+
+    setExportSiteError(null);
+    setExportingSite(true);
+
+    // Yield so a second synchronous click in the same tick is blocked by the
+    // exportingSiteRef guard.
+    await Promise.resolve();
+
+    try {
+      const result = await exportSiteZip(project);
+      if (!mountedRef.current) return;
+      if (!result.success) {
+        setExportSiteError(result.error ?? "Site export failed");
+      }
+    } catch (err) {
+      if (mountedRef.current) {
+        setExportSiteError(err instanceof Error ? err.message : "Site export failed");
+      }
+    } finally {
+      exportingSiteRef.current = false;
+      if (mountedRef.current) {
+        setExportingSite(false);
+      }
+    }
+  }, [project]);
 
   // ---- Export current project as .buildora.json ----
   const handleExport = useCallback(async () => {
@@ -251,6 +294,24 @@ export function TopNav() {
         </button>
 
         <button
+          data-testid="export-site-button"
+          onClick={handleExportSite}
+          disabled={exportingSite}
+          className="flex h-8 items-center gap-2 rounded-lg bg-primary/10 px-2.5 text-sm text-primary transition-all duration-200 hover:bg-primary/20 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+          title={exportingSite ? "Exporting site..." : "Export website as ZIP"}
+          type="button"
+        >
+          {exportingSite ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Package className="h-4 w-4" />
+          )}
+          <span className="hidden sm:inline text-xs">
+            {exportingSite ? "Exporting..." : "Export Site"}
+          </span>
+        </button>
+
+        <button
           data-testid="export-button"
           onClick={handleExport}
           disabled={exporting}
@@ -268,6 +329,21 @@ export function TopNav() {
           </span>
         </button>
       </div>
+
+      {/* ---- Export site error toast ---- */}
+      {exportSiteError && (
+        <div className="fixed bottom-4 right-4 z-50 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-lg">
+          <p className="font-medium">Site export failed</p>
+          <p className="mt-1 text-xs text-red-600">{exportSiteError}</p>
+          <button
+            onClick={() => setExportSiteError(null)}
+            className="mt-2 text-xs font-medium text-red-700 underline hover:no-underline"
+            type="button"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* ---- Export error toast ---- */}
       {exportError && (

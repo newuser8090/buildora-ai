@@ -1,4 +1,6 @@
 import { test, expect } from "@playwright/test";
+import { readFileSync } from "fs";
+import JSZip from "jszip";
 import type { Page } from "@playwright/test";
 import {
   attachRuntimeAudit,
@@ -150,6 +152,55 @@ test.describe("Multi-page editor flow", () => {
     expect(persisted.map((t) => t.title)).toEqual(["Home", "Contact"]);
 
     // 10. Clean runtime — no console errors / failed requests.
+    assertNoFailedRequests(audit.state);
+    assertRuntimeClean(audit.state);
+    audit.detach();
+  });
+
+  test("export ZIP contains a route file per page with metadata", async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    const audit = attachRuntimeAudit(page);
+
+    await createBlankProjectAndOpenEditor(page);
+
+    // Add a second page with SEO metadata.
+    await page.locator('[data-testid="page-tab-add"]').click();
+    await finishRename(page, "About");
+    const tabs = await getPageTabs(page);
+    await runPageAction(page, tabs[1].id, "edit-meta");
+    const metaDialog = page.getByRole("dialog", { name: "Page settings" });
+    await expect(metaDialog).toBeVisible();
+    await page.locator('[data-testid="page-meta-title"]').fill("About SEO");
+    await page.locator('[data-testid="page-meta-save"]').click();
+    await expect(metaDialog).not.toBeVisible();
+
+    // Export the website ZIP and capture the download.
+    const downloadPromise = page.waitForEvent("download");
+    await page.locator('[data-testid="export-site-button"]').click();
+    const download = await downloadPromise;
+    const downloadPath = await download.path();
+    expect(downloadPath).toBeTruthy();
+
+    // Read + unzip, then assert the route file set.
+    const zip = await JSZip.loadAsync(readFileSync(downloadPath!));
+    const paths = Object.keys(zip.files);
+    const pageFiles = paths.filter((p) => /\/app\/.*page\.tsx$/.test(p));
+    expect(pageFiles).toHaveLength(2);
+
+    const homeFile = paths.find((p) => p.endsWith("/app/page.tsx"));
+    const aboutFile = paths.find((p) => p.endsWith("/app/about/page.tsx"));
+    expect(homeFile).toBeTruthy();
+    expect(aboutFile).toBeTruthy();
+
+    const homeContent = await zip.file(homeFile!)!.async("string");
+    const aboutContent = await zip.file(aboutFile!)!.async("string");
+    expect(homeContent).toContain("export default function HomePage()");
+    expect(aboutContent).toContain("export default function AboutPage()");
+    // Per-page metadata lands in the route file
+    expect(aboutContent).toContain('title: "About SEO"');
+
     assertNoFailedRequests(audit.state);
     assertRuntimeClean(audit.state);
     audit.detach();
