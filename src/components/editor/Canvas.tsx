@@ -2,9 +2,11 @@
 
 import { useRef, useCallback, useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Sparkles, Zap, Palette, ShoppingBag, Utensils, Monitor } from "lucide-react";
+import { Sparkles, Menu, LayoutGrid } from "lucide-react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
+import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
 import { SectionRenderer } from "@/features/editor/renderer/SectionRenderer";
+import { scrollSectionIntoView } from "@/features/editor/utils/scroll-section-into-view";
 
 
 // ---------------------------------------------------------------------------
@@ -16,17 +18,6 @@ const VIEWPORT_WIDTHS: Record<string, string> = {
   tablet: "768px",
   mobile: "390px",
 };
-
-// ---------------------------------------------------------------------------
-// Templates (empty state)
-// ---------------------------------------------------------------------------
-
-const templates = [
-  { icon: Zap, label: "SaaS Landing Page", emoji: "⚡" },
-  { icon: Palette, label: "Portfolio", emoji: "🎨" },
-  { icon: ShoppingBag, label: "Store", emoji: "🛍" },
-  { icon: Utensils, label: "Restaurant", emoji: "🍽" },
-];
 
 // ---------------------------------------------------------------------------
 // Theme → CSS variables
@@ -71,45 +62,58 @@ function themeToCSSVars(theme: import("@/types/theme").Theme): React.CSSProperti
 // ---------------------------------------------------------------------------
 
 function EmptyCanvasState() {
+  const openAddSectionDialog = useEditorUiStore((s) => s.openAddSectionDialog);
+
   return (
     <div className="flex w-full flex-col items-center justify-center px-8 py-16">
-      <div data-testid="empty-canvas" className="flex max-w-md flex-col items-center gap-8 text-center">
+      <div data-testid="empty-canvas" className="flex max-w-md flex-col items-center gap-6 text-center">
         {/* Subtle wireframe illustration */}
         <div className="relative flex h-36 w-56 items-center justify-center rounded-xl border border-border/40 bg-card/40">
           <div className="absolute left-4 right-4 top-3 h-2 rounded bg-border/30" />
           <div className="absolute left-4 top-8 h-1.5 w-12 rounded bg-border/20" />
           <div className="absolute bottom-8 left-4 right-4 h-16 rounded-lg border border-border/30 bg-card/30" />
           <div className="absolute bottom-8 left-6 top-12 w-1.5 rounded-full bg-accent/30" />
-          <Monitor className="h-8 w-8 text-text-dim/40" />
+          <Sparkles className="h-8 w-8 text-text-dim/40" />
         </div>
 
         <div>
           <h2 className="text-xl font-semibold tracking-tight text-text-primary">
-            Your website will appear here
+            Start building your page
           </h2>
           <p className="mt-2 text-sm leading-relaxed text-text-muted">
-            Describe what you want to build, and Buildora will generate an
-            editable website with AI.
+            Add a section from the library or describe what you want and
+            Buildora will generate it with AI.
           </p>
         </div>
 
-        <div className="grid w-full grid-cols-2 gap-3">
-          {templates.map((t) => {
-            const Icon = t.icon;
-            return (
-              <button
-                key={t.label}
-                className="group flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-border/50 bg-card/30 px-4 py-4 text-center transition-all duration-200 hover:border-accent/30 hover:bg-card/50 hover:shadow-sm active:scale-[0.98]"
-              >
-                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-card/50 transition-colors duration-200 group-hover:bg-accent/15">
-                  <Icon className="h-4 w-4 text-text-dim transition-colors duration-200 group-hover:text-accent" />
-                </span>
-                <span className="text-xs font-medium text-text-muted transition-colors duration-200 group-hover:text-text-primary">
-                  {t.emoji} {t.label}
-                </span>
-              </button>
-            );
-          })}
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <button
+            type="button"
+            onClick={() => openAddSectionDialog({ initialType: "hero" })}
+            data-testid="empty-add-hero"
+            className="flex h-9 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-white transition-all duration-200 hover:bg-accent-hover active:scale-95"
+          >
+            <Sparkles className="h-4 w-4" />
+            Add Hero
+          </button>
+          <button
+            type="button"
+            onClick={() => openAddSectionDialog({ initialType: "header" })}
+            data-testid="empty-add-header"
+            className="flex h-9 items-center gap-2 rounded-lg border border-border px-4 text-sm font-medium text-text-muted transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
+          >
+            <Menu className="h-4 w-4" />
+            Add Header
+          </button>
+          <button
+            type="button"
+            onClick={() => openAddSectionDialog()}
+            data-testid="empty-browse-sections"
+            className="flex h-9 items-center gap-2 rounded-lg border border-border px-4 text-sm font-medium text-text-muted transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
+          >
+            <LayoutGrid className="h-4 w-4" />
+            Browse Sections
+          </button>
         </div>
       </div>
     </div>
@@ -176,6 +180,25 @@ export function Canvas() {
   const handleBgClick = useCallback(() => {
     clearSelection();
   }, [clearSelection]);
+
+  // Selection sync — when a section is selected from the STRUCTURE panel (or
+  // programmatically via insert/duplicate), scroll the canvas element into
+  // view. Canvas-initiated clicks are excluded via selectionSource so we never
+  // re-center a section the user is already looking at. Scrolling never
+  // changes selection, so this cannot cause an infinite scroll loop.
+  const selectedSectionId = useEditorStore((s) => s.selectedSectionId);
+  const selectionSource = useEditorUiStore((s) => s.selectionSource);
+  const prevSelectedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      selectedSectionId &&
+      prevSelectedRef.current !== selectedSectionId &&
+      selectionSource !== "canvas"
+    ) {
+      scrollSectionIntoView(selectedSectionId, { block: "center" });
+    }
+    prevSelectedRef.current = selectedSectionId;
+  }, [selectedSectionId, selectionSource]);
 
   const viewportWidth = VIEWPORT_WIDTHS[viewport] ?? "1440px";
   const zoomPercent = zoom / 100;

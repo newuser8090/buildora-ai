@@ -39,9 +39,18 @@ const mockOpenProject = vi.fn();
 const mockController = { openProject: mockOpenProject };
 // Explicitly typed so tests can also return null (controller not yet ready).
 const mockGetController = vi.fn<() => typeof mockController | null>(() => mockController);
+// Explicitly typed so tests can also return null (bootstrap failure → retry).
+const mockEnsureController = vi.fn<() => typeof mockController | null>(() => mockController);
 
 vi.mock("@/features/persistence/services/project-controller", () => ({
   getProjectController: () => mockGetController(),
+}));
+
+// The editor page bootstraps the controller on direct loads via
+// ensureProjectController — stub it so the tests stay hermetic (no real
+// IndexedDB adapter / controller is created in jsdom).
+vi.mock("@/features/persistence/hooks/useProjectController", () => ({
+  ensureProjectController: () => mockEnsureController(),
 }));
 
 // The editor chrome only renders once the page reaches "loaded" — stub it so
@@ -91,6 +100,7 @@ function resetStore(): void {
 describe("EditorPage — load-state machine", () => {
   beforeEach(() => {
     mockGetController.mockReturnValue(mockController);
+    mockEnsureController.mockReturnValue(mockController);
     mockOpenProject.mockReset();
     mockPush.mockClear();
     resetStore();
@@ -253,6 +263,29 @@ describe("EditorPage — load-state machine", () => {
     expect(screen.queryByTestId("editor-provider")).toBeNull();
   });
 
+  it("bootstraps the controller on direct load and opens the project", async () => {
+    // A page refresh on /editor/[projectId] mounts with no controller yet —
+    // ensureProjectController must create the singleton so openProject runs.
+    const d = deferred<ProjectTransitionResult>();
+    mockGetController.mockReturnValue(null);
+    mockEnsureController.mockReturnValue(mockController);
+    mockOpenProject.mockReturnValue(d.promise);
+
+    render(<EditorPage />);
+    expect(mockEnsureController).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Opening project...")).toBeTruthy();
+
+    await act(async () => {
+      d.resolve({ success: true });
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-provider")).toBeTruthy(),
+    );
+    expect(mockOpenProject).toHaveBeenCalledWith("proj-1");
+    expect(mockOpenProject).toHaveBeenCalledTimes(1);
+  });
+
   it("re-schedules the retry when the controller is unavailable (guard reset on cleanup)", async () => {
     // This simulates the cleanup → setup cycle StrictMode performs for the
     // retry branch: the simulated unmount must not permanently swallow the
@@ -261,6 +294,7 @@ describe("EditorPage — load-state machine", () => {
     vi.useFakeTimers();
     try {
       mockGetController.mockReturnValue(null);
+      mockEnsureController.mockReturnValue(null);
       mockOpenProject.mockResolvedValue({ success: true });
 
       const { unmount } = render(<EditorPage />);

@@ -16,7 +16,10 @@ import { Canvas } from "@/components/editor/Canvas";
 import { RightSidebar } from "@/components/editor/RightSidebar";
 import { StatusBar } from "@/components/editor/StatusBar";
 import { EditorProvider } from "@/components/editor/EditorProvider";
+import { AddSectionDialog } from "@/features/editor/components/AddSectionDialog";
+import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
 import { getProjectController } from "@/features/persistence/services/project-controller";
+import { ensureProjectController } from "@/features/persistence/hooks/useProjectController";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import type { ProjectTransitionResult } from "@/features/persistence/types";
 import { Loader2, AlertCircle, ArrowLeft, Plus } from "lucide-react";
@@ -32,6 +35,11 @@ export default function EditorPage() {
 
   const [loadState, setLoadState] = useState<"loading" | "loaded" | "error" | "not-found">("loading");
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Retry tick — bumped when the controller is not yet available so the
+  // effect re-runs and retries. (A plain setLoadState("loading") is a no-op
+  // when the state is already "loading", which would leave the editor stuck
+  // on "Opening project..." forever.)
+  const [retryTick, setRetryTick] = useState(0);
   const initializedRef = useRef(false);
   // Tracks the in-flight openProject() transition so a React StrictMode
   // double-invoke (setup → cleanup → setup) can REUSE the same promise
@@ -49,12 +57,25 @@ export default function EditorPage() {
     if (!projectId || initializedRef.current) return;
     initializedRef.current = true;
 
-    const controller = getProjectController();
+    // Direct loads (e.g. a page refresh on /editor/[projectId]) may mount
+    // before the useProjectController hook ever ran — the controller is
+    // normally created by the dashboard or EditorProvider (which only mounts
+    // AFTER the project loads). Bootstrap the singleton here so a fresh
+    // editor load can open its project without waiting forever.
+    let controller: ReturnType<typeof getProjectController> = null;
+    try {
+      controller = getProjectController() ?? ensureProjectController();
+    } catch {
+      controller = null;
+    }
+
     if (!controller) {
-      // Controller might not be initialized yet — wait and retry
+      // Controller still unavailable (e.g. persistence bootstrap failed
+      // transiently) — wait and retry. Bumping retryTick forces a re-render
+      // so this effect re-runs instead of parking on "Opening project...".
       const retryTimer = setTimeout(() => {
         initializedRef.current = false;
-        setLoadState("loading");
+        setRetryTick((t) => t + 1);
       }, 300);
       return () => {
         clearTimeout(retryTimer);
@@ -129,7 +150,7 @@ export default function EditorPage() {
       // continuation (no state updates after unmount).
       initializedRef.current = false;
     };
-  }, [projectId, activeProjectId]);
+  }, [projectId, activeProjectId, retryTick]);
 
   // ---- Not found state ----
   if (loadState === "not-found") {
@@ -219,6 +240,26 @@ export default function EditorPage() {
   // ---- Loaded: render editor ----
   return (
     <EditorProvider>
+      <EditorShell />
+    </EditorProvider>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// EditorShell — the editor chrome plus the shared Add Section dialog
+// ---------------------------------------------------------------------------
+
+function EditorShell() {
+  const project = useEditorStore((s) => s.project);
+  const selectedPageId = useEditorStore((s) => s.selectedPageId);
+  const selectedSectionId = useEditorStore((s) => s.selectedSectionId);
+  const open = useEditorUiStore((s) => s.addSectionDialog.open);
+
+  const activePage =
+    project.pages.find((p) => p.id === selectedPageId) ?? project.pages[0];
+
+  return (
+    <>
       <TopNav />
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <LeftSidebar />
@@ -226,6 +267,16 @@ export default function EditorPage() {
         <RightSidebar />
       </div>
       <StatusBar />
-    </EditorProvider>
+
+      {/* Shared Add Section dialog — mounted once so both the structure
+          panel and the empty canvas can open it. */}
+      {open && activePage ? (
+        <AddSectionDialog
+          pageId={activePage.id}
+          selectedSectionId={selectedSectionId}
+          existingSections={activePage.sections}
+        />
+      ) : null}
+    </>
   );
 }

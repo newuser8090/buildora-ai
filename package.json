@@ -16,6 +16,9 @@
     "test:export-build": "cross-env RUN_BUILD_TEST=true vitest run src/features/export/__tests__/export-build.test.ts --maxWorkers=1"
   },
   "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "@google/genai": "^2.13.0",
     "clsx": "^2.1.1",
     "jszip": "^3.10.1",

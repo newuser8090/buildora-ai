@@ -5,6 +5,41 @@ import type { Asset } from "@/features/assets/types";
 import type { PersistenceError } from "@/features/persistence/types";
 import { clearAssetReferences } from "@/features/assets/services/reference-cleanup";
 import { getCanonicalExtension } from "@/features/assets/services/file-validator";
+import {
+  insertSectionAt,
+  moveSectionToIndex,
+  normalizeSectionOrders,
+  reorderSections,
+  selectionAfterDelete,
+  type SectionInsertPosition,
+  type StructureError,
+} from "./section-structure";
+import { isSingletonSectionType, type SectionType } from "../section-library/types";
+import { createSectionId } from "../section-library/services/section-factory";
+
+// ---------------------------------------------------------------------------
+// Mutation result types
+// ---------------------------------------------------------------------------
+
+export type EditorMutationErrorCode =
+  | "PAGE_NOT_FOUND"
+  | "SECTION_NOT_FOUND"
+  | "TARGET_NOT_FOUND"
+  | "SECTION_ID_CONFLICT"
+  | "SINGLETON_SECTION_EXISTS"
+  | "INVALID_INSERT_POSITION"
+  | "CANNOT_MOVE_OUT_OF_BOUNDS"
+  | "CANNOT_DELETE_LAST_SECTION"
+  | "NO_OP";
+
+export interface EditorMutationError {
+  code: EditorMutationErrorCode;
+  message: string;
+}
+
+export type EditorMutationResult =
+  | { ok: true; changed: boolean }
+  | { ok: false; error: EditorMutationError };
 
 // ---------------------------------------------------------------------------
 // History stack
@@ -79,9 +114,27 @@ export interface EditorState {
   updateSection: (sectionId: string, updates: Partial<BaseSection>) => void;
   updateSectionProps: (sectionId: string, props: Record<string, unknown>) => void;
   updateSectionStyles: (sectionId: string, styles: Record<string, unknown>) => void;
-  reorderSection: (pageId: string, sectionId: string, newOrder: number) => void;
-  duplicateSection: (sectionId: string) => void;
-  deleteSection: (sectionId: string) => void;
+  insertSection: (
+    pageId: string,
+    section: BaseSection,
+    position: SectionInsertPosition,
+  ) => EditorMutationResult;
+  reorderSection: (
+    pageId: string,
+    activeSectionId: string,
+    overSectionId: string,
+  ) => EditorMutationResult;
+  moveSection: (
+    pageId: string,
+    sectionId: string,
+    targetIndex: number,
+  ) => EditorMutationResult;
+  moveSectionUp: (pageId: string, sectionId: string) => EditorMutationResult;
+  moveSectionDown: (pageId: string, sectionId: string) => EditorMutationResult;
+  duplicateSection: (sectionId: string) => EditorMutationResult;
+  deleteSection: (sectionId: string) => EditorMutationResult;
+  setSectionVisible: (sectionId: string, visible: boolean) => EditorMutationResult;
+  toggleSectionVisibility: (sectionId: string) => EditorMutationResult;
 
   // Asset management
   getAsset: (assetId: string) => Asset | undefined;
@@ -144,6 +197,11 @@ function withHistory(
       future: [],
     },
   };
+}
+
+/** Map a structure-layer error into an EditorMutationResult. */
+function mapStructureError(error: StructureError): EditorMutationResult {
+  return { ok: false, error: { code: error.code, message: error.message } };
 }
 
 // ---------------------------------------------------------------------------
@@ -540,18 +598,167 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     );
   },
 
-  reorderSection: (pageId, sectionId, newOrder) => {
+  insertSection: (pageId, section, position) => {
+    const state = get();
+    const page = state.project.pages.find((p) => p.id === pageId);
+    if (!page) {
+      return {
+        ok: false,
+        error: { code: "PAGE_NOT_FOUND", message: `Page "${pageId}" does not exist.` },
+      };
+    }
+
+    // ID uniqueness check
+    if (page.sections.some((s) => s.id === section.id)) {
+      return {
+        ok: false,
+        error: { code: "SECTION_ID_CONFLICT", message: `Section ID "${section.id}" already exists.` },
+      };
+    }
+
+    // Singleton policy — Header and Footer may only appear once per page
+    if (isSingletonSectionType(section.type)) {
+      const exists = page.sections.some((s) => s.type === section.type);
+      if (exists) {
+        return {
+          ok: false,
+          error: { code: "SINGLETON_SECTION_EXISTS", message: `A ${section.type} section already exists on this page.` },
+        };
+      }
+    }
+
+    const result = insertSectionAt({
+      sections: page.sections,
+      section,
+      position,
+    });
+    if (!result.ok) return mapStructureError(result.error);
+
+    const ordered = normalizeSectionOrders(result.value.sections);
+
     set(
-      withHistory(get(), (project) => {
-        const page = project.pages.find((p) => p.id === pageId);
-        if (!page) return;
-        const idx = page.sections.findIndex((s) => s.id === sectionId);
-        if (idx === -1) return;
-        page.sections[idx].order = newOrder;
-        page.sections.sort((a, b) => a.order - b.order);
+      withHistory(state, (project) => {
+        const p = project.pages.find((pg) => pg.id === pageId);
+        if (!p) return;
+        p.sections = ordered;
         project.updatedAt = new Date().toISOString();
       }),
     );
+
+    // Select the inserted section
+    set({ selectedSectionId: section.id });
+    return { ok: true, changed: true };
+  },
+
+  reorderSection: (pageId, activeSectionId, overSectionId) => {
+    const state = get();
+    const page = state.project.pages.find((p) => p.id === pageId);
+    if (!page) {
+      return {
+        ok: false,
+        error: { code: "PAGE_NOT_FOUND", message: `Page "${pageId}" does not exist.` },
+      };
+    }
+
+    const result = reorderSections({
+      sections: page.sections,
+      activeSectionId,
+      overSectionId,
+    });
+    if (!result.ok) return mapStructureError(result.error);
+
+    // No-op (same position) — do not create a history entry
+    if (!result.value.changed) return { ok: true, changed: false };
+
+    const ordered = normalizeSectionOrders(result.value.sections);
+
+    set(
+      withHistory(state, (project) => {
+        const p = project.pages.find((pg) => pg.id === pageId);
+        if (!p) return;
+        p.sections = ordered;
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
+
+    // Selection remains on the moved section
+    set({ selectedSectionId: activeSectionId });
+    return { ok: true, changed: true };
+  },
+
+  moveSection: (pageId, sectionId, targetIndex) => {
+    const state = get();
+    const page = state.project.pages.find((p) => p.id === pageId);
+    if (!page) {
+      return {
+        ok: false,
+        error: { code: "PAGE_NOT_FOUND", message: `Page "${pageId}" does not exist.` },
+      };
+    }
+
+    const result = moveSectionToIndex({
+      sections: page.sections,
+      sectionId,
+      targetIndex,
+    });
+    if (!result.ok) return mapStructureError(result.error);
+    if (!result.value.changed) return { ok: true, changed: false };
+
+    const ordered = normalizeSectionOrders(result.value.sections);
+
+    set(
+      withHistory(state, (project) => {
+        const p = project.pages.find((pg) => pg.id === pageId);
+        if (!p) return;
+        p.sections = ordered;
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
+
+    set({ selectedSectionId: sectionId });
+    return { ok: true, changed: true };
+  },
+
+  moveSectionUp: (pageId, sectionId) => {
+    const state = get();
+    const page = state.project.pages.find((p) => p.id === pageId);
+    if (!page) {
+      return {
+        ok: false,
+        error: { code: "PAGE_NOT_FOUND", message: `Page "${pageId}" does not exist.` },
+      };
+    }
+    const index = page.sections.findIndex((s) => s.id === sectionId);
+    if (index === -1) {
+      return {
+        ok: false,
+        error: { code: "SECTION_NOT_FOUND", message: `Section "${sectionId}" does not exist.` },
+      };
+    }
+    // First item cannot move up
+    if (index === 0) return { ok: true, changed: false };
+    return get().moveSection(pageId, sectionId, index - 1);
+  },
+
+  moveSectionDown: (pageId, sectionId) => {
+    const state = get();
+    const page = state.project.pages.find((p) => p.id === pageId);
+    if (!page) {
+      return {
+        ok: false,
+        error: { code: "PAGE_NOT_FOUND", message: `Page "${pageId}" does not exist.` },
+      };
+    }
+    const index = page.sections.findIndex((s) => s.id === sectionId);
+    if (index === -1) {
+      return {
+        ok: false,
+        error: { code: "SECTION_NOT_FOUND", message: `Section "${sectionId}" does not exist.` },
+      };
+    }
+    // Last item cannot move down
+    if (index === page.sections.length - 1) return { ok: true, changed: false };
+    return get().moveSection(pageId, sectionId, index + 1);
   },
 
   duplicateSection: (sectionId) => {
@@ -559,33 +766,54 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     const page = state.project.pages.find((p) =>
       p.sections.some((s) => s.id === sectionId),
     );
-    if (!page) return;
+    if (!page) {
+      return {
+        ok: false,
+        error: { code: "SECTION_NOT_FOUND", message: `Section "${sectionId}" does not exist.` },
+      };
+    }
 
     const source = page.sections.find((s) => s.id === sectionId);
-    if (!source) return;
+    if (!source) {
+      return {
+        ok: false,
+        error: { code: "SECTION_NOT_FOUND", message: `Section "${sectionId}" does not exist.` },
+      };
+    }
 
+    // Singleton duplication blocked
+    if (isSingletonSectionType(source.type)) {
+      return {
+        ok: false,
+        error: { code: "SINGLETON_SECTION_EXISTS", message: `${source.type} sections cannot be duplicated.` },
+      };
+    }
+
+    // Deep clone with a fresh ID, inserted immediately after the original.
+    // Unknown/unsupported types are cast defensively — the ID factory only
+    // uses the type for a readable prefix.
     const clone: BaseSection = ({
       ...JSON.parse(JSON.stringify(source)),
-      id: `${source.type}-${Date.now()}`,
-      order: source.order + 0.5,
+      id: createSectionId(source.type as SectionType),
     } as BaseSection);
+
+    const sourceIndex = page.sections.findIndex((s) => s.id === sectionId);
+    const nextSections = [...page.sections];
+    nextSections.splice(sourceIndex + 1, 0, clone);
+    const ordered = normalizeSectionOrders(nextSections);
 
     set(
       withHistory(state, (project) => {
         const p = project.pages.find((pg) => pg.id === page.id);
         if (!p) return;
-        p.sections.push(clone);
-        p.sections.sort((a, b) => a.order - b.order);
-        // Re-index orders to integers
-        p.sections.forEach((s, i) => {
-          s.order = i + 1;
-        });
+        p.sections = ordered;
         project.updatedAt = new Date().toISOString();
       }),
     );
 
-    // Select the new clone
+    // Select the new duplicate
     set({ selectedSectionId: clone.id });
+    return { ok: true, changed: true };
   },
 
   deleteSection: (sectionId) => {
@@ -593,22 +821,86 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     const page = state.project.pages.find((p) =>
       p.sections.some((s) => s.id === sectionId),
     );
-    if (!page) return;
-    if (page.sections.length <= 1) return; // prevent deletion of last section
+    if (!page) {
+      return {
+        ok: false,
+        error: { code: "SECTION_NOT_FOUND", message: `Section "${sectionId}" does not exist.` },
+      };
+    }
+    if (page.sections.length <= 1) {
+      // Prevent deletion of the final section (Project schema requires ≥1)
+      return {
+        ok: false,
+        error: { code: "CANNOT_DELETE_LAST_SECTION", message: "A page must keep at least one section." },
+      };
+    }
+
+    const nextSelection = selectionAfterDelete(page.sections, sectionId);
 
     set(
       withHistory(state, (project) => {
         const p = project.pages.find((pg) => pg.id === page.id);
         if (!p) return;
         p.sections = p.sections.filter((s) => s.id !== sectionId);
-        p.sections.forEach((s, i) => {
-          s.order = i + 1;
-        });
+        p.sections = normalizeSectionOrders(p.sections);
         project.updatedAt = new Date().toISOString();
       }),
     );
 
-    set({ selectedSectionId: null });
+    // Select nearest next, else previous, else null
+    set({ selectedSectionId: nextSelection });
+    return { ok: true, changed: true };
+  },
+
+  setSectionVisible: (sectionId, visible) => {
+    const state = get();
+    const page = state.project.pages.find((p) =>
+      p.sections.some((s) => s.id === sectionId),
+    );
+    if (!page) {
+      return {
+        ok: false,
+        error: { code: "SECTION_NOT_FOUND", message: `Section "${sectionId}" does not exist.` },
+      };
+    }
+    const section = page.sections.find((s) => s.id === sectionId);
+    if (!section) {
+      return {
+        ok: false,
+        error: { code: "SECTION_NOT_FOUND", message: `Section "${sectionId}" does not exist.` },
+      };
+    }
+    if (section.visible === visible) return { ok: true, changed: false };
+
+    set(
+      withHistory(state, (project) => {
+        for (const p of project.pages) {
+          const idx = p.sections.findIndex((s) => s.id === sectionId);
+          if (idx !== -1) {
+            p.sections[idx] = { ...p.sections[idx], visible };
+            project.updatedAt = new Date().toISOString();
+            return;
+          }
+        }
+      }),
+    );
+
+    // Selection preserved
+    return { ok: true, changed: true };
+  },
+
+  toggleSectionVisibility: (sectionId) => {
+    const state = get();
+    const section = state.project.pages
+      .flatMap((p) => p.sections)
+      .find((s) => s.id === sectionId);
+    if (!section) {
+      return {
+        ok: false,
+        error: { code: "SECTION_NOT_FOUND", message: `Section "${sectionId}" does not exist.` },
+      };
+    }
+    return get().setSectionVisible(sectionId, !section.visible);
   },
 
   // ---- History ----

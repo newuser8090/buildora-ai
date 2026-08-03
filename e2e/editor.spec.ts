@@ -289,7 +289,7 @@ test.describe("Editor sections", () => {
     audit.detach();
   });
 
-  test("selection clears after delete", async ({ page }) => {
+  test("selection moves to the neighbor after delete", async ({ page }) => {
     const audit = attachRuntimeAudit(page);
     await generateWebsite(page);
     const wrappers = page.locator('[data-testid="section-wrapper"]');
@@ -297,7 +297,12 @@ test.describe("Editor sections", () => {
     await page.waitForTimeout(200);
     await page.locator('[data-testid="inspector-panel"]').getByText("Delete").click();
     await page.waitForTimeout(500);
-    await expect(page.locator('[data-testid="selected-section"]')).toHaveCount(0, { timeout: 3000 });
+    // Phase H policy: deleting a section selects the nearest next section
+    // (Pricing takes the deleted slot) instead of clearing the selection.
+    await expect(page.locator('[data-testid="selected-section"]')).toHaveCount(1, { timeout: 3000 });
+    await expect(
+      page.locator('[data-testid="selected-section"]').getByText("Pricing").first(),
+    ).toBeVisible();
     assertRuntimeClean(audit.state);
     audit.detach();
   });

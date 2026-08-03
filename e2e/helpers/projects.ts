@@ -44,3 +44,37 @@ export async function createSaaSProjectAndOpenEditor(page: Page): Promise<string
   expect(projectId).not.toBe("");
   return projectId;
 }
+
+/**
+ * Open the dashboard and create a project from the Blank template (single
+ * starter hero section), landing in the editor. Returns the project id.
+ */
+export async function createBlankProjectAndOpenEditor(
+  page: Page,
+): Promise<string> {
+  await page.goto("/");
+  await page.waitForLoadState("networkidle");
+
+  await expect(
+    page.getByRole("heading", { name: "Welcome to Buildora" }),
+  ).toBeVisible({ timeout: 10000 });
+
+  await page.getByRole("button", { name: "New Project" }).first().click();
+  await expect(page.getByRole("dialog", { name: "New Project" })).toBeVisible();
+
+  // Blank template card — click the first match.
+  await page.getByRole("button", { name: "Use Blank Project" }).first().click();
+  await expect(page.locator("#new-project-name")).toHaveValue("Untitled Project");
+
+  await page.locator('[data-testid="create-project-button"]').click();
+  await page.waitForURL(/\/editor\/.+/, { timeout: 15000 });
+
+  await expect(page.locator('[data-testid="editor-root"]')).toBeVisible({
+    timeout: 15000,
+  });
+
+  const match = page.url().match(/\/editor\/([^/?]+)/);
+  const projectId = match ? match[1] : "";
+  expect(projectId).not.toBe("");
+  return projectId;
+}
