@@ -3,7 +3,7 @@ import type { OutputFile } from "../pipeline/types";
 import { sanitiseFolderName } from "../formatters/jsx-formatter";
 import { generateGlobalsCss } from "./globals-css-generator";
 import { generateLayout } from "./layout-generator";
-import { generatePage } from "./page-generator";
+import { generatePageRoutes } from "./page-generator";
 import { generateAllSectionComponents } from "./section-generators/index";
 import {
   generatePackageJson,
@@ -51,8 +51,9 @@ export function generateExportProject(project: Project): GeneratedProject {
     // Section components — reusable templates
     ...generateAllSectionComponents(),
 
-    // Page — renders sections with serialized props (pass manifest for asset resolution)
-    generatePage(project, assetManifest.valid ? assetManifest : undefined),
+    // Page routes — one app/<slug>/page.tsx per page, with per-page metadata
+    // and cross-page link resolution (pass manifest for asset resolution)
+    ...generatePageRoutes(project, assetManifest.valid ? assetManifest : undefined),
 
     // Asset files — public/assets/ files for referenced assets
     ...(assetManifest.valid ? generateAssetFiles(assetManifest) : []),

@@ -22,6 +22,8 @@ import {
   movePageToIndex,
   renamePageInList,
   resolveUniqueSlug,
+  sanitizePageMeta,
+  type PageMetaInput,
   type PageStructureError,
 } from "./page-structure";
 import { isSingletonSectionType, type SectionType } from "../section-library/types";
@@ -119,6 +121,7 @@ export interface EditorState {
   renamePage: (pageId: string, title: string) => EditorMutationResult;
   deletePage: (pageId: string) => EditorMutationResult;
   movePage: (pageId: string, targetIndex: number) => EditorMutationResult;
+  updatePageMeta: (pageId: string, meta: PageMetaInput) => EditorMutationResult;
 
   // Viewport & zoom
   setViewport: (viewport: Viewport) => void;
@@ -429,6 +432,36 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     set(
       withHistory(state, (project) => {
         project.pages = result.value.pages;
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
+    return { ok: true, changed: true };
+  },
+
+  updatePageMeta: (pageId, meta) => {
+    const state = get();
+    const page = state.project.pages.find((p) => p.id === pageId);
+    if (!page) {
+      return {
+        ok: false,
+        error: { code: "PAGE_NOT_FOUND", message: `Page "${pageId}" does not exist.` },
+      };
+    }
+
+    const sanitized = sanitizePageMeta(meta);
+    const current = page.meta ?? {};
+    if (
+      current.title === sanitized.title &&
+      current.description === sanitized.description
+    ) {
+      return { ok: true, changed: false };
+    }
+
+    set(
+      withHistory(state, (project) => {
+        const target = project.pages.find((p) => p.id === pageId);
+        if (!target) return;
+        target.meta = sanitized;
         project.updatedAt = new Date().toISOString();
       }),
     );

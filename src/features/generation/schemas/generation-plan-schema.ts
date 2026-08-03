@@ -115,11 +115,17 @@ const BaseSectionSchema = z.object({
   styles: z.record(z.string(), z.unknown()),
 });
 
+const PageMetaSchema = z.object({
+  title: z.string().max(200).optional(),
+  description: z.string().max(500).optional(),
+});
+
 const PageSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
   slug: z.string().min(1),
   sections: z.array(BaseSectionSchema).min(1),
+  meta: PageMetaSchema.optional(),
 });
 
 export const ProjectSchema = z.object({

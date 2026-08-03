@@ -634,7 +634,8 @@ const KNOWN_THEME_SUB = new Map<string, Set<string>>([
   ["radius", new Set(["sm", "md", "lg", "xl", "full"])],
   ["shadows", new Set(["sm", "md", "lg", "xl"])],
 ]);
-const KNOWN_PAGE_KEYS = new Set(["id", "title", "slug", "sections"]);
+const KNOWN_PAGE_KEYS = new Set(["id", "title", "slug", "sections", "meta"]);
+const KNOWN_PAGE_META_KEYS = new Set(["title", "description"]);
 const KNOWN_SECTION_KEYS = new Set(["id", "type", "order", "visible", "props", "styles"]);
 const KNOWN_ASSET_KEYS = new Set([
   "id", "name", "type", "mimeType", "extension", "size", "width", "height",
@@ -700,6 +701,14 @@ function collectUnknownFields(root: Record<string, unknown>): string[] {
         if (page === null || typeof page !== "object" || Array.isArray(page)) return;
         const pg = page as Record<string, unknown>;
         checkKeys(pg, KNOWN_PAGE_KEYS, `$.project.pages[${i}]`);
+        const meta = pg.meta;
+        if (meta !== null && typeof meta === "object" && !Array.isArray(meta)) {
+          checkKeys(
+            meta as Record<string, unknown>,
+            KNOWN_PAGE_META_KEYS,
+            `$.project.pages[${i}].meta`,
+          );
+        }
         const sections = pg.sections;
         if (Array.isArray(sections)) {
           sections.forEach((section, j) => {

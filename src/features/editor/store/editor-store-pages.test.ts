@@ -374,3 +374,65 @@ describe("selectPage", () => {
     expect(state.selectedSectionId).toBe("hero-1");
   });
 });
+
+// ---------------------------------------------------------------------------
+// updatePageMeta
+// ---------------------------------------------------------------------------
+
+describe("updatePageMeta", () => {
+  it("stores sanitized metadata on the page", () => {
+    const result = useEditorStore
+      .getState()
+      .updatePageMeta("page-1", { title: "  Home SEO  ", description: "Desc" });
+    expect(result.ok).toBe(true);
+    const page = useEditorStore.getState().project.pages[0];
+    expect(page.meta).toEqual({ title: "Home SEO", description: "Desc" });
+  });
+
+  it("creates one history entry; undo restores the previous meta", () => {
+    useEditorStore
+      .getState()
+      .updatePageMeta("page-1", { title: "New Title" });
+    expect(useEditorStore.getState().history.past).toHaveLength(1);
+
+    useEditorStore.getState().undo();
+    expect(useEditorStore.getState().project.pages[0].meta).toBeUndefined();
+
+    useEditorStore.getState().redo();
+    expect(useEditorStore.getState().project.pages[0].meta).toEqual({
+      title: "New Title",
+    });
+  });
+
+  it("clears metadata when fields are emptied", () => {
+    useEditorStore
+      .getState()
+      .updatePageMeta("page-1", { title: "Title", description: "Desc" });
+    useEditorStore
+      .getState()
+      .updatePageMeta("page-1", { title: "", description: "" });
+    const page = useEditorStore.getState().project.pages[0];
+    expect(page.meta).toEqual({});
+  });
+
+  it("is a no-op when nothing changed", () => {
+    useEditorStore
+      .getState()
+      .updatePageMeta("page-1", { title: "X" });
+    const before = useEditorStore.getState().history.past.length;
+    const result = useEditorStore
+      .getState()
+      .updatePageMeta("page-1", { title: "X" });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.changed).toBe(false);
+    expect(useEditorStore.getState().history.past.length).toBe(before);
+  });
+
+  it("fails with PAGE_NOT_FOUND for an unknown page", () => {
+    const result = useEditorStore
+      .getState()
+      .updatePageMeta("missing", { title: "X" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("PAGE_NOT_FOUND");
+  });
+});

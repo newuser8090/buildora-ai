@@ -22,11 +22,15 @@ export function escapeJsxText(value: string): string {
  * e.g. inside `{` `}` brackets as `"value"`.
  */
 export function escapeJsxStringLiteral(value: string): string {
-  // Backslash, backtick, dollar-brace, and quotes that could break the literal
+  // Backslash, backtick, dollar-brace, quotes, and line terminators that
+  // could break the literal (raw newlines are invalid inside a JS string)
   return value
     .replace(/\\/g, "\\\\")
     .replace(/`/g, "\\`")
     .replace(/\${/g, "\\${")
+    .replace(/\r\n/g, "\\n")
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\n")
     .replace(/"/g, '\\"');
 }
 

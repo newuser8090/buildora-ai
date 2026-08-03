@@ -440,4 +440,42 @@ describe("Deserialize — backward compatibility", () => {
       expect(result.project.name).toBe("🚀 プロジェクト");
     }
   });
+
+  it("derives non-root slugs for legacy non-home pages missing a slug", () => {
+    const project = makeProject() as unknown as Record<string, unknown>;
+    (project.pages as Array<Record<string, unknown>>).push({
+      id: "p2",
+      title: "About",
+      sections: [
+        { id: "s2", type: "hero", order: 1, visible: true, props: {}, styles: {} },
+      ],
+    });
+    const json = JSON.stringify(project);
+    const result = deserializeProject(json);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // First page keeps the root slug
+      expect(result.project.pages[0].slug).toBe("/");
+      // Non-first page gets a slug derived from its title, never "/"
+      expect(result.project.pages[1].slug).toBe("/about");
+    }
+  });
+
+  it("never defaults a non-home legacy page to the root slug", () => {
+    const project = makeProject() as unknown as Record<string, unknown>;
+    (project.pages as Array<Record<string, unknown>>).push({
+      id: "p2",
+      title: "Home",
+      sections: [
+        { id: "s2", type: "hero", order: 1, visible: true, props: {}, styles: {} },
+      ],
+    });
+    const json = JSON.stringify(project);
+    const result = deserializeProject(json);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.project.pages[1].slug).toBe("/home");
+      expect(result.project.pages[1].slug).not.toBe("/");
+    }
+  });
 });

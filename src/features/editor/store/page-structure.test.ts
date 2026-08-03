@@ -14,6 +14,7 @@ import {
   deletePageFromList,
   movePageToIndex,
   createPageId,
+  sanitizePageMeta,
 } from "./page-structure";
 
 // ---------------------------------------------------------------------------
@@ -97,6 +98,52 @@ describe("resolveUniqueSlug", () => {
       makePage({ id: "page-2", title: "About", slug: "/about" }),
     ];
     expect(resolveUniqueSlug(pages, "About", "page-2")).toBe("/about");
+  });
+
+  it("reserves the root slug for the first page only", () => {
+    // Non-first page titled "Home" never owns "/" (homepage policy).
+    const pages = [makePage(), makePage({ id: "page-2", title: "About", slug: "/about" })];
+    expect(resolveUniqueSlug(pages, "Home")).toBe("/home");
+    // Renaming the first page can keep the root when the title is Home.
+    expect(resolveUniqueSlug(pages, "Home", "page-1")).toBe("/");
+    // Renaming a non-first page to "Home" must not take the root.
+    expect(resolveUniqueSlug(pages, "Home", "page-2")).toBe("/home");
+  });
+
+  it("lets the first page of an empty project own the root", () => {
+    expect(resolveUniqueSlug([], "Home")).toBe("/");
+  });
+
+  it("auto-avoids reserved segments", () => {
+    // A page titled "API" would derive "/api" — a reserved Next.js path.
+    const pages = [makePage()];
+    expect(resolveUniqueSlug(pages, "API")).toBe("/api-2");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sanitizePageMeta
+// ---------------------------------------------------------------------------
+
+describe("sanitizePageMeta", () => {
+  it("trims and stores title + description", () => {
+    const meta = sanitizePageMeta({ title: "  About Us  ", description: "  A story  " });
+    expect(meta).toEqual({ title: "About Us", description: "A story" });
+  });
+
+  it("drops empty values", () => {
+    expect(sanitizePageMeta({ title: "  ", description: "" })).toEqual({});
+    expect(sanitizePageMeta(undefined)).toEqual({});
+    expect(sanitizePageMeta({ title: 42 })).toEqual({});
+  });
+
+  it("enforces length caps", () => {
+    const meta = sanitizePageMeta({
+      title: "x".repeat(300),
+      description: "y".repeat(900),
+    });
+    expect(meta.title).toHaveLength(200);
+    expect(meta.description).toHaveLength(500);
   });
 });
 

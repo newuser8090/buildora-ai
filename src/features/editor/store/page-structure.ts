@@ -6,8 +6,9 @@
 // editor store wraps these in a single history entry per logical action.
 // ---------------------------------------------------------------------------
 
-import type { Page } from "@/types/project";
+import type { Page, PageMeta } from "@/types/project";
 import type { BaseSection } from "@/types/section";
+import { isReservedSlugSegment } from "@/features/routing/routes";
 
 // ---------------------------------------------------------------------------
 // Structured errors
@@ -63,26 +64,45 @@ export function slugifyTitle(title: string): string {
 
 /**
  * Resolve a unique slug for a page with the given title, avoiding conflicts
- * with every other page's slug. The root "/" is reserved — when it is already
- * taken the fallback is "/home", "/home-2", … (mirrors the common builder
- * convention where the home page owns the root path).
+ * with every other page's slug.
+ *
+ * Root policy (mirrors the export homepage policy): only the FIRST page may
+ * own the root slug "/". For any other page a "Home" title falls back to
+ * "/home", "/home-2", … so editor state always exports cleanly.
+ *
+ * Reserved segments (api, _next, "_"-prefixed, brackets) are auto-avoided by
+ * appending a numeric suffix, keeping derived slugs export-valid.
  */
 export function resolveUniqueSlug(
   pages: Page[],
   title: string,
   excludePageId?: string,
 ): string {
+  const indexOfPage = excludePageId
+    ? pages.findIndex((p) => p.id === excludePageId)
+    : -1;
+  const isFirstPage = pages.length === 0 || indexOfPage === 0;
   const taken = new Set(
     pages.filter((p) => p.id !== excludePageId).map((p) => p.slug),
   );
   const base = slugifyTitle(title);
-  if (!taken.has(base)) return base;
+
+  // The root slug is only available to the first (home) page.
+  const canUseRoot = isFirstPage && base === "/" && !taken.has("/");
+  if (canUseRoot) return "/";
 
   if (base === "/") {
     let n = 1;
     while (taken.has(n === 1 ? "/home" : `/home-${n}`)) n += 1;
     return n === 1 ? "/home" : `/home-${n}`;
   }
+
+  // Avoid reserved segments (e.g. a page titled "API").
+  const baseReserved = base
+    .slice(1)
+    .split("/")
+    .some((segment) => isReservedSlugSegment(segment));
+  if (!baseReserved && !taken.has(base)) return base;
 
   let n = 2;
   while (taken.has(`${base}-${n}`)) n += 1;
@@ -111,6 +131,34 @@ export function validatePageTitle(title: unknown): PageTitleValidation {
 // ---------------------------------------------------------------------------
 // Page construction
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Page metadata
+// ---------------------------------------------------------------------------
+
+export interface PageMetaInput {
+  title?: unknown;
+  description?: unknown;
+}
+
+/**
+ * Sanitize page metadata for storage: trim, enforce length caps, and drop
+ * empty values (empty strings become undefined so stale keys are removed).
+ */
+export function sanitizePageMeta(input: PageMetaInput | undefined): PageMeta {
+  const result: PageMeta = {};
+  if (input && typeof input.title === "string" && input.title.trim().length > 0) {
+    result.title = input.title.trim().slice(0, 200);
+  }
+  if (
+    input &&
+    typeof input.description === "string" &&
+    input.description.trim().length > 0
+  ) {
+    result.description = input.description.trim().slice(0, 500);
+  }
+  return result;
+}
 
 export interface BuildPageInput {
   pageId: string;
