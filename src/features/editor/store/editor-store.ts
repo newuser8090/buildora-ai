@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Project, Viewport } from "@/types/project";
+import type { Page, Project, Viewport } from "@/types/project";
 import type { BaseSection } from "@/types/section";
 import type { Asset } from "@/features/assets/types";
 import type { PersistenceError } from "@/features/persistence/types";
@@ -14,6 +14,16 @@ import {
   type SectionInsertPosition,
   type StructureError,
 } from "./section-structure";
+import {
+  addPageToList,
+  buildPage,
+  createPageId,
+  deletePageFromList,
+  movePageToIndex,
+  renamePageInList,
+  resolveUniqueSlug,
+  type PageStructureError,
+} from "./page-structure";
 import { isSingletonSectionType, type SectionType } from "../section-library/types";
 import { createSectionId } from "../section-library/services/section-factory";
 
@@ -30,6 +40,8 @@ export type EditorMutationErrorCode =
   | "INVALID_INSERT_POSITION"
   | "CANNOT_MOVE_OUT_OF_BOUNDS"
   | "CANNOT_DELETE_LAST_SECTION"
+  | "CANNOT_DELETE_LAST_PAGE"
+  | "INVALID_PAGE_TITLE"
   | "NO_OP";
 
 export interface EditorMutationError {
@@ -101,6 +113,12 @@ export interface EditorState {
   selectSection: (id: string | null) => void;
   clearSelection: () => void;
   selectPage: (id: string | null) => void;
+
+  // Page lifecycle
+  addPage: (options?: { title?: string }) => EditorMutationResult;
+  renamePage: (pageId: string, title: string) => EditorMutationResult;
+  deletePage: (pageId: string) => EditorMutationResult;
+  movePage: (pageId: string, targetIndex: number) => EditorMutationResult;
 
   // Viewport & zoom
   setViewport: (viewport: Viewport) => void;
@@ -202,6 +220,20 @@ function withHistory(
 /** Map a structure-layer error into an EditorMutationResult. */
 function mapStructureError(error: StructureError): EditorMutationResult {
   return { ok: false, error: { code: error.code, message: error.message } };
+}
+
+/** Map a page-structure-layer error into an EditorMutationResult. */
+function mapPageStructureError(error: PageStructureError): EditorMutationResult {
+  return { ok: false, error: { code: error.code, message: error.message } };
+}
+
+/** Pick a unique default page title ("Untitled Page", "Untitled Page 2", …). */
+function uniqueDefaultTitle(pages: Page[], base: string): string {
+  const titles = new Set(pages.map((p) => p.title.toLowerCase()));
+  if (!titles.has(base.toLowerCase())) return base;
+  let n = 2;
+  while (titles.has(`${base} ${n}`.toLowerCase())) n += 1;
+  return `${base} ${n}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +348,92 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
 
   selectSection: (id) => set({ selectedSectionId: id }),
   clearSelection: () => set({ selectedSectionId: null }),
-  selectPage: (id) => set({ selectedPageId: id }),
+  // Switching pages clears the section selection — a section from another
+  // page must never stay selected. No-op when the page is already active.
+  selectPage: (id) =>
+    set((state) => {
+      if (state.selectedPageId === id) return {};
+      return { selectedPageId: id, selectedSectionId: null };
+    }),
+
+  // ---- Page lifecycle ----
+
+  addPage: (options) => {
+    const state = get();
+    const requested = options?.title?.trim();
+    const title = requested
+      ? requested
+      : uniqueDefaultTitle(state.project.pages, "Untitled Page");
+
+    const page = buildPage({
+      pageId: createPageId(),
+      sectionId: createSectionId("hero"),
+      title,
+      slug: resolveUniqueSlug(state.project.pages, title),
+    });
+
+    set(
+      withHistory(state, (project) => {
+        project.pages = addPageToList(project.pages, page);
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
+
+    // Select the new page and clear any section selection.
+    set({ selectedPageId: page.id, selectedSectionId: null });
+    return { ok: true, changed: true };
+  },
+
+  renamePage: (pageId, title) => {
+    const state = get();
+    const result = renamePageInList({
+      pages: state.project.pages,
+      pageId,
+      title,
+    });
+    if (!result.ok) return mapPageStructureError(result.error);
+    if (!result.value.changed) return { ok: true, changed: false };
+
+    set(
+      withHistory(state, (project) => {
+        project.pages = result.value.pages;
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
+    return { ok: true, changed: true };
+  },
+
+  deletePage: (pageId) => {
+    const state = get();
+    const result = deletePageFromList(state.project.pages, pageId);
+    if (!result.ok) return mapPageStructureError(result.error);
+
+    set(
+      withHistory(state, (project) => {
+        project.pages = result.value.pages;
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
+
+    // Selection moves to the nearest next/previous page; sections are cleared.
+    set({ selectedPageId: result.value.nextSelection, selectedSectionId: null });
+    return { ok: true, changed: true };
+  },
+
+  movePage: (pageId, targetIndex) => {
+    const state = get();
+    const result = movePageToIndex(state.project.pages, pageId, targetIndex);
+    if (!result.ok) return mapPageStructureError(result.error);
+    if (!result.value.changed) return { ok: true, changed: false };
+
+    set(
+      withHistory(state, (project) => {
+        project.pages = result.value.pages;
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
+    return { ok: true, changed: true };
+  },
 
   setViewport: (viewport) => set({ viewport }),
   setZoom: (zoom) => set({ zoom }),

@@ -11,6 +11,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { TopNav } from "@/components/editor/TopNav";
+import { PageTabs } from "@/components/editor/PageTabs";
 import { LeftSidebar } from "@/components/editor/LeftSidebar";
 import { Canvas } from "@/components/editor/Canvas";
 import { RightSidebar } from "@/components/editor/RightSidebar";
@@ -261,6 +262,7 @@ function EditorShell() {
   return (
     <>
       <TopNav />
+      <PageTabs />
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <LeftSidebar />
         <Canvas />
