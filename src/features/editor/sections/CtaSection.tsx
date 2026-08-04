@@ -6,6 +6,7 @@ import {
   EditableHeading,
   EditableText,
 } from "@/features/inline-editing/components/EditableText";
+import { resolveSectionPadding } from "@/features/editor/utils/section-styles";
 import type { BaseSection } from "@/types/section";
 import type { CtaSectionProps } from "@/types/section";
 
@@ -23,7 +24,7 @@ export function CtaSection({ section }: { section: BaseSection }) {
 
   // Background style — use resolved asset or fall back to theme
   const sectionStyle: Record<string, unknown> = {
-    padding: "5rem 0",
+    padding: resolveSectionPadding(section, "5rem 0"),
     textAlign: "center",
     background: "var(--primary, #7c5cfc)",
     position: "relative",

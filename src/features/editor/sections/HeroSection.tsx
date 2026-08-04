@@ -7,6 +7,7 @@ import {
   EditableText,
   EditableHeading,
 } from "@/features/inline-editing/components/EditableText";
+import { resolveSectionPadding } from "@/features/editor/utils/section-styles";
 import type { BaseSection } from "@/types/section";
 import type { HeroSectionProps } from "@/types/section";
 
@@ -33,7 +34,7 @@ export function HeroSection({ section }: { section: BaseSection }) {
 
   // Background style — use resolved asset or fall back to theme
   const sectionStyle: Record<string, unknown> = {
-    padding: "6rem 0",
+    padding: resolveSectionPadding(section, "6rem 0"),
     textAlign: "center",
   };
   if (bgImg.src) {

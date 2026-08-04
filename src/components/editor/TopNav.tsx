@@ -22,6 +22,8 @@ import { downloadProjectFile } from "@/features/projects/utils/download-project-
 import { exportProject as exportSiteZip } from "@/features/export/pipeline/export-pipeline";
 import { mapProjectTransferErrorToMessage } from "@/features/projects/types/project-transfer";
 import { cn } from "@/utils/cn";
+import { ExperienceModeSwitcher } from "@/features/guided-builder/components/ExperienceModeSwitcher";
+import { EXPORT_SITE_EVENT } from "@/features/guided-builder/constants";
 
 const iconButton =
   "flex h-8 w-8 items-center justify-center rounded-lg text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95";
@@ -140,6 +142,15 @@ export function TopNav() {
     }
   }, [project]);
 
+  // Phase N: the command palette / guided coach can request a site export.
+  useEffect(() => {
+    const onExportRequested = () => {
+      void handleExportSite();
+    };
+    window.addEventListener(EXPORT_SITE_EVENT, onExportRequested);
+    return () => window.removeEventListener(EXPORT_SITE_EVENT, onExportRequested);
+  }, [handleExportSite]);
+
   // ---- Export current project as .buildora.json ----
   const handleExport = useCallback(async () => {
     // Export the current in-memory state (even if dirty).
@@ -241,6 +252,9 @@ export function TopNav() {
 
       {/* ---- Actions ---- */}
       <div className="flex items-center gap-1">
+        <div className="mr-1.5">
+          <ExperienceModeSwitcher />
+        </div>
         <button
           data-testid="undo-button"
           className={cn(canUndo ? iconButton : iconButtonDisabled)}

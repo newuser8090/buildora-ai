@@ -18,6 +18,9 @@ import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
 import { PageStructurePanel } from "@/features/editor/components/PageStructurePanel";
 import { inspectorRegistry } from "@/features/editor/registry/inspector-registry";
 import { sectionRegistry } from "@/features/editor/registry/section-registry";
+import { useGuidedBuilderStore } from "@/features/guided-builder/store/guided-builder-store";
+import { GuidedPanel } from "@/features/guided-builder/components/GuidedPanel";
+import { GuidedInspector } from "@/features/guided-builder/components/GuidedInspector";
 import type { BaseSection } from "@/types/section";
 
 // ---------------------------------------------------------------------------
@@ -124,7 +127,7 @@ function getSectionLabel(type: string): string {
 // Inspector panel
 // ---------------------------------------------------------------------------
 
-function InspectorPanel() {
+function InspectorPanel({ guided }: { guided: boolean }) {
   const project = useEditorStore((s) => s.project);
   const selectedSectionId = useEditorStore((s) => s.selectedSectionId);
   const updateSectionProps = useEditorStore((s) => s.updateSectionProps);
@@ -168,6 +171,7 @@ function InspectorPanel() {
       <div className="flex-1 overflow-y-auto" data-testid="inspector-panel">
         <InspectorSlot
           section={selectedSection}
+          guided={guided}
           onUpdateProps={(props) =>
             updateSectionProps(selectedSection.id, props)
           }
@@ -188,15 +192,29 @@ function InspectorPanel() {
 
 function InspectorSlot({
   section,
+  guided,
   onUpdateProps,
   onUpdateStyles,
 }: {
   section: BaseSection;
+  guided: boolean;
   onUpdateProps: (props: Record<string, unknown>) => void;
   onUpdateStyles: (styles: Record<string, unknown>) => void;
 }) {
   const InspectorComponent = inspectorRegistry.get(section.type);
   const isRegistered = sectionRegistry.has(section.type);
+
+  // Phase N: guided mode uses the simplified inspector (advanced controls
+  // stay reachable through "More options").
+  if (guided) {
+    return (
+      <GuidedInspector
+        section={section}
+        onUpdateProps={onUpdateProps}
+        onUpdateStyles={onUpdateStyles}
+      />
+    );
+  }
 
   if (!InspectorComponent || !isRegistered) {
     return (
@@ -289,6 +307,9 @@ function TabList() {
 export function RightSidebar() {
   const selectedSectionId = useEditorStore((s) => s.selectedSectionId);
   const tab = useEditorUiStore((s) => s.rightSidebarTab);
+  const experienceMode = useGuidedBuilderStore((s) => s.experienceMode);
+  const guidedHydrated = useGuidedBuilderStore((s) => s.hydrated);
+  const guided = guidedHydrated && experienceMode === "guided";
 
   return (
     <aside
@@ -305,8 +326,10 @@ export function RightSidebar() {
           id="right-panel-structure"
           aria-labelledby="right-tab-structure"
           data-testid="structure-panel"
-          className="min-h-0 flex-1"
+          className="min-h-0 flex-1 overflow-y-auto"
         >
+          {/* Phase N: guided journey / readiness / coach above the structure */}
+          {guided && <GuidedPanel />}
           <PageStructurePanel />
         </div>
       ) : (
@@ -322,14 +345,18 @@ export function RightSidebar() {
             <h2 className="text-sm font-semibold text-text-primary">Properties</h2>
             <p className="mt-0.5 text-xs text-text-dim">
               {selectedSectionId
-                ? "Editing selected section"
-                : "Customize your website appearance and content"}
+                ? guided
+                  ? "Edit the selected part"
+                  : "Editing selected section"
+                : guided
+                  ? "Choose something on your page to edit it"
+                  : "Customize your website appearance and content"}
             </p>
           </div>
 
           {/* ---- Content ---- */}
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <InspectorPanel />
+            <InspectorPanel guided={guided} />
           </div>
         </div>
       )}

@@ -7,6 +7,7 @@ import {
   EditableText,
   EditableLinkText,
 } from "@/features/inline-editing/components/EditableText";
+import { resolveSectionPadding } from "@/features/editor/utils/section-styles";
 import type { BaseSection } from "@/types/section";
 import type { FooterSectionProps } from "@/types/section";
 
@@ -25,7 +26,7 @@ export function FooterSection({ section }: { section: BaseSection }) {
   return (
     <footer
       style={{
-        padding: "2rem 0",
+        padding: resolveSectionPadding(section, "2rem 0"),
         borderTop: "1px solid var(--border, #e5e5e5)",
       }}
     >
