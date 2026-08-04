@@ -12,6 +12,7 @@ import {
   Maximize,
   Layers,
   SlidersHorizontal,
+  Boxes,
 } from "lucide-react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
@@ -21,6 +22,7 @@ import { sectionRegistry } from "@/features/editor/registry/section-registry";
 import { useGuidedBuilderStore } from "@/features/guided-builder/store/guided-builder-store";
 import { GuidedPanel } from "@/features/guided-builder/components/GuidedPanel";
 import { GuidedInspector } from "@/features/guided-builder/components/GuidedInspector";
+import { BlockEditorPanel } from "@/features/blocks/components/BlockEditorPanel";
 import type { BaseSection } from "@/types/section";
 
 // ---------------------------------------------------------------------------
@@ -242,13 +244,14 @@ function InspectorSlot({
 // ---------------------------------------------------------------------------
 
 interface TabDefinition {
-  id: "structure" | "design";
+  id: "structure" | "design" | "blocks";
   label: string;
   icon: typeof Layers;
 }
 
 const TABS: TabDefinition[] = [
   { id: "structure", label: "Structure", icon: Layers },
+  { id: "blocks", label: "Blocks", icon: Boxes },
   { id: "design", label: "Design", icon: SlidersHorizontal },
 ];
 
@@ -331,6 +334,17 @@ export function RightSidebar() {
           {/* Phase N: guided journey / readiness / coach above the structure */}
           {guided && <GuidedPanel />}
           <PageStructurePanel />
+        </div>
+      ) : tab === "blocks" ? (
+        <div
+          role="tabpanel"
+          id="right-panel-blocks"
+          aria-labelledby="right-tab-blocks"
+          data-testid="blocks-panel"
+          className="flex min-h-0 flex-1 flex-col"
+        >
+          {/* Phase O: LEGO builder engine — build tree + block inspector */}
+          <BlockEditorPanel />
         </div>
       ) : (
         <div

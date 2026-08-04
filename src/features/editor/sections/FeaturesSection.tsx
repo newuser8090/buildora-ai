@@ -97,7 +97,10 @@ export function FeaturesSection({ section }: { section: BaseSection }) {
 
               return (
                 <div
-                  key={featureTitle}
+                  // Positional key: duplicated feature titles (Phase O group
+                  // duplicate) must not collide — the inline-editing field
+                  // model also addresses items by index.
+                  key={idx}
                   style={{
                     padding: "2rem",
                     borderRadius: "0.75rem",

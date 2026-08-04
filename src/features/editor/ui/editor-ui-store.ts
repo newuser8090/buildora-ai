@@ -8,7 +8,7 @@
 import { create } from "zustand";
 import type { SectionInsertPosition } from "@/features/editor/store/section-structure";
 
-export type RightSidebarTab = "structure" | "design";
+export type RightSidebarTab = "structure" | "design" | "blocks";
 
 export interface AddSectionDialogState {
   open: boolean;

@@ -37,6 +37,8 @@ import { simulatePlan } from "@/features/ai-editing/services/plan-simulator";
 import { updateEditableField } from "@/features/inline-editing/services/field-update";
 import type { EditableFieldDescriptor } from "@/features/inline-editing/types";
 import type { InlineFieldUpdateResult } from "@/features/inline-editing/types";
+import { blockTreeToSection } from "@/features/blocks/adapters/section-block-adapter";
+import type { BlockTree } from "@/features/blocks/types";
 
 // ---------------------------------------------------------------------------
 // Mutation result types
@@ -53,7 +55,8 @@ export type EditorMutationErrorCode =
   | "CANNOT_DELETE_LAST_SECTION"
   | "CANNOT_DELETE_LAST_PAGE"
   | "INVALID_PAGE_TITLE"
-  | "NO_OP";
+  | "NO_OP"
+  | "INVALID_TREE";
 
 export interface EditorMutationError {
   code: EditorMutationErrorCode;
@@ -207,6 +210,14 @@ export interface EditorState {
     descriptor: EditableFieldDescriptor,
     nextValue: string,
   ) => InlineFieldUpdateResult;
+
+  // Block tree commit (Phase O) — fold a block tree back into a section
+  // through the adapter (validated) as ONE atomic history entry.
+  commitBlockTree: (
+    pageId: string,
+    sectionId: string,
+    tree: BlockTree,
+  ) => EditorMutationResult;
 }
 
 // ---------------------------------------------------------------------------
@@ -833,6 +844,61 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
         const next = JSON.parse(JSON.stringify(result.project)) as Project;
         Object.assign(project, next);
         project.updatedAt = new Date().toISOString();
+      }),
+    );
+
+    return { ok: true, changed: true };
+  },
+
+  // ---- Block tree commit (Phase O) ----
+  //
+  // Folds a block tree back into the target section through the adapter,
+  // which validates the safe field bindings AND the resulting section schema
+  // before anything is committed. A no-op (nothing changed) skips history.
+  // One project reference change → one revision + one autosave sequence
+  // (handled by the controller's normal store subscription).
+
+  commitBlockTree: (pageId, sectionId, tree) => {
+    const state = get();
+    const page = state.project.pages.find((p) => p.id === pageId);
+    if (!page) {
+      return {
+        ok: false,
+        error: { code: "PAGE_NOT_FOUND", message: `Page "${pageId}" does not exist.` },
+      };
+    }
+    const section = page.sections.find((s) => s.id === sectionId);
+    if (!section) {
+      return {
+        ok: false,
+        error: { code: "SECTION_NOT_FOUND", message: `Section "${sectionId}" does not exist.` },
+      };
+    }
+
+    const folded = blockTreeToSection(tree, section);
+    if (!folded.ok) {
+      return {
+        ok: false,
+        error: { code: "INVALID_TREE", message: folded.error.message },
+      };
+    }
+    if (folded.value.appliedFields === 0) return { ok: true, changed: false };
+
+    // Commit the folded props as ONE history entry. Selection is preserved
+    // (selection is separate store state, untouched here).
+    set(
+      withHistory(state, (project) => {
+        for (const p of project.pages) {
+          const idx = p.sections.findIndex((s) => s.id === sectionId);
+          if (idx !== -1) {
+            p.sections[idx] = {
+              ...p.sections[idx],
+              props: folded.value.section.props,
+            };
+            project.updatedAt = new Date().toISOString();
+            return;
+          }
+        }
       }),
     );
 
