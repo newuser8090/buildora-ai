@@ -3,6 +3,10 @@
 import { useSectionAssets } from "@/features/editor/hooks/useSectionAssets";
 import { resolveAsset } from "@/features/assets/services/asset-resolver";
 import { ResolvedAssetImage } from "@/features/assets/components/ResolvedAssetImage";
+import {
+  EditableText,
+  EditableLinkText,
+} from "@/features/inline-editing/components/EditableText";
 import type { BaseSection } from "@/types/section";
 import type { HeaderSectionProps } from "@/types/section";
 
@@ -48,22 +52,28 @@ export function HeaderSection({ section }: { section: BaseSection }) {
             fallback={<span style={{ fontWeight: 700, fontSize: "1.25rem", color: "var(--foreground, #0a0a0a)" }}>{logoText}</span>}
           />
         ) : (
-          <span
+          <EditableText
+            section={section}
+            fieldId="header.logoText"
+            value={logoText}
+            as="span"
             style={{
               fontWeight: 700,
               fontSize: "1.25rem",
               color: "var(--foreground, #0a0a0a)",
             }}
-          >
-            {logoText}
-          </span>
+          />
         )}
 
         {/* Nav links */}
         <nav style={{ display: "flex", gap: "1.5rem", alignItems: "center" }}>
           {navLinks.map((link, idx) => (
-            <span
+            <EditableLinkText
               key={typeof link.text === "string" ? link.text : `nav-${idx}`}
+              section={section}
+              fieldId="header.navLinks.text"
+              index={idx}
+              value={typeof link.text === "string" ? link.text : "Link"}
               style={{
                 fontSize: "0.875rem",
                 color: "var(--muted-foreground, #737373)",
@@ -78,13 +88,15 @@ export function HeaderSection({ section }: { section: BaseSection }) {
                 (e.target as HTMLElement).style.color =
                   "var(--muted-foreground, #737373)";
               }}
-            >
-              {typeof link.text === "string" ? link.text : "Link"}
-            </span>
+            />
           ))}
 
           {ctaText && (
-            <span
+            <EditableText
+              section={section}
+              fieldId="header.ctaText"
+              value={ctaText}
+              as="span"
               style={{
                 fontSize: "0.875rem",
                 fontWeight: 600,
@@ -94,9 +106,7 @@ export function HeaderSection({ section }: { section: BaseSection }) {
                 color: "var(--primary-foreground, #ffffff)",
                 cursor: "default",
               }}
-            >
-              {ctaText}
-            </span>
+            />
           )}
         </nav>
       </div>

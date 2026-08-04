@@ -3,6 +3,10 @@
 import { useSectionAssets } from "@/features/editor/hooks/useSectionAssets";
 import { resolveAsset } from "@/features/assets/services/asset-resolver";
 import { ResolvedAssetImage } from "@/features/assets/components/ResolvedAssetImage";
+import {
+  EditableHeading,
+  EditableText,
+} from "@/features/inline-editing/components/EditableText";
 import type { BaseSection } from "@/types/section";
 import type { FeaturesSectionProps } from "@/types/section";
 
@@ -45,28 +49,32 @@ export function FeaturesSection({ section }: { section: BaseSection }) {
           textAlign: "center",
         }}
       >
-        <h2
+        <EditableHeading
+          section={section}
+          fieldId="features.title"
+          value={title}
+          as="h2"
           style={{
             fontSize: "clamp(1.5rem, 3vw, 2.25rem)",
             fontWeight: 700,
             color: "var(--foreground, #0a0a0a)",
             marginBottom: subtitle ? "0.75rem" : "3rem",
           }}
-        >
-          {title}
-        </h2>
+        />
 
         {subtitle && (
-          <p
+          <EditableText
+            section={section}
+            fieldId="features.subtitle"
+            value={subtitle}
+            as="p"
             style={{
               fontSize: "1.0625rem",
               color: "var(--muted-foreground, #737373)",
               maxWidth: "560px",
               margin: "0 auto 3rem",
             }}
-          >
-            {subtitle}
-          </p>
+          />
         )}
 
         {features.length > 0 && (
@@ -133,26 +141,32 @@ export function FeaturesSection({ section }: { section: BaseSection }) {
                       <span style={{ fontSize: "1.5rem" }}>{resolveIcon(featureIcon)}</span>
                     )}
                   </div>
-                  <h3
+                  <EditableHeading
+                    section={section}
+                    fieldId="features.feature.title"
+                    index={idx}
+                    value={featureTitle}
+                    as="h3"
                     style={{
                       fontSize: "1.0625rem",
                       fontWeight: 600,
                       color: "var(--foreground, #0a0a0a)",
                       marginBottom: "0.5rem",
                     }}
-                  >
-                    {featureTitle}
-                  </h3>
+                  />
                   {featureDescription && (
-                    <p
+                    <EditableText
+                      section={section}
+                      fieldId="features.feature.description"
+                      index={idx}
+                      value={featureDescription}
+                      as="p"
                       style={{
                         fontSize: "0.875rem",
                         lineHeight: 1.6,
                         color: "var(--muted-foreground, #737373)",
                       }}
-                    >
-                      {featureDescription}
-                    </p>
+                    />
                   )}
                 </div>
               );

@@ -19,6 +19,13 @@ import {
   PlanEditRequestSchema,
   type ValidatedPlanEditRequest,
 } from "@/features/ai-editing/schemas/plan-schemas";
+import {
+  InlineEditRequestSchema,
+  type ValidatedInlineEditRequest,
+} from "@/features/inline-editing/schemas/inline-schemas";
+import { orchestrateInlineSuggestion } from "@/features/inline-editing/services/inline-orchestrator";
+import { geminiInlineProvider } from "@/features/inline-editing/providers/gemini-inline-provider";
+import { ruleBasedInlineProvider } from "@/features/inline-editing/providers/rule-based-inline-provider";
 import type { Project } from "@/types/project";
 
 // ---------------------------------------------------------------------------
@@ -28,7 +35,8 @@ import type { Project } from "@/types/project";
 type GenerateRequest =
   | { kind: "create"; prompt: string }
   | { kind: "modify"; prompt: string; target: ValidatedEditTarget }
-  | { kind: "plan-edit"; request: ValidatedPlanEditRequest };
+  | { kind: "plan-edit"; request: ValidatedPlanEditRequest }
+  | { kind: "inline-edit"; request: ValidatedInlineEditRequest };
 
 const MAX_PROMPT_LENGTH = 4000;
 /** Raw request body cap — protects the plan-edit path (projects can be large). */
@@ -54,6 +62,17 @@ function validateRequest(body: unknown): ValidationResult {
     return { kind: "plan-edit", request: planResult.data };
   }
 
+  if (mode === "inline-edit") {
+    const inlineResult = InlineEditRequestSchema.safeParse(body);
+    if (!inlineResult.success) {
+      const issues = inlineResult.error.issues
+        .map((i) => i.path.join(".") + ": " + i.message)
+        .join("; ");
+      return { kind: "invalid", message: `Invalid inline-edit request: ${issues}` };
+    }
+    return { kind: "inline-edit", request: inlineResult.data };
+  }
+
   if (typeof prompt !== "string" || prompt.trim().length === 0) {
     return { kind: "invalid", message: "Prompt is required" };
   }
@@ -63,7 +82,7 @@ function validateRequest(body: unknown): ValidationResult {
   }
 
   if (mode !== undefined && mode !== "create" && mode !== "modify") {
-    return { kind: "invalid", message: 'Mode must be "create", "modify" or "plan-edit"' };
+    return { kind: "invalid", message: 'Mode must be "create", "modify", "plan-edit" or "inline-edit"' };
   }
 
   if (mode === "modify") {
@@ -141,6 +160,11 @@ export async function POST(request: Request) {
     // ---- Plan-edit mode (Phase L): produce a validated, previewable plan ----
     if (validated.kind === "plan-edit") {
       return handlePlanEdit(validated.request, request, startTime);
+    }
+
+    // ---- Inline-edit mode (Phase M): one-field quick suggestion ----
+    if (validated.kind === "inline-edit") {
+      return handleInlineEdit(validated.request, request, startTime);
     }
 
     // ---- Modify mode (Phase K): revise a section's content ----
@@ -342,6 +366,66 @@ async function handlePlanEdit(
     ok: true,
     source: result.source,
     plan: result.plan,
+    warnings: result.warnings,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Inline-edit mode — one-field quick suggestion (Phase M)
+// ---------------------------------------------------------------------------
+
+async function handleInlineEdit(
+  request: ValidatedInlineEditRequest,
+  httpRequest: Request,
+  startTime: number,
+) {
+  const forceLocal =
+    process.env.BUILDORA_FORCE_LOCAL_GENERATION === "true" ||
+    httpRequest.headers.get("x-buildora-force-local") === "true";
+
+  const result = await orchestrateInlineSuggestion(
+    {
+      instruction: request.instruction,
+      projectId: request.projectId,
+      baseRevision: request.baseRevision,
+      pageId: request.pageId,
+      sectionId: request.sectionId,
+      sectionType: request.sectionType,
+      fieldPath: request.fieldPath,
+      fieldKind: request.fieldKind,
+      currentValue: request.currentValue,
+      surroundingContext: request.surroundingContext,
+      variant: request.variant,
+    },
+    {
+      gemini: geminiInlineProvider,
+      ruleBased: ruleBasedInlineProvider,
+      forceLocal,
+      log: (level, msg) => logger[level]("API", msg),
+    },
+  );
+
+  if (!result.ok) {
+    logger.info(
+      "API",
+      `Inline-edit declined (${Date.now() - startTime}ms) — ${result.error.code}: ${result.error.message}`,
+    );
+    return NextResponse.json({
+      ok: false,
+      error: result.error,
+      warnings: result.warnings ?? [],
+    });
+  }
+
+  logger.info(
+    "API",
+    `Inline-edit success (${Date.now() - startTime}ms) via ${result.source}`,
+  );
+
+  return NextResponse.json({
+    ok: true,
+    source: result.source,
+    suggestion: result.suggestion,
     warnings: result.warnings,
   });
 }

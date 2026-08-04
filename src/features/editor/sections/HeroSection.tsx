@@ -3,6 +3,10 @@
 import { useSectionAssets } from "@/features/editor/hooks/useSectionAssets";
 import { resolveAsset } from "@/features/assets/services/asset-resolver";
 import { ResolvedAssetImage } from "@/features/assets/components/ResolvedAssetImage";
+import {
+  EditableText,
+  EditableHeading,
+} from "@/features/inline-editing/components/EditableText";
 import type { BaseSection } from "@/types/section";
 import type { HeroSectionProps } from "@/types/section";
 
@@ -61,7 +65,11 @@ export function HeroSection({ section }: { section: BaseSection }) {
           </div>
         )}
 
-        <h1
+        <EditableHeading
+          section={section}
+          fieldId="hero.headline"
+          value={headline}
+          as="h1"
           style={{
             fontSize: "clamp(2rem, 5vw, 3.5rem)",
             fontWeight: 700,
@@ -70,12 +78,14 @@ export function HeroSection({ section }: { section: BaseSection }) {
             color: "var(--foreground, #0a0a0a)",
             marginBottom: "1.25rem",
           }}
-        >
-          {headline}
-        </h1>
+        />
 
         {subheadline && (
-          <p
+          <EditableText
+            section={section}
+            fieldId="hero.subheadline"
+            value={subheadline}
+            as="p"
             style={{
               fontSize: "1.125rem",
               lineHeight: 1.6,
@@ -83,13 +93,15 @@ export function HeroSection({ section }: { section: BaseSection }) {
               maxWidth: "560px",
               margin: "0 auto 2rem",
             }}
-          >
-            {subheadline}
-          </p>
+          />
         )}
 
         <div style={{ display: "flex", gap: "0.75rem", justifyContent: "center" }}>
-          <span
+          <EditableText
+            section={section}
+            fieldId="hero.primaryCta.text"
+            value={primaryCtaText}
+            as="span"
             style={{
               display: "inline-block",
               padding: "0.75rem 1.5rem",
@@ -100,12 +112,14 @@ export function HeroSection({ section }: { section: BaseSection }) {
               fontSize: "0.9375rem",
               cursor: "default",
             }}
-          >
-            {primaryCtaText}
-          </span>
+          />
 
           {secondaryCtaText && (
-            <span
+            <EditableText
+              section={section}
+              fieldId="hero.secondaryCta.text"
+              value={secondaryCtaText}
+              as="span"
               style={{
                 display: "inline-block",
                 padding: "0.75rem 1.5rem",
@@ -116,9 +130,7 @@ export function HeroSection({ section }: { section: BaseSection }) {
                 fontSize: "0.9375rem",
                 cursor: "default",
               }}
-            >
-              {secondaryCtaText}
-            </span>
+            />
           )}
         </div>
       </div>

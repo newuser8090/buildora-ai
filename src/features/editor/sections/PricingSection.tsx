@@ -1,5 +1,9 @@
 "use client";
 
+import {
+  EditableHeading,
+  EditableText,
+} from "@/features/inline-editing/components/EditableText";
 import type { BaseSection } from "@/types/section";
 import type { PricingSectionProps } from "@/types/section";
 
@@ -21,28 +25,32 @@ export function PricingSection({ section }: { section: BaseSection }) {
           textAlign: "center",
         }}
       >
-        <h2
+        <EditableHeading
+          section={section}
+          fieldId="pricing.title"
+          value={title}
+          as="h2"
           style={{
             fontSize: "clamp(1.5rem, 3vw, 2.25rem)",
             fontWeight: 700,
             color: "var(--foreground, #0a0a0a)",
             marginBottom: subtitle ? "0.75rem" : "3rem",
           }}
-        >
-          {title}
-        </h2>
+        />
 
         {subtitle && (
-          <p
+          <EditableText
+            section={section}
+            fieldId="pricing.subtitle"
+            value={subtitle}
+            as="p"
             style={{
               fontSize: "1.0625rem",
               color: "var(--muted-foreground, #737373)",
               maxWidth: "560px",
               margin: "0 auto 3rem",
             }}
-          >
-            {subtitle}
-          </p>
+          />
         )}
 
         {plans.length > 0 && (
@@ -96,16 +104,19 @@ export function PricingSection({ section }: { section: BaseSection }) {
                     </span>
                   )}
 
-                  <h3
+                  <EditableHeading
+                    section={section}
+                    fieldId="pricing.plan.name"
+                    index={idx}
+                    value={planName}
+                    as="h3"
                     style={{
                       fontSize: "1.125rem",
                       fontWeight: 600,
                       color: "var(--foreground, #0a0a0a)",
                       marginBottom: "0.5rem",
                     }}
-                  >
-                    {planName}
-                  </h3>
+                  />
 
                   <div
                     style={{
@@ -119,15 +130,18 @@ export function PricingSection({ section }: { section: BaseSection }) {
                   </div>
 
                   {planDescription && (
-                    <p
+                    <EditableText
+                      section={section}
+                      fieldId="pricing.plan.description"
+                      index={idx}
+                      value={planDescription}
+                      as="p"
                       style={{
                         fontSize: "0.875rem",
                         color: "var(--muted-foreground, #737373)",
                         marginBottom: "1.5rem",
                       }}
-                    >
-                      {planDescription}
-                    </p>
+                    />
                   )}
 
                   {planFeatures.length > 0 && (
@@ -144,13 +158,28 @@ export function PricingSection({ section }: { section: BaseSection }) {
                           }}
                         >
                           <span style={{ color: "var(--primary, #7c5cfc)" }}>✓</span>
-                          {typeof f === "string" ? f : ""}
+                          {typeof f === "string" ? (
+                            <EditableText
+                              section={section}
+                              fieldId="pricing.plan.feature"
+                              index={[idx, fi]}
+                              value={f}
+                              as="span"
+                            />
+                          ) : (
+                            ""
+                          )}
                         </li>
                       ))}
                     </ul>
                   )}
 
-                  <span
+                  <EditableText
+                    section={section}
+                    fieldId="pricing.plan.cta"
+                    index={idx}
+                    value={planCta}
+                    as="span"
                     style={{
                       display: "block",
                       textAlign: "center",
@@ -166,9 +195,7 @@ export function PricingSection({ section }: { section: BaseSection }) {
                       fontSize: "0.9375rem",
                       cursor: "default",
                     }}
-                  >
-                    {planCta}
-                  </span>
+                  />
                 </div>
               );
             })}
