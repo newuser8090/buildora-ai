@@ -1,0 +1,517 @@
+// ---------------------------------------------------------------------------
+// Default block definitions — the LEGO primitive palette (Phase O)
+//
+// Every definition returns FRESH props/styles via createProps/createStyles
+// (never shared references). Nesting rules are declarative and deterministic.
+// No React, no DOM.
+// ---------------------------------------------------------------------------
+
+import type { BlockDefinition, BlockType } from "../types";
+
+function def(
+  partial: Omit<BlockDefinition, "createProps" | "createStyles"> & {
+    createProps?: () => Record<string, unknown>;
+    createStyles?: () => Record<string, unknown>;
+  },
+): BlockDefinition {
+  return {
+    createProps: () => ({ ...(partial.createProps?.() ?? {}) }),
+    createStyles: () => ({ ...(partial.createStyles?.() ?? {}) }),
+    keywords: [],
+    beginnerFriendly: false,
+    ...partial,
+  } as BlockDefinition;
+}
+
+// ---------------------------------------------------------------------------
+// Layout blocks
+// ---------------------------------------------------------------------------
+
+const layoutBlocks: BlockDefinition[] = [
+  def({
+    type: "container",
+    category: "layout",
+    iconKey: "box",
+    label: "Container",
+    description: "A building block that holds other blocks.",
+    nesting: { allowsChildren: true, allowedChildTypes: "*" },
+    resizePolicy: "fluid",
+    createProps: () => ({ name: "" }),
+    createStyles: () => ({ padding: "2rem 0", display: "flex", flexDirection: "column", gap: "1rem" }),
+    editableFields: [],
+    keywords: ["container", "section", "wrapper", "box"],
+    beginnerFriendly: true,
+  }),
+  def({
+    type: "row",
+    category: "layout",
+    iconKey: "rows",
+    label: "Row",
+    description: "Blocks laid out side by side.",
+    nesting: {
+      allowsChildren: true,
+      allowedChildTypes: ["container", "card", "pricing-card", "feature-card", "review-card", "image", "button", "badge", "column", "stack"],
+      maxChildren: 6,
+    },
+    resizePolicy: "fluid",
+    createProps: () => ({ name: "" }),
+    createStyles: () => ({ display: "flex", flexDirection: "row", gap: "1rem", alignItems: "center" }),
+    editableFields: [],
+    keywords: ["row", "horizontal", "side by side"],
+    beginnerFriendly: true,
+  }),
+  def({
+    type: "column",
+    category: "layout",
+    iconKey: "columns",
+    label: "Column",
+    description: "A vertical stack of blocks.",
+    nesting: { allowsChildren: true, allowedChildTypes: "*" },
+    resizePolicy: "fluid",
+    createProps: () => ({ name: "" }),
+    createStyles: () => ({ display: "flex", flexDirection: "column", gap: "0.75rem", flex: "1" }),
+    editableFields: [],
+    keywords: ["column", "vertical"],
+    beginnerFriendly: false,
+  }),
+  def({
+    type: "grid",
+    category: "layout",
+    iconKey: "grid",
+    label: "Grid",
+    description: "Blocks arranged in equal columns.",
+    nesting: {
+      allowsChildren: true,
+      allowedChildTypes: ["container", "card", "pricing-card", "feature-card", "review-card", "image", "icon", "badge", "column"],
+      maxChildren: 6,
+    },
+    resizePolicy: "fluid",
+    createProps: () => ({ name: "", columns: 3 }),
+    createStyles: () => ({ display: "grid", gap: "1rem" }),
+    editableFields: [{ id: "columns", fieldPath: ["columns"], kind: "text", label: "Number of columns" }],
+    keywords: ["grid", "columns", "layout"],
+    beginnerFriendly: false,
+  }),
+  def({
+    type: "stack",
+    category: "layout",
+    iconKey: "rows",
+    label: "Stack",
+    description: "A vertical stack of blocks.",
+    nesting: { allowsChildren: true, allowedChildTypes: "*" },
+    resizePolicy: "fluid",
+    createProps: () => ({ name: "" }),
+    createStyles: () => ({ display: "flex", flexDirection: "column", gap: "1rem" }),
+    editableFields: [],
+    keywords: ["stack", "vertical", "list"],
+    beginnerFriendly: false,
+  }),
+  def({
+    type: "divider",
+    category: "layout",
+    iconKey: "minus",
+    label: "Divider",
+    description: "A thin horizontal separator line.",
+    nesting: { allowsChildren: false },
+    resizePolicy: "fixed",
+    createProps: () => ({ name: "" }),
+    createStyles: () => ({ height: "1px", background: "var(--border, #e5e5e5)", margin: "1.5rem 0" }),
+    editableFields: [],
+    keywords: ["divider", "separator", "line"],
+    beginnerFriendly: true,
+  }),
+  def({
+    type: "spacer",
+    category: "layout",
+    iconKey: "expand",
+    label: "Spacer",
+    description: "Empty space between blocks.",
+    nesting: { allowsChildren: false },
+    resizePolicy: "fixed",
+    createProps: () => ({ name: "" }),
+    createStyles: () => ({ height: "2rem" }),
+    editableFields: [],
+    keywords: ["spacer", "space", "gap"],
+    beginnerFriendly: true,
+  }),
+];
+
+// ---------------------------------------------------------------------------
+// Content blocks
+// ---------------------------------------------------------------------------
+
+const contentBlocks: BlockDefinition[] = [
+  def({
+    type: "heading",
+    category: "content",
+    iconKey: "heading",
+    label: "Heading",
+    description: "A title for a section of your page.",
+    nesting: { allowsChildren: false },
+    resizePolicy: "fixed",
+    createProps: () => ({ text: "Your heading", level: 2, align: "left", color: "" }),
+    createStyles: () => ({ margin: "0 0 0.5rem" }),
+    editableFields: [
+      { id: "text", fieldPath: ["text"], kind: "heading", label: "Heading text" },
+      { id: "align", fieldPath: ["align"], kind: "text", label: "Alignment" },
+    ],
+    keywords: ["heading", "title", "headline", "main message"],
+    beginnerFriendly: true,
+  }),
+  def({
+    type: "paragraph",
+    category: "content",
+    iconKey: "text",
+    label: "Paragraph",
+    description: "A block of explanatory text.",
+    nesting: { allowsChildren: false },
+    resizePolicy: "fixed",
+    createProps: () => ({ text: "Add a short paragraph here.", align: "left" }),
+    createStyles: () => ({ margin: "0 0 0.75rem", lineHeight: "1.6" }),
+    editableFields: [
+      { id: "text", fieldPath: ["text"], kind: "textarea", label: "Paragraph text" },
+    ],
+    keywords: ["paragraph", "text", "description", "body"],
+    beginnerFriendly: true,
+  }),
+  def({
+    type: "button",
+    category: "content",
+    iconKey: "mouse-pointer",
+    label: "Button",
+    description: "A clickable action button.",
+    nesting: { allowsChildren: false },
+    resizePolicy: "fixed",
+    createProps: () => ({ text: "Get Started", href: "#", style: "primary" }),
+    createStyles: () => ({
+      padding: "0.75rem 1.5rem",
+      borderRadius: "0.5rem",
+      background: "var(--primary, #7c5cfc)",
+      color: "var(--primary-foreground, #ffffff)",
+      fontWeight: 600,
+    }),
+    editableFields: [
+      { id: "text", fieldPath: ["text"], kind: "button-text", label: "Button text" },
+      { id: "style", fieldPath: ["style"], kind: "text", label: "Button style" },
+    ],
+    keywords: ["button", "action", "cta", "click"],
+    beginnerFriendly: true,
+  }),
+  def({
+    type: "image",
+    category: "content",
+    iconKey: "image",
+    label: "Image",
+    description: "A picture or photo.",
+    nesting: { allowsChildren: false },
+    resizePolicy: "fixed",
+    createProps: () => ({ src: "", alt: "", crop: "original", shape: "rectangle" }),
+    createStyles: () => ({ borderRadius: "0.5rem", maxWidth: "100%" }),
+    editableFields: [
+      { id: "alt", fieldPath: ["alt"], kind: "text", label: "Alt text" },
+    ],
+    keywords: ["image", "picture", "photo", "visual"],
+    beginnerFriendly: true,
+  }),
+  def({
+    type: "video",
+    category: "content",
+    iconKey: "video",
+    label: "Video",
+    description: "An embedded video player.",
+    nesting: { allowsChildren: false },
+    resizePolicy: "fixed",
+    createProps: () => ({ src: "", title: "" }),
+    createStyles: () => ({ borderRadius: "0.5rem", maxWidth: "100%" }),
+    editableFields: [{ id: "title", fieldPath: ["title"], kind: "text", label: "Video title" }],
+    keywords: ["video", "player", "embed"],
+    beginnerFriendly: false,
+  }),
+  def({
+    type: "icon",
+    category: "content",
+    iconKey: "sparkles",
+    label: "Icon",
+    description: "A small symbol or graphic.",
+    nesting: { allowsChildren: false },
+    resizePolicy: "fixed",
+    createProps: () => ({ icon: "Zap", size: 24 }),
+    createStyles: () => ({ color: "var(--primary, #7c5cfc)" }),
+    editableFields: [],
+    keywords: ["icon", "symbol", "graphic"],
+    beginnerFriendly: false,
+  }),
+  def({
+    type: "badge",
+    category: "content",
+    iconKey: "tag",
+    label: "Badge",
+    description: "A small highlighted label.",
+    nesting: { allowsChildren: false },
+    resizePolicy: "fixed",
+    createProps: () => ({ text: "New", color: "accent" }),
+    createStyles: () => ({
+      padding: "0.25rem 0.75rem",
+      borderRadius: "999px",
+      background: "var(--muted, #f5f5f5)",
+      color: "var(--muted-foreground, #737373)",
+      fontSize: "0.75rem",
+      fontWeight: 600,
+    }),
+    editableFields: [{ id: "text", fieldPath: ["text"], kind: "text", label: "Badge text" }],
+    keywords: ["badge", "tag", "pill", "label"],
+    beginnerFriendly: true,
+  }),
+];
+
+// ---------------------------------------------------------------------------
+// Interactive blocks
+// ---------------------------------------------------------------------------
+
+const interactiveBlocks: BlockDefinition[] = [
+  def({
+    type: "form",
+    category: "interactive",
+    iconKey: "file-text",
+    label: "Form",
+    description: "A set of fields that collects information.",
+    nesting: { allowsChildren: true, allowedChildTypes: ["input", "textarea", "checkbox", "button"], maxChildren: 12 },
+    resizePolicy: "fluid",
+    createProps: () => ({ name: "" }),
+    createStyles: () => ({ display: "flex", flexDirection: "column", gap: "0.75rem" }),
+    editableFields: [],
+    keywords: ["form", "contact form", "fields"],
+    beginnerFriendly: false,
+  }),
+  def({
+    type: "input",
+    category: "interactive",
+    iconKey: "input",
+    label: "Input",
+    description: "A single-line text field.",
+    nesting: { allowsChildren: false },
+    resizePolicy: "fixed",
+    createProps: () => ({ label: "Your name", placeholder: "" }),
+    createStyles: () => ({ padding: "0.5rem 0.75rem", borderRadius: "0.375rem" }),
+    editableFields: [{ id: "label", fieldPath: ["label"], kind: "text", label: "Field label" }],
+    keywords: ["input", "text field", "form"],
+    beginnerFriendly: false,
+  }),
+  def({
+    type: "textarea",
+    category: "interactive",
+    iconKey: "text",
+    label: "Text area",
+    description: "A multi-line text field.",
+    nesting: { allowsChildren: false },
+    resizePolicy: "fixed",
+    createProps: () => ({ label: "Message", placeholder: "" }),
+    createStyles: () => ({ padding: "0.5rem 0.75rem", borderRadius: "0.375rem", minHeight: "6rem" }),
+    editableFields: [{ id: "label", fieldPath: ["label"], kind: "text", label: "Field label" }],
+    keywords: ["textarea", "message", "form"],
+    beginnerFriendly: false,
+  }),
+  def({
+    type: "checkbox",
+    category: "interactive",
+    iconKey: "check-square",
+    label: "Checkbox",
+    description: "A box visitors can tick.",
+    nesting: { allowsChildren: false },
+    resizePolicy: "fixed",
+    createProps: () => ({ label: "I agree", checked: false }),
+    createStyles: () => ({}),
+    editableFields: [{ id: "label", fieldPath: ["label"], kind: "text", label: "Checkbox label" }],
+    keywords: ["checkbox", "tick", "agree"],
+    beginnerFriendly: false,
+  }),
+  def({
+    type: "tabs",
+    category: "interactive",
+    iconKey: "layout-grid",
+    label: "Tabs",
+    description: "Switches between panels of content.",
+    nesting: { allowsChildren: true, allowedChildTypes: ["container", "card", "heading", "paragraph"], maxChildren: 8 },
+    resizePolicy: "fluid",
+    createProps: () => ({ name: "" }),
+    createStyles: () => ({ display: "flex", flexDirection: "column", gap: "0.5rem" }),
+    editableFields: [],
+    keywords: ["tabs", "tabbed"],
+    beginnerFriendly: false,
+  }),
+  def({
+    type: "accordion",
+    category: "interactive",
+    iconKey: "chevrons-down",
+    label: "Accordion",
+    description: "Collapsible questions or sections.",
+    nesting: { allowsChildren: true, allowedChildTypes: ["faq-item", "card", "heading", "paragraph"], maxChildren: 10 },
+    resizePolicy: "fluid",
+    createProps: () => ({ name: "" }),
+    createStyles: () => ({ display: "flex", flexDirection: "column", gap: "0.5rem" }),
+    editableFields: [],
+    keywords: ["accordion", "collapsible", "questions"],
+    beginnerFriendly: false,
+  }),
+];
+
+// ---------------------------------------------------------------------------
+// Composite blocks
+// ---------------------------------------------------------------------------
+
+const compositeBlocks: BlockDefinition[] = [
+  def({
+    type: "card",
+    category: "composite",
+    iconKey: "square",
+    label: "Card",
+    description: "A framed container for a piece of content.",
+    nesting: { allowsChildren: true, allowedChildTypes: ["heading", "paragraph", "button", "image", "icon", "badge", "stack"], maxChildren: 8 },
+    resizePolicy: "fixed",
+    createProps: () => ({ name: "" }),
+    createStyles: () => ({ borderRadius: "0.75rem", padding: "1.5rem", background: "var(--card, #ffffff)" }),
+    editableFields: [],
+    keywords: ["card", "panel", "box"],
+    beginnerFriendly: true,
+  }),
+  def({
+    type: "pricing-card",
+    category: "composite",
+    iconKey: "tag",
+    label: "Pricing card",
+    description: "A plan with a price and features.",
+    nesting: { allowsChildren: true, allowedChildTypes: ["heading", "paragraph", "button", "badge", "stack"], maxChildren: 6 },
+    resizePolicy: "fixed",
+    createProps: () => ({ name: "", price: "$0", period: "per month" }),
+    createStyles: () => ({ borderRadius: "0.75rem", padding: "1.5rem", background: "var(--card, #ffffff)", border: "1px solid var(--border, #e5e5e5)" }),
+    editableFields: [
+      { id: "price", fieldPath: ["price"], kind: "text", label: "Price" },
+      { id: "period", fieldPath: ["period"], kind: "text", label: "Billing period" },
+    ],
+    keywords: ["pricing", "price", "plan", "cost"],
+    beginnerFriendly: true,
+  }),
+  def({
+    type: "feature-card",
+    category: "composite",
+    iconKey: "sparkles",
+    label: "Feature card",
+    description: "Highlights one benefit or feature.",
+    nesting: { allowsChildren: true, allowedChildTypes: ["icon", "heading", "paragraph"], maxChildren: 4 },
+    resizePolicy: "fixed",
+    createProps: () => ({ name: "" }),
+    createStyles: () => ({ borderRadius: "0.75rem", padding: "1.25rem", background: "var(--card, #ffffff)" }),
+    editableFields: [],
+    keywords: ["feature", "benefit", "card"],
+    beginnerFriendly: true,
+  }),
+  def({
+    type: "review-card",
+    category: "composite",
+    iconKey: "star",
+    label: "Review card",
+    description: "A customer opinion that builds trust.",
+    nesting: { allowsChildren: true, allowedChildTypes: ["paragraph", "heading", "badge"], maxChildren: 4 },
+    resizePolicy: "fixed",
+    createProps: () => ({ name: "", rating: 5 }),
+    createStyles: () => ({ borderRadius: "0.75rem", padding: "1.25rem", background: "var(--card, #ffffff)", border: "1px solid var(--border, #e5e5e5)" }),
+    editableFields: [{ id: "rating", fieldPath: ["rating"], kind: "text", label: "Rating (1–5)" }],
+    keywords: ["review", "testimonial", "customer", "trust"],
+    beginnerFriendly: true,
+  }),
+  def({
+    type: "faq-item",
+    category: "composite",
+    iconKey: "help-circle",
+    label: "Question",
+    description: "One question with a short answer.",
+    nesting: { allowsChildren: true, allowedChildTypes: ["heading", "paragraph"], maxChildren: 2 },
+    resizePolicy: "fixed",
+    createProps: () => ({ name: "" }),
+    createStyles: () => ({ borderRadius: "0.5rem", padding: "1rem", background: "var(--card, #ffffff)" }),
+    editableFields: [],
+    keywords: ["faq", "question", "answer"],
+    beginnerFriendly: true,
+  }),
+  def({
+    type: "team-member",
+    category: "composite",
+    iconKey: "user",
+    label: "Team member",
+    description: "A person with a name and role.",
+    nesting: { allowsChildren: true, allowedChildTypes: ["image", "heading", "paragraph", "badge"], maxChildren: 4 },
+    resizePolicy: "fixed",
+    createProps: () => ({ name: "", role: "" }),
+    createStyles: () => ({ borderRadius: "0.75rem", padding: "1.25rem", textAlign: "center" }),
+    editableFields: [
+      { id: "name", fieldPath: ["name"], kind: "text", label: "Name" },
+      { id: "role", fieldPath: ["role"], kind: "text", label: "Role" },
+    ],
+    keywords: ["team", "member", "person"],
+    beginnerFriendly: false,
+  }),
+];
+
+// ---------------------------------------------------------------------------
+// Navigation blocks
+// ---------------------------------------------------------------------------
+
+const navigationBlocks: BlockDefinition[] = [
+  def({
+    type: "navbar",
+    category: "navigation",
+    iconKey: "menu",
+    label: "Navigation bar",
+    description: "Your logo and menu links at the top.",
+    nesting: { allowsChildren: true, allowedChildTypes: ["menu", "button", "badge"], maxChildren: 6 },
+    resizePolicy: "fluid",
+    createProps: () => ({ name: "", logoText: "Brand" }),
+    createStyles: () => ({ display: "flex", alignItems: "center", gap: "1.5rem", padding: "1rem 0" }),
+    editableFields: [{ id: "logoText", fieldPath: ["logoText"], kind: "text", label: "Logo text" }],
+    keywords: ["nav", "navigation", "menu", "top", "header"],
+    beginnerFriendly: true,
+  }),
+  def({
+    type: "footer",
+    category: "navigation",
+    iconKey: "panel-bottom",
+    label: "Footer",
+    description: "Bottom information and links.",
+    nesting: { allowsChildren: true, allowedChildTypes: ["stack", "menu", "paragraph", "badge"], maxChildren: 6 },
+    resizePolicy: "fluid",
+    createProps: () => ({ name: "", text: "© All rights reserved." }),
+    createStyles: () => ({ padding: "2rem 0", borderTop: "1px solid var(--border, #e5e5e5)" }),
+    editableFields: [{ id: "text", fieldPath: ["text"], kind: "text", label: "Footer text" }],
+    keywords: ["footer", "bottom", "contact", "copyright"],
+    beginnerFriendly: true,
+  }),
+  def({
+    type: "menu",
+    category: "navigation",
+    iconKey: "list",
+    label: "Menu",
+    description: "A list of links.",
+    nesting: { allowsChildren: false },
+    resizePolicy: "fluid",
+    createProps: () => ({ links: [{ text: "Home", href: "/" }] }),
+    createStyles: () => ({ display: "flex", gap: "1rem" }),
+    editableFields: [],
+    keywords: ["menu", "links", "list"],
+    beginnerFriendly: true,
+  }),
+];
+
+// ---------------------------------------------------------------------------
+// Canonical registration order (deterministic listing)
+// ---------------------------------------------------------------------------
+
+export const BLOCK_DEFINITIONS: BlockDefinition[] = [
+  ...layoutBlocks,
+  ...contentBlocks,
+  ...interactiveBlocks,
+  ...compositeBlocks,
+  ...navigationBlocks,
+];
+
+/** Every registered block type in canonical order. */
+export const ALL_BLOCK_TYPES: BlockType[] = BLOCK_DEFINITIONS.map((d) => d.type);
