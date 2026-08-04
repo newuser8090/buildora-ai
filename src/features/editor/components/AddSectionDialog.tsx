@@ -1,13 +1,19 @@
 // ---------------------------------------------------------------------------
 // AddSectionDialog — browse the section library and insert a new section
 //
-// Guarantees:
+// Phase N: this dialog becomes a visual building-block browser in Guided mode
+// (plain-language names, beginner categories, synonym search, Recommended and
+// Already-added states). Standard/Advanced mode keeps the established
+// experience exactly. All data-testids are preserved for both modes.
+//
+// Guarantees (unchanged from Phase F):
 //   - opening / searching / previewing creates nothing
 //   - a section is only created on final confirmation (Add Section)
 //   - generated ID occurs once (factory), repeated Add blocked while busy
-//   - insertion position: after/before selected section, start, end
+//   - insertion position: after/before selected section, start, end, or a
+//     preselected position (canvas insertion points, Phase N)
 //   - Escape closes when idle, blocked during an active insertion
-//   - full focus trap + focus restoration (mirrors NewProjectDialog)
+//   - full focus trap + focus restoration
 //   - singleton sections show "Already added" and are disabled
 //   - dialog remains open on failure; retry supported
 // ---------------------------------------------------------------------------
@@ -27,6 +33,7 @@ import {
   ArrowUpToLine,
   Search,
   LayoutGrid,
+  Sparkles,
 } from "lucide-react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
@@ -39,6 +46,17 @@ import {
 import { sortSectionDefinitions } from "@/features/editor/section-library/utils/sort-section-definitions";
 import { SectionFactory } from "@/features/editor/section-library/services/section-factory";
 import { getSectionTypeLabel } from "@/features/editor/utils/section-labels";
+import { useGuidedBuilderStore } from "@/features/guided-builder/store/guided-builder-store";
+import {
+  GUIDED_BLOCK_CATEGORIES,
+  getGuidedCategory,
+  getGuidedCategoryLabel,
+  getGuidedSectionExample,
+  getGuidedSectionExplanation,
+  getGuidedSectionLabel,
+  listGuidedSectionLanguage,
+  type GuidedBlockCategory,
+} from "@/features/guided-builder/registry/guided-section-language";
 import type { SectionInsertPosition } from "@/features/editor/store/section-structure";
 import type { SectionLibraryCategory } from "@/features/editor/section-library/types";
 import type { SectionType } from "@/features/editor/section-library/types";
@@ -93,6 +111,72 @@ function SectionCssPreview({ type }: { type: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// Guided block-category chips
+// ---------------------------------------------------------------------------
+
+function GuidedCategoryChips({
+  value,
+  onChange,
+}: {
+  value: GuidedBlockCategory | "all";
+  onChange: (v: GuidedBlockCategory | "all") => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      <button
+        type="button"
+        onClick={() => onChange("all")}
+        aria-pressed={value === "all"}
+        className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
+          value === "all"
+            ? "bg-accent text-white"
+            : "bg-base text-text-dim hover:text-text-primary"
+        }`}
+      >
+        All
+      </button>
+      {GUIDED_BLOCK_CATEGORIES.map((c) => (
+        <button
+          key={c}
+          type="button"
+          onClick={() => onChange(c)}
+          aria-pressed={value === c}
+          className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
+            value === c
+              ? "bg-accent text-white"
+              : "bg-base text-text-dim hover:text-text-primary"
+          }`}
+        >
+          {getGuidedCategoryLabel(c)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Guided search — matches plain-language synonyms
+// ---------------------------------------------------------------------------
+
+function matchGuided(query: string, type: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const tokens = q.split(/\s+/);
+  const entry = listGuidedSectionLanguage().find((e) => e.type === type);
+  if (!entry) return false;
+  const haystack = [
+    entry.guidedLabel,
+    entry.explanation,
+    entry.example,
+    ...entry.synonyms,
+    getSectionTypeLabel(type).toLowerCase(),
+  ]
+    .join(" ")
+    .toLowerCase();
+  return tokens.every((token) => haystack.includes(token));
+}
+
+// ---------------------------------------------------------------------------
 // Dialog
 // ---------------------------------------------------------------------------
 
@@ -110,7 +194,9 @@ export function AddSectionDialog({
   existingSections,
   pageId,
 }: AddSectionDialogProps) {
-  const { open, initialType } = useEditorUiStore((s) => s.addSectionDialog);
+  const { open, initialType, initialPosition } = useEditorUiStore(
+    (s) => s.addSectionDialog,
+  );
   const closeAddSectionDialog = useEditorUiStore(
     (s) => s.closeAddSectionDialog,
   );
@@ -119,11 +205,15 @@ export function AddSectionDialog({
   const setRightSidebarTab = useEditorUiStore(
     (s) => s.setRightSidebarTab,
   );
-
   const setSelectionSource = useEditorUiStore((s) => s.setSelectionSource);
+
+  const experienceMode = useGuidedBuilderStore((s) => s.experienceMode);
+  const guidedHydrated = useGuidedBuilderStore((s) => s.hydrated);
+  const guided = guidedHydrated && experienceMode === "guided";
 
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<SectionLibraryCategory | "all">("all");
+  const [guidedCategory, setGuidedCategory] = useState<GuidedBlockCategory | "all">("all");
   const [selectedType, setSelectedType] = useState<string | null>(null);
   const [position, setPosition] = useState<SectionInsertPosition>({
     type: "end",
@@ -146,29 +236,28 @@ export function AddSectionDialog({
     onCloseRef.current = closeAddSectionDialog;
   }, [inserting, open, closeAddSectionDialog]);
 
-  // NOTE: the default section library is registered by EditorProvider via
-  // useRegisterDefaultSectionLibrary (before any dialog can open), so the
-  // registry is populated when this component first renders.
-
-  // Reset state when the dialog opens/closes
+  // Reset state when the dialog opens/closes. A preselected insertion
+  // position (canvas insertion points) wins over the selected-section default.
   const prevOpenRef = useRef(open);
   useEffect(() => {
     if (open && !prevOpenRef.current) {
       setQuery("");
       setCategory("all");
+      setGuidedCategory("all");
       setSelectedType(initialType ?? null);
       setPosition(
-        selectedSectionId
-          ? { type: "after", sectionId: selectedSectionId }
-          : { type: "end" },
+        initialPosition ??
+          (selectedSectionId
+            ? { type: "after", sectionId: selectedSectionId }
+            : { type: "end" }),
       );
       setInsertError(null);
       setInserting(false);
     }
     prevOpenRef.current = open;
-  }, [open, initialType, selectedSectionId]);
+  }, [open, initialType, initialPosition, selectedSectionId]);
 
-  // Focus trap + Escape + focus restoration (mirrors NewProjectDialog)
+  // Focus trap + Escape + focus restoration
   useEffect(() => {
     if (!open) return;
     prevFocusRef.current = document.activeElement as HTMLElement | null;
@@ -184,7 +273,6 @@ export function AddSectionDialog({
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        // Never interrupt an active insertion
         if (insertingRef.current) return;
         onCloseRef.current();
         return;
@@ -237,11 +325,18 @@ export function AddSectionDialog({
   }, []);
 
   const filtered = useMemo(() => {
+    if (guided) {
+      const byQuery = definitions.filter(
+        (d) => matchGuided(query, d.type) && !(d.singleton && existingSections.some((s) => s.type === d.type)),
+      );
+      if (guidedCategory === "all") return byQuery;
+      return byQuery.filter((d) => getGuidedCategory(d.type) === guidedCategory);
+    }
     return filterSectionDefinitions(definitions, {
       query,
       category: category === "all" ? undefined : category,
     });
-  }, [definitions, query, category]);
+  }, [definitions, query, category, guided, guidedCategory, existingSections]);
 
   const existingTypes = useMemo(
     () => new Set(existingSections.map((s) => s.type)),
@@ -282,12 +377,20 @@ export function AddSectionDialog({
     ? existingTypes.has(selectedType ?? "")
     : false;
 
+  // Recommended heuristic — the guided library marks the section most
+  // important for a blank page (the "main message") and singleton starters.
+  const recommendedTypes = useMemo(() => {
+    const present = existingSections.map((s) => s.type);
+    if (present.length === 0) return new Set(["hero", "header"]);
+    if (!present.includes("hero")) return new Set(["hero"]);
+    return new Set<string>([]);
+  }, [existingSections]);
+
   // ---- Actions ----
 
   const handleSearchChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       setQuery(e.target.value);
-      // Keep selection valid
       setSelectedType((prev) =>
         prev && filtered.some((d) => d.type === prev) ? prev : null,
       );
@@ -302,7 +405,6 @@ export function AddSectionDialog({
     setInserting(true);
     setInsertError(null);
 
-    // Create the validated section (ID generated once, here)
     const factory = new SectionFactory();
     const created = factory.create({
       type: selectedType as SectionType,
@@ -315,22 +417,16 @@ export function AddSectionDialog({
       return;
     }
 
-    // Mark the upcoming selection as programmatic so the canvas scrolls the
-    // inserted section into view (a stale canvas/structure origin would
-    // otherwise suppress the scroll for start/end insertions).
     setSelectionSource(null);
 
     const result = insertSection(pageId, created.section, effectivePosition);
     setInserting(false);
 
     if (!result.ok) {
-      // Dialog stays open; error visible; retry supported
       setInsertError(result.error.message);
       return;
     }
 
-    // Success — select the inserted section, switch to Design tab once,
-    // and close.
     selectSection(created.section.id);
     setRightSidebarTab("design");
     closeAddSectionDialog();
@@ -363,9 +459,16 @@ export function AddSectionDialog({
       >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-border px-5 py-4">
-          <h2 id={titleId} tabIndex={-1} className="text-base font-semibold text-text-primary">
-            Add Section
-          </h2>
+          <div>
+            <h2 id={titleId} tabIndex={-1} className="text-base font-semibold text-text-primary">
+              {guided ? "Add something to your page" : "Add Section"}
+            </h2>
+            {guided && (
+              <p className="mt-0.5 text-xs text-text-muted">
+                Pick a building block — you can always change it later.
+              </p>
+            )}
+          </div>
           <button
             type="button"
             onClick={() => !inserting && closeAddSectionDialog()}
@@ -386,39 +489,45 @@ export function AddSectionDialog({
               type="text"
               value={query}
               onChange={handleSearchChange}
-              placeholder="Search sections…"
+              placeholder={guided ? "Search: reviews, menu, contact, prices…" : "Search sections…"}
               aria-label="Search sections"
               className="h-9 w-full rounded-lg border border-border bg-base pl-9 pr-3 text-sm text-text-primary placeholder:text-text-dim/50 transition-all duration-200 focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/20"
             />
           </div>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            <button
-              type="button"
-              onClick={() => setCategory("all")}
-              aria-pressed={category === "all"}
-              className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
-                category === "all"
-                  ? "bg-accent text-white"
-                  : "bg-base text-text-dim hover:text-text-primary"
-              }`}
-            >
-              All
-            </button>
-            {SECTION_CATEGORIES.map((c) => (
-              <button
-                key={c}
-                type="button"
-                onClick={() => setCategory(c)}
-                aria-pressed={category === c}
-                className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
-                  category === c
-                    ? "bg-accent text-white"
-                    : "bg-base text-text-dim hover:text-text-primary"
-                }`}
-              >
-                {categoryLabel(c)}
-              </button>
-            ))}
+          <div className="mt-2">
+            {guided ? (
+              <GuidedCategoryChips value={guidedCategory} onChange={setGuidedCategory} />
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setCategory("all")}
+                  aria-pressed={category === "all"}
+                  className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
+                    category === "all"
+                      ? "bg-accent text-white"
+                      : "bg-base text-text-dim hover:text-text-primary"
+                  }`}
+                >
+                  All
+                </button>
+                {SECTION_CATEGORIES.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setCategory(c)}
+                    aria-pressed={category === c}
+                    className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
+                      category === c
+                        ? "bg-accent text-white"
+                        : "bg-base text-text-dim hover:text-text-primary"
+                    }`}
+                  >
+                    {categoryLabel(c)}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
@@ -428,7 +537,9 @@ export function AddSectionDialog({
           <div className="min-h-0 overflow-y-auto border-b border-border px-5 py-4 md:border-b-0 md:border-r">
             {filtered.length === 0 ? (
               <p className="py-8 text-center text-xs text-text-dim">
-                No sections match your search.
+                {guided
+                  ? "Nothing matches that search — try “reviews”, “contact”, or “pricing”."
+                  : "No sections match your search."}
               </p>
             ) : (
               <div className="grid grid-cols-1 gap-2">
@@ -436,6 +547,7 @@ export function AddSectionDialog({
                   const alreadyAdded =
                     definition.singleton && existingTypes.has(definition.type);
                   const isSelected = selectedType === definition.type;
+                  const isRecommended = recommendedTypes.has(definition.type);
                   return (
                     <button
                       key={definition.type}
@@ -462,7 +574,9 @@ export function AddSectionDialog({
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center gap-2">
                           <span className="text-sm font-medium text-text-primary">
-                            {definition.name}
+                            {guided
+                              ? getGuidedSectionLabel(definition.type)
+                              : definition.name}
                           </span>
                           {definition.singleton && (
                             <span className="rounded bg-base px-1 py-px text-[10px] font-medium uppercase tracking-wide text-text-dim/60">
@@ -471,11 +585,29 @@ export function AddSectionDialog({
                           )}
                         </span>
                         <span className="mt-0.5 block text-xs text-text-dim">
-                          {definition.description}
+                          {guided
+                            ? getGuidedSectionExplanation(definition.type)
+                            : definition.description}
                         </span>
+                        {guided && (
+                          <span className="mt-0.5 block text-[11px] text-text-muted">
+                            {getGuidedSectionExample(definition.type)}
+                          </span>
+                        )}
                         <span className="mt-1 block text-[10px] font-medium uppercase tracking-wide text-text-dim/50">
-                          {categoryLabel(definition.category)}
+                          {guided
+                            ? getGuidedCategoryLabel(getGuidedCategory(definition.type))
+                            : categoryLabel(definition.category)}
                         </span>
+                        {isRecommended && !alreadyAdded && (
+                          <span
+                            className="mt-1 inline-flex items-center gap-1 rounded-full bg-accent/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent"
+                            data-testid={`recommended-${definition.type}`}
+                          >
+                            <Sparkles className="h-2.5 w-2.5" />
+                            Recommended
+                          </span>
+                        )}
                         {alreadyAdded && (
                           <span
                             className="mt-1 block text-[11px] font-medium text-accent"
@@ -498,10 +630,14 @@ export function AddSectionDialog({
               <div className="flex flex-col gap-4">
                 <div>
                   <h3 className="text-sm font-semibold text-text-primary">
-                    {selectedDefinition.name}
+                    {guided
+                      ? getGuidedSectionLabel(selectedDefinition.type)
+                      : selectedDefinition.name}
                   </h3>
                   <p className="mt-1 text-xs text-text-muted">
-                    {selectedDefinition.description}
+                    {guided
+                      ? getGuidedSectionExplanation(selectedDefinition.type)
+                      : selectedDefinition.description}
                   </p>
                 </div>
 
@@ -603,18 +739,19 @@ export function AddSectionDialog({
                         aria-hidden="true"
                       />
                     ) : null}
-                    Add Section
+                    {guided ? "Add it" : "Add Section"}
                   </button>
                 </div>
               </div>
             ) : (
               <div className="flex h-full flex-col items-center justify-center text-center">
                 <p className="text-sm font-medium text-text-primary">
-                  Select a section to preview
+                  {guided ? "Choose a building block" : "Select a section to preview"}
                 </p>
                 <p className="mt-1 text-xs text-text-muted">
-                  Pick a card on the left to see a preview and choose where to
-                  insert it.
+                  {guided
+                    ? "Pick a card on the left to preview it and choose where it goes."
+                    : "Pick a card on the left to see a preview and choose where to insert it."}
                 </p>
               </div>
             )}

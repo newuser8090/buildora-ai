@@ -7,6 +7,7 @@ import {
   EditableHeading,
   EditableText,
 } from "@/features/inline-editing/components/EditableText";
+import { resolveSectionPadding } from "@/features/editor/utils/section-styles";
 import type { BaseSection } from "@/types/section";
 import type { FeaturesSectionProps } from "@/types/section";
 
@@ -37,7 +38,7 @@ export function FeaturesSection({ section }: { section: BaseSection }) {
   return (
     <section
       style={{
-        padding: "5rem 0",
+        padding: resolveSectionPadding(section, "5rem 0"),
         background: "var(--muted, #f5f5f5)",
       }}
     >

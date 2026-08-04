@@ -7,6 +7,7 @@ import { useRegisterDefaultSectionLibrary } from "@/features/editor/section-libr
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useBeforeUnload } from "@/hooks/useBeforeUnload";
 import { useProjectController } from "@/features/persistence/hooks/useProjectController";
+import { useGuidedBuilderInit } from "@/features/guided-builder/hooks/useGuidedBuilderInit";
 
 interface EditorProviderProps {
   children: ReactNode;
@@ -23,6 +24,9 @@ export function EditorProvider({ children }: EditorProviderProps) {
 
   // Initialize persistence controller (singleton, runs once)
   useProjectController();
+
+  // Phase N: sync guided-builder prefs (experience mode etc.) after mount
+  useGuidedBuilderInit();
 
   // beforeunload protection when dirty
   useBeforeUnload();

@@ -4,6 +4,7 @@ import {
   EditableHeading,
   EditableText,
 } from "@/features/inline-editing/components/EditableText";
+import { resolveSectionPadding } from "@/features/editor/utils/section-styles";
 import type { BaseSection } from "@/types/section";
 import type { PricingSectionProps } from "@/types/section";
 
@@ -16,7 +17,7 @@ export function PricingSection({ section }: { section: BaseSection }) {
   const plans = Array.isArray(props.plans) ? props.plans : [];
 
   return (
-    <section style={{ padding: "5rem 0" }}>
+    <section style={{ padding: resolveSectionPadding(section, "5rem 0") }}>
       <div
         style={{
           maxWidth: "1120px",

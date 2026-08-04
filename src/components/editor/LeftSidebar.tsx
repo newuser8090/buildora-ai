@@ -31,6 +31,11 @@ import {
   STAGE_INFO,
   STAGE_ORDER,
 } from "@/features/generation/services/generation-service";
+import { useGuidedBuilderStore } from "@/features/guided-builder/store/guided-builder-store";
+import {
+  AI_COMPOSER_FOCUS_EVENT,
+  type AiComposerFocusDetail,
+} from "@/features/guided-builder/constants";
 
 // Instruction used by the in-chip Regenerate quick action.
 const REGENERATE_INSTRUCTION =
@@ -45,6 +50,16 @@ const examples = [
   "Build a luxury restaurant website for Maison Bleu",
   "Design a portfolio for a product designer named Aanya",
   "Create an ecommerce homepage for a skincare brand called Lumiere",
+];
+
+// Phase N (spec §17): plain-language prompts shown in Guided mode.
+const beginnerExamples = [
+  "Help me decide what to add next",
+  "Make this easier to understand",
+  "Add a way for visitors to contact me",
+  "Make this look more trustworthy",
+  "Help me finish this page",
+  "Explain what this part does",
 ];
 
 // ---------------------------------------------------------------------------
@@ -68,6 +83,10 @@ export function LeftSidebar() {
     warnings: planWarnings,
     isBusy: planBusy,
   } = useAiPlanEdit();
+  const experienceMode = useGuidedBuilderStore((s) => s.experienceMode);
+  const guidedHydrated = useGuidedBuilderStore((s) => s.hydrated);
+  const guided = guidedHydrated && experienceMode === "guided";
+
   const [scopeChoice, setScopeChoice] = useState<AiScopeChoice | "auto">("auto");
   const [reviewSignal, setReviewSignal] = useState(0);
   const messages = useChatStore((s) => s.messages);
@@ -189,6 +208,20 @@ export function LeftSidebar() {
     }
   };
 
+  // Phase N: guided start screen / command palette can ask the AI composer
+  // to focus, optionally with an explicit scope.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<AiComposerFocusDetail>).detail;
+      clearField();
+      if (detail?.scope) setScopeChoice(detail.scope);
+      else setScopeChoice("auto");
+      textareaRef.current?.focus();
+    };
+    window.addEventListener(AI_COMPOSER_FOCUS_EVENT, handler);
+    return () => window.removeEventListener(AI_COMPOSER_FOCUS_EVENT, handler);
+  }, [clearField]);
+
   const handleExampleClick = (text: string) => {
     setInput(text);
     textareaRef.current?.focus();
@@ -247,7 +280,7 @@ export function LeftSidebar() {
               </div>
 
               <div className="flex flex-col gap-2 pl-10">
-                {examples.map((text) => (
+                {(guided ? beginnerExamples : examples).map((text) => (
                   <button
                     key={text}
                     onClick={() => handleExampleClick(text)}
@@ -259,8 +292,9 @@ export function LeftSidebar() {
               </div>
 
               <p className="pl-10 text-[11px] text-text-dim/40">
-                Describe the brand, style, audience, and colors for better
-                results.
+                {guided
+                  ? "Describe what you want in your own words — no technical terms needed."
+                  : "Describe the brand, style, audience, and colors for better results."}
               </p>
             </motion.div>
           )}
@@ -572,12 +606,18 @@ export function LeftSidebar() {
               selectedField && scopeChoice === "auto"
                 ? `Ask AI to improve this ${selectedField.label.toLowerCase()}…`
                 : effectiveScopeChoice === "create"
-                  ? "Describe your website..."
+                  ? guided
+                    ? "Describe your website in your own words..."
+                    : "Describe your website..."
                   : effectiveScopeChoice === "section" && editTarget
                     ? `Describe how to edit the ${(editTarget.label ?? "section").toLowerCase()}...`
                     : effectiveScopeChoice === "page"
-                      ? `Edit the whole "${selectedPage?.title ?? "page"}" page...`
-                      : "Edit the entire website..."
+                      ? guided
+                        ? "Tell me what to change on this page..."
+                        : `Edit the whole "${selectedPage?.title ?? "page"}" page...`
+                      : guided
+                        ? "Tell me what to change on your website..."
+                        : "Edit the entire website..."
             }
             disabled={isBusy}
             className="w-full resize-none rounded-2xl border border-border bg-base px-4 py-3 pr-12 text-sm text-text-primary placeholder:text-text-dim transition-all duration-200 focus:border-accent/40 focus:outline-none focus:ring-2 focus:ring-accent/10 disabled:opacity-50"
@@ -586,7 +626,9 @@ export function LeftSidebar() {
               selectedField && scopeChoice === "auto"
                 ? "Inline field instruction"
                 : effectiveScopeChoice === "create"
-                  ? "Website description"
+                  ? guided
+                    ? "Website description (plain language)"
+                    : "Website description"
                   : "Website editing instruction"
             }
           />

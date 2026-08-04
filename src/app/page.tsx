@@ -26,6 +26,24 @@ import { ConfirmDialog } from "@/features/projects/components/ConfirmDialog";
 import { RenameDialog } from "@/features/projects/components/RenameDialog";
 import type { ProjectSortMode, DashboardProject } from "@/features/projects/types";
 import { cn } from "@/utils/cn";
+import { useGuidedBuilderStore } from "@/features/guided-builder/store/guided-builder-store";
+import { useGuidedBuilderInit } from "@/features/guided-builder/hooks/useGuidedBuilderInit";
+import { OnboardingDialog } from "@/features/guided-builder/components/OnboardingDialog";
+import type {
+  OnboardingProjectCategory,
+  OnboardingSelections,
+} from "@/features/guided-builder/types";
+
+// Default project name for the onboarding category.
+const ONBOARDING_DEFAULT_NAMES: Record<OnboardingProjectCategory, string> = {
+  business: "My Business",
+  portfolio: "My Portfolio",
+  store: "My Store",
+  restaurant: "My Restaurant",
+  personal: "My Personal Page",
+  event: "My Event",
+  other: "My Project",
+};
 
 // ---------------------------------------------------------------------------
 // Sort options
@@ -89,6 +107,49 @@ export default function DashboardPage() {
   }, []);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
+
+  // Phase N: first-run guided onboarding (new users / empty dashboard).
+  useGuidedBuilderInit();
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const setOnboardingOpenStore = useGuidedBuilderStore((s) => s.setOnboardingOpen);
+
+  const handleStartGuidedSetup = useCallback(() => {
+    setOnboardingOpenStore(true);
+    setOnboardingOpen(true);
+  }, [setOnboardingOpenStore]);
+
+  const handleOnboardingClose = useCallback(() => {
+    useGuidedBuilderStore.getState().markOnboardingSkipped();
+    setOnboardingOpen(false);
+  }, []);
+
+  /** Create the project through the existing template/controller flow and
+   *  record the experience-mode preference from the comfort choice. The
+   *  onboarding-complete flag is only set AFTER a successful create — a failed
+   *  creation keeps the dialog open with its error message visible. */
+  const handleOnboardingComplete = useCallback(
+    async (selections: OnboardingSelections): Promise<{ ok: boolean; error?: string }> => {
+      const templateId = "template-blank";
+      const name = ONBOARDING_DEFAULT_NAMES[selections.category];
+      const result = await createProjectFromTemplate(templateId, name);
+      if (!result.ok) return { ok: false, error: result.error };
+      // Success: record the preference and close the dialog.
+      useGuidedBuilderStore.getState().setOnboardingCompleted(selections);
+      setOnboardingOpen(false);
+      return { ok: true };
+    },
+    [createProjectFromTemplate],
+  );
+
+  const handleOnboardingStartFromTemplate = useCallback(
+    (selections: OnboardingSelections) => {
+      // Record the mode preference, then hand off to the template gallery.
+      useGuidedBuilderStore.getState().setOnboardingCompleted(selections);
+      setOnboardingOpen(false);
+      setNewProjectOpen(true);
+    },
+    [],
+  );
   const [showDiscardDialog, setShowDiscardDialog] = useState<{ projectId: string; projectName: string } | null>(null);
   const [operationLoading, setOperationLoading] = useState(false);
   const [thumbnailError, setThumbnailError] = useState<string | null>(null);
@@ -454,10 +515,19 @@ export default function DashboardPage() {
                   <p className="mt-1 text-sm text-text-muted">
                     Create a new project or import an existing one to get started.
                   </p>
-                  <div className="mt-6 flex items-center gap-3">
+                  <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+                    <button
+                      onClick={handleStartGuidedSetup}
+                      data-testid="start-guided-setup"
+                      className="flex h-10 items-center gap-2 rounded-xl bg-accent px-5 text-sm font-medium text-white transition-all duration-200 hover:bg-accent-hover active:scale-95"
+                      type="button"
+                    >
+                      <Sparkles className="h-4 w-4" />
+                      Start guided setup
+                    </button>
                     <button
                       onClick={() => setNewProjectOpen(true)}
-                      className="flex h-10 items-center gap-2 rounded-xl bg-accent px-5 text-sm font-medium text-white transition-all duration-200 hover:bg-accent-hover active:scale-95"
+                      className="flex h-10 items-center gap-2 rounded-xl border border-border px-5 text-sm font-medium text-text-muted transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
                       type="button"
                     >
                       <Plus className="h-4 w-4" />
@@ -563,6 +633,14 @@ export default function DashboardPage() {
         open={newProjectOpen}
         onClose={() => setNewProjectOpen(false)}
         onCreate={createProjectFromTemplate}
+      />
+
+      {/* ---- First-run onboarding (Phase N) ---- */}
+      <OnboardingDialog
+        open={onboardingOpen}
+        onClose={handleOnboardingClose}
+        onComplete={handleOnboardingComplete}
+        onStartFromTemplate={handleOnboardingStartFromTemplate}
       />
     </div>
   );

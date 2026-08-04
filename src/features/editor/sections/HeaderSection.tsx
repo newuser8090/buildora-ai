@@ -7,6 +7,7 @@ import {
   EditableText,
   EditableLinkText,
 } from "@/features/inline-editing/components/EditableText";
+import { resolveSectionPadding } from "@/features/editor/utils/section-styles";
 import type { BaseSection } from "@/types/section";
 import type { HeaderSectionProps } from "@/types/section";
 
@@ -26,7 +27,7 @@ export function HeaderSection({ section }: { section: BaseSection }) {
   return (
     <header
       style={{
-        padding: "1rem 0",
+        padding: resolveSectionPadding(section, "1rem 0"),
         borderBottom: "1px solid var(--border, #e5e5e5)",
       }}
     >

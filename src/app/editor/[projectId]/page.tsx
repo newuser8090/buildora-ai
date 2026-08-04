@@ -19,6 +19,8 @@ import { StatusBar } from "@/components/editor/StatusBar";
 import { EditorProvider } from "@/components/editor/EditorProvider";
 import { AddSectionDialog } from "@/features/editor/components/AddSectionDialog";
 import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
+import { CommandPalette } from "@/features/guided-builder/components/CommandPalette";
+import { TryGuidedBanner } from "@/features/guided-builder/components/TryGuidedBanner";
 import { getProjectController } from "@/features/persistence/services/project-controller";
 import { ensureProjectController } from "@/features/persistence/hooks/useProjectController";
 import { useEditorStore } from "@/features/editor/store/editor-store";
@@ -279,6 +281,10 @@ function EditorShell() {
           existingSections={activePage.sections}
         />
       ) : null}
+
+      {/* Phase N: beginner command palette (Ctrl/Cmd+K) + Try Guided banner */}
+      <CommandPalette />
+      <TryGuidedBanner />
     </>
   );
 }

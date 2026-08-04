@@ -9,6 +9,8 @@ import { SectionRenderer } from "@/features/editor/renderer/SectionRenderer";
 import { scrollSectionIntoView } from "@/features/editor/utils/scroll-section-into-view";
 import { InlineEditLayer } from "@/features/inline-editing/components/InlineEditLayer";
 import { useInlineEditShortcuts } from "@/features/inline-editing/hooks/useInlineEditShortcuts";
+import { useGuidedBuilderStore } from "@/features/guided-builder/store/guided-builder-store";
+import { GuidedStartScreen } from "@/features/guided-builder/components/GuidedStartScreen";
 
 
 // ---------------------------------------------------------------------------
@@ -158,6 +160,9 @@ export function Canvas() {
   const isGeneratingStore = useEditorStore((s) => s.isGenerating);
 
   const isGenerating = isGeneratingStore;
+  const experienceMode = useGuidedBuilderStore((s) => s.experienceMode);
+  const guidedHydrated = useGuidedBuilderStore((s) => s.hydrated);
+  const guided = guidedHydrated && experienceMode === "guided";
 
   const canvasRef = useRef<HTMLDivElement>(null);
   const prevProjectRef = useRef<string | null>(null);
@@ -301,10 +306,37 @@ export function Canvas() {
                   }
                 `}</style>
               )}
-              <SectionRenderer sections={activePage.sections} pageId={activePage.id} />
+              {/* Phase N: guided start banner on a new/nearly-blank page */}
+              {guided &&
+                !isGenerating &&
+                activePage &&
+                activePage.sections.filter((s) => s.visible).length <= 1 && (
+                  <div className="px-8 pt-6">
+                    <GuidedStartScreen
+                      compact
+                      pageId={activePage.id}
+                      existingSectionIds={new Set(activePage.sections.map((s) => s.id))}
+                    />
+                  </div>
+                )}
+              <SectionRenderer
+                sections={activePage.sections}
+                pageId={activePage.id}
+                showInsertionPoints={guided && !isGenerating}
+              />
             </>
           ) : (
-            !isGenerating && <EmptyCanvasState />
+            !isGenerating &&
+            (guided ? (
+              <div className="px-8 py-16">
+                <GuidedStartScreen
+                  pageId={activePage?.id ?? ""}
+                  existingSectionIds={new Set()}
+                />
+              </div>
+            ) : (
+              <EmptyCanvasState />
+            ))
           )}
         </div>
       </div>
