@@ -4,6 +4,9 @@ import { geminiProvider } from "@/features/generation/providers/gemini-generatio
 import { ruleBasedProvider } from "@/features/generation/providers/rule-based-generation-provider";
 import { geminiEditProvider } from "@/features/generation/providers/gemini-edit-provider";
 import { ruleBasedEditProvider } from "@/features/generation/providers/rule-based-edit-provider";
+import { geminiPlanProvider } from "@/features/ai-editing/planner/gemini-plan-provider";
+import { ruleBasedPlanner } from "@/features/ai-editing/planner/rule-based-planner";
+import { orchestratePlan } from "@/features/ai-editing/services/planner-orchestrator";
 import { logger } from "@/lib/logger";
 import { ProjectSchema } from "@/features/generation/schemas/generation-plan-schema";
 import { AnySectionSchema } from "@/features/editor/schemas/section-schemas";
@@ -12,37 +15,55 @@ import {
   type ValidatedEditTarget,
 } from "@/features/ai-editing/schemas/edit-schemas";
 import { orchestrateEdit } from "@/features/ai-editing/services/edit-orchestrator";
+import {
+  PlanEditRequestSchema,
+  type ValidatedPlanEditRequest,
+} from "@/features/ai-editing/schemas/plan-schemas";
 import type { Project } from "@/types/project";
 
 // ---------------------------------------------------------------------------
 // Request validation schema
 // ---------------------------------------------------------------------------
 
-interface GenerateRequest {
-  prompt: string;
-  mode: "create" | "modify";
-  target?: ValidatedEditTarget;
-}
+type GenerateRequest =
+  | { kind: "create"; prompt: string }
+  | { kind: "modify"; prompt: string; target: ValidatedEditTarget }
+  | { kind: "plan-edit"; request: ValidatedPlanEditRequest };
 
 const MAX_PROMPT_LENGTH = 4000;
+/** Raw request body cap — protects the plan-edit path (projects can be large). */
+const MAX_REQUEST_BYTES = 4 * 1024 * 1024;
 
-function validateRequest(body: unknown): GenerateRequest | string {
+type ValidationResult = GenerateRequest | { kind: "invalid"; message: string };
+
+function validateRequest(body: unknown): ValidationResult {
   if (!body || typeof body !== "object") {
-    return "Invalid request body";
+    return { kind: "invalid", message: "Invalid request body" };
   }
 
   const { prompt, mode, target } = body as Record<string, unknown>;
 
+  if (mode === "plan-edit") {
+    const planResult = PlanEditRequestSchema.safeParse(body);
+    if (!planResult.success) {
+      const issues = planResult.error.issues
+        .map((i) => i.path.join(".") + ": " + i.message)
+        .join("; ");
+      return { kind: "invalid", message: `Invalid plan-edit request: ${issues}` };
+    }
+    return { kind: "plan-edit", request: planResult.data };
+  }
+
   if (typeof prompt !== "string" || prompt.trim().length === 0) {
-    return "Prompt is required";
+    return { kind: "invalid", message: "Prompt is required" };
   }
 
   if (prompt.length > MAX_PROMPT_LENGTH) {
-    return `Prompt must be ${MAX_PROMPT_LENGTH} characters or less`;
+    return { kind: "invalid", message: `Prompt must be ${MAX_PROMPT_LENGTH} characters or less` };
   }
 
   if (mode !== undefined && mode !== "create" && mode !== "modify") {
-    return 'Mode must be "create" or "modify"';
+    return { kind: "invalid", message: 'Mode must be "create", "modify" or "plan-edit"' };
   }
 
   if (mode === "modify") {
@@ -51,12 +72,12 @@ function validateRequest(body: unknown): GenerateRequest | string {
       const issues = targetResult.error.issues
         .map((i) => i.path.join(".") + ": " + i.message)
         .join("; ");
-      return `Invalid edit target: ${issues}`;
+      return { kind: "invalid", message: `Invalid edit target: ${issues}` };
     }
-    return { prompt: prompt.trim(), mode: "modify", target: targetResult.data };
+    return { kind: "modify", prompt: prompt.trim(), target: targetResult.data };
   }
 
-  return { prompt: prompt.trim(), mode: "create" };
+  return { kind: "create", prompt: prompt.trim() };
 }
 
 // ---------------------------------------------------------------------------
@@ -88,10 +109,20 @@ export async function POST(request: Request) {
   const startTime = Date.now();
 
   try {
-    // 1. Parse and validate request
+    // 1. Parse and validate request (raw-text read so we can enforce a body cap)
     let body: unknown;
     try {
-      body = await request.json();
+      const rawBody = await request.text();
+      if (rawBody.length > MAX_REQUEST_BYTES) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: { code: "REQUEST_TOO_LARGE", message: "Request body is too large." },
+          },
+          { status: 413 },
+        );
+      }
+      body = rawBody.length > 0 ? JSON.parse(rawBody) : {};
     } catch {
       return NextResponse.json(
         { success: false, error: { code: "INVALID_JSON", message: "Invalid JSON in request body" } },
@@ -100,19 +131,24 @@ export async function POST(request: Request) {
     }
 
     const validated = validateRequest(body);
-    if (typeof validated === "string") {
+    if (validated.kind === "invalid") {
       return NextResponse.json(
-        { success: false, error: { code: "INVALID_INPUT", message: validated } },
+        { success: false, error: { code: "INVALID_INPUT", message: validated.message } },
         { status: 400 },
       );
     }
 
-    const { prompt, mode, target } = validated;
-
-    // ---- Modify mode (AI editing): revise a section's content ----
-    if (mode === "modify" && target) {
-      return handleModify(target, prompt, request, startTime);
+    // ---- Plan-edit mode (Phase L): produce a validated, previewable plan ----
+    if (validated.kind === "plan-edit") {
+      return handlePlanEdit(validated.request, request, startTime);
     }
+
+    // ---- Modify mode (Phase K): revise a section's content ----
+    if (validated.kind === "modify") {
+      return handleModify(validated.target, validated.prompt, request, startTime);
+    }
+
+    const prompt = validated.prompt;
 
     // 2. Check force-local flag (server-only env var, never exposed to client)
     // Test header x-buildora-force-local accepted for integration testing
@@ -222,7 +258,7 @@ export async function POST(request: Request) {
 }
 
 // ---------------------------------------------------------------------------
-// Modify mode — AI editing of a section's content
+// Modify mode — AI editing of a section's content (Phase K, unchanged)
 // ---------------------------------------------------------------------------
 
 async function handleModify(
@@ -252,6 +288,61 @@ async function handleModify(
     source,
     edits,
     warnings,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Plan-edit mode — validated, previewable AI edit plan (Phase L)
+// ---------------------------------------------------------------------------
+
+async function handlePlanEdit(
+  request: ValidatedPlanEditRequest,
+  httpRequest: Request,
+  startTime: number,
+) {
+  const forceLocal =
+    process.env.BUILDORA_FORCE_LOCAL_GENERATION === "true" ||
+    httpRequest.headers.get("x-buildora-force-local") === "true";
+
+  const result = await orchestratePlan(
+    {
+      instruction: request.instruction,
+      scope: request.scope,
+      project: request.project,
+      selectedPageId: request.selectedPageId,
+      selectedSectionId: request.selectedSectionId,
+      baseRevision: request.baseRevision,
+    },
+    {
+      gemini: geminiPlanProvider,
+      ruleBased: ruleBasedPlanner,
+      forceLocal,
+      log: (level, msg) => logger[level]("API", msg),
+    },
+  );
+
+  if (!result.ok) {
+    logger.info(
+      "API",
+      `Plan-edit declined (${Date.now() - startTime}ms) — ${result.error.code}: ${result.error.message}`,
+    );
+    return NextResponse.json({
+      ok: false,
+      error: result.error,
+      warnings: result.warnings ?? [],
+    });
+  }
+
+  logger.info(
+    "API",
+    `Plan-edit success (${Date.now() - startTime}ms) via ${result.source} — ${result.plan.operations.length} operation(s)`,
+  );
+
+  return NextResponse.json({
+    ok: true,
+    source: result.source,
+    plan: result.plan,
+    warnings: result.warnings,
   });
 }
 
