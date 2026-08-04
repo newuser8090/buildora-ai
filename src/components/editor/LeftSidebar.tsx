@@ -11,14 +11,21 @@ import {
   Wand2,
   RefreshCw,
   X,
+  LayoutList,
+  ShieldAlert,
+  ClipboardList,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useGeneration } from "@/features/generation/hooks/useGeneration";
 import { useAiEdit } from "@/features/ai-editing/hooks/useAiEdit";
+import { useAiPlanEdit } from "@/features/ai-editing/hooks/useAiPlanEdit";
+import { AiEditPlanReview } from "@/features/ai-editing/components/AiEditPlanReview";
 import { useChatStore } from "@/features/chat/store/chat-store";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { sectionLabel } from "@/features/ai-editing/rules/rule-based-editor";
 import type { EditTarget } from "@/features/ai-editing/types";
+import type { AiEditScope } from "@/features/ai-editing/plan-types";
+import { scopeLabel } from "@/features/ai-editing/plan-types";
 import {
   STAGE_INFO,
   STAGE_ORDER,
@@ -40,6 +47,13 @@ const examples = [
 ];
 
 // ---------------------------------------------------------------------------
+// Scope selector options — Create Website / Edit Section / Edit Page /
+// Edit Website (spec §15). "auto" derives the default from the selection.
+// ---------------------------------------------------------------------------
+
+type AiScopeChoice = "create" | "section" | "page" | "project";
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -47,6 +61,14 @@ export function LeftSidebar() {
   const [input, setInput] = useState("");
   const { generate, isLoading, stage, completedStages } = useGeneration();
   const { edit, isEditing } = useAiEdit();
+  const {
+    createPlan,
+    plan,
+    warnings: planWarnings,
+    isBusy: planBusy,
+  } = useAiPlanEdit();
+  const [scopeChoice, setScopeChoice] = useState<AiScopeChoice | "auto">("auto");
+  const [reviewSignal, setReviewSignal] = useState(0);
   const messages = useChatStore((s) => s.messages);
 
   // Selected section → edit target. When a section is selected, chat messages
@@ -71,6 +93,19 @@ export function LeftSidebar() {
         },
       }
     : null;
+
+  const selectedPageId = useEditorStore((s) => s.selectedPageId);
+
+  // Auto mode derives the default from the selection: a selected section
+  // defaults to section scope, otherwise the composer stays in create mode.
+  const effectiveScopeChoice: AiScopeChoice =
+    scopeChoice === "auto"
+      ? selectedSection
+        ? "section"
+        : "create"
+      : scopeChoice;
+
+  const selectedPage = project.pages.find((p) => p.id === selectedPageId) ?? project.pages[0];
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -104,16 +139,26 @@ export function LeftSidebar() {
     }
   }, [messagesLength, lastContent, isNearBottom]);
 
-  const isBusy = isLoading || isEditing;
+  const isBusy = isLoading || isEditing || planBusy;
 
   const handleSubmit = async () => {
     const prompt = input.trim();
     if (!prompt || isBusy) return;
     setInput("");
-    if (editTarget) {
-      await edit(prompt, editTarget);
-    } else {
+    if (effectiveScopeChoice === "create" || !selectedPageId) {
+      // Create mode — full website generation (unchanged).
       await generate(prompt);
+    } else if (effectiveScopeChoice === "section" && editTarget) {
+      // Phase K — one-section edit through the modify flow (unchanged).
+      await edit(prompt, editTarget);
+    } else if (effectiveScopeChoice === "page") {
+      // Phase L — page-level plan; never applies automatically.
+      const scope: AiEditScope = { type: "page", pageId: selectedPageId };
+      await createPlan(prompt, scope);
+    } else {
+      // Phase L — whole-website plan; never applies automatically.
+      const scope: AiEditScope = { type: "project" };
+      await createPlan(prompt, scope);
     }
   };
 
@@ -337,8 +382,95 @@ export function LeftSidebar() {
 
       {/* ---- Prompt composer ---- */}
       <div className="border-t border-border px-4 py-4 flex-none">
-        {/* Edit-target chip — shown while a section is selected */}
-        {editTarget && (
+        {/* ---- Mode selector (spec §15: Create / Edit Section / Edit Page / Edit Website) ---- */}
+        <div
+          data-testid="ai-scope-selector"
+          className="mb-3 grid grid-cols-4 gap-1 rounded-xl border border-border bg-base p-1"
+          role="radiogroup"
+          aria-label="AI mode"
+        >
+          {(
+            [
+              { value: "create", label: "Create" },
+              { value: "section", label: "Section" },
+              { value: "page", label: "Page" },
+              { value: "project", label: "Website" },
+            ] as Array<{ value: AiScopeChoice; label: string }>
+          ).map((opt) => {
+            const isActive = effectiveScopeChoice === opt.value;
+            const disabled = opt.value === "section" && !selectedSection;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                role="radio"
+                aria-checked={isActive}
+                aria-disabled={disabled || undefined}
+                data-testid={`ai-scope-${opt.value}`}
+                onClick={() => setScopeChoice(opt.value)}
+                disabled={disabled}
+                title={
+                  opt.value === "create"
+                    ? "Generate a whole new website"
+                    : opt.value === "section"
+                      ? "Edit the selected section (one-section edit)"
+                      : opt.value === "page"
+                        ? "Plan edits for the current page"
+                        : "Plan edits across the entire website"
+                }
+                className={`flex h-7 items-center justify-center rounded-lg text-xs font-medium transition-all duration-200 active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 ${
+                  isActive
+                    ? "bg-card text-text-primary shadow-sm ring-1 ring-border"
+                    : "text-text-dim hover:text-text-primary"
+                }`}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* ---- Plan summary card (Phase L) ---- */}
+        {plan && (
+          <div
+            data-testid="plan-summary-card"
+            className="mb-3 flex items-center gap-2 rounded-xl border border-accent/25 bg-accent/[0.06] px-3 py-2"
+          >
+            <LayoutList className="h-3.5 w-3.5 shrink-0 text-accent" />
+            <span className="min-w-0 flex-1 truncate text-xs text-text-primary">
+              <span className="font-medium text-accent">
+                {plan.operations.length} proposed change
+                {plan.operations.length === 1 ? "" : "s"}
+              </span>{" "}
+              · {scopeLabel(plan.scope)} ·{" "}
+              <span className="text-text-dim">{plan.provider}</span>
+              {plan.operations.some((o) => o.risk === "high") && (
+                <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-red-500/40 bg-red-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-red-300">
+                  <ShieldAlert className="h-2.5 w-2.5" />
+                  Destructive
+                </span>
+              )}
+              {planWarnings.length > 0 && (
+                <span className="ml-1 text-[10px] text-amber-300">
+                  {planWarnings.length} warning
+                  {planWarnings.length === 1 ? "" : "s"}
+                </span>
+              )}
+            </span>
+            <button
+              type="button"
+              onClick={() => setReviewSignal((s) => s + 1)}
+              data-testid="review-plan-button"
+              className="flex shrink-0 items-center gap-1 rounded-md bg-accent/10 px-2 py-1 text-[11px] font-medium text-accent transition-colors hover:bg-accent/20 active:scale-95"
+            >
+              <ClipboardList className="h-3 w-3" />
+              Review Plan
+            </button>
+          </div>
+        )}
+
+        {/* Edit-target chip — shown only in section scope (Phase K) */}
+        {effectiveScopeChoice === "section" && editTarget && (
           <div
             data-testid="edit-target-chip"
             className="mb-3 flex items-center gap-2 rounded-xl border border-accent/25 bg-accent/[0.06] px-3 py-2"
@@ -379,27 +511,43 @@ export function LeftSidebar() {
             onKeyDown={handleKeyDown}
             data-testid="prompt-input"
             placeholder={
-              editTarget
-                ? `Describe how to edit the ${(editTarget.label ?? "section").toLowerCase()}...`
-                : "Describe your website..."
+              effectiveScopeChoice === "create"
+                ? "Describe your website..."
+                : effectiveScopeChoice === "section" && editTarget
+                  ? `Describe how to edit the ${(editTarget.label ?? "section").toLowerCase()}...`
+                  : effectiveScopeChoice === "page"
+                    ? `Edit the whole "${selectedPage?.title ?? "page"}" page...`
+                    : "Edit the entire website..."
             }
             disabled={isBusy}
             className="w-full resize-none rounded-2xl border border-border bg-base px-4 py-3 pr-12 text-sm text-text-primary placeholder:text-text-dim transition-all duration-200 focus:border-accent/40 focus:outline-none focus:ring-2 focus:ring-accent/10 disabled:opacity-50"
             style={{ maxHeight: "160px" }}
-            aria-label={editTarget ? "Edit instruction" : "Website description"}
+            aria-label={
+              effectiveScopeChoice === "create"
+                ? "Website description"
+                : "Website editing instruction"
+            }
           />
           <button
             onClick={handleSubmit}
             disabled={isBusy || !input.trim()}
             className="absolute bottom-3 right-3 flex h-8 w-8 items-center justify-center rounded-xl bg-accent text-white transition-all duration-200 hover:bg-accent-hover active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
-            aria-label={editTarget ? "Apply edit" : "Send message"}
+            aria-label={
+              effectiveScopeChoice === "create"
+                ? "Send message"
+                : effectiveScopeChoice === "section" && editTarget
+                  ? "Apply edit"
+                  : "Prepare plan"
+            }
           >
             {isBusy ? (
               <Loader2 className="h-4 w-4 animate-spin" />
-            ) : editTarget ? (
+            ) : effectiveScopeChoice === "create" ? (
+              <Send className="h-4 w-4" />
+            ) : effectiveScopeChoice === "section" && editTarget ? (
               <Wand2 className="h-4 w-4" />
             ) : (
-              <Send className="h-4 w-4" />
+              <LayoutList className="h-4 w-4" />
             )}
           </button>
         </div>
@@ -414,21 +562,47 @@ export function LeftSidebar() {
           {isBusy ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" />
-              {isEditing ? "Editing..." : "Generating..."}
+              {isEditing
+                ? "Editing..."
+                : planBusy
+                  ? "Planning..."
+                  : "Generating..."}
             </>
-          ) : editTarget ? (
-            <>
-              <Wand2 className="h-4 w-4" />
-              Apply Edit
-            </>
-          ) : (
+          ) : effectiveScopeChoice === "create" ? (
             <>
               <Sparkles className="h-4 w-4" />
               Generate
             </>
+          ) : effectiveScopeChoice === "section" && editTarget ? (
+            <>
+              <Wand2 className="h-4 w-4" />
+              Apply Edit
+            </>
+          ) : effectiveScopeChoice === "page" ? (
+            <>
+              <LayoutList className="h-4 w-4" />
+              Plan Page Edit
+            </>
+          ) : (
+            <>
+              <LayoutList className="h-4 w-4" />
+              Plan Website Edit
+            </>
           )}
         </button>
       </div>
+
+      {/* ---- Plan review dialog (Phase L) ---- */}
+      {/* Mounted only after the user asks to review — the summary card's
+          "Review Plan" button is the entry point, so the first-ever plan
+          never auto-opens the modal and steals focus/clicks. Once a review
+          has been opened, the panel stays mounted; dismissal is scoped per
+          plan id, so a regenerated plan (new id) opens fresh. Keyed by the
+          review signal so a second "Review Plan" click remounts the panel
+          with a fresh open state (dismissal never leaks). */}
+      {reviewSignal > 0 && (
+        <AiEditPlanReview key={reviewSignal} reopenKey={String(reviewSignal)} />
+      )}
     </aside>
   );
 }

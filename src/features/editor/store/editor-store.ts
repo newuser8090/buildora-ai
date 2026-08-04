@@ -28,6 +28,12 @@ import {
 } from "./page-structure";
 import { isSingletonSectionType, type SectionType } from "../section-library/types";
 import { createSectionId } from "../section-library/services/section-factory";
+import type {
+  AiEditApplyResult,
+  AiEditOperation,
+  AiEditPlan,
+} from "@/features/ai-editing/plan-types";
+import { simulatePlan } from "@/features/ai-editing/services/plan-simulator";
 
 // ---------------------------------------------------------------------------
 // Mutation result types
@@ -185,6 +191,13 @@ export interface EditorState {
   beginEditSession: () => void;
   commitEditSession: () => void;
   cancelEditSession: () => void;
+
+  // AI edit plan application (Phase L) — one atomic history entry
+  applyAiEditPlan: (
+    plan: AiEditPlan,
+    selectedOperationIds?: string[],
+    options?: { allowDestructive?: boolean },
+  ) => AiEditApplyResult;
 }
 
 // ---------------------------------------------------------------------------
@@ -645,6 +658,146 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       _editingSession: null,
       project: _editingSession.snapshot,
     });
+  },
+
+  // ---- AI edit plan application (Phase L) ----
+  //
+  // Applies all or a selection of a validated plan's operations as ONE
+  // atomic history entry. The full selected set is simulated on a clone
+  // first — no live mutation happens until the simulation succeeds.
+  // Revision, dirty flag, and autosave are handled by the controller's
+  // normal store subscription (one project-reference change → one revision).
+
+  applyAiEditPlan: (plan, selectedOperationIds, options) => {
+    const state = get();
+
+    // 1. Project identity
+    if (state.project.id !== plan.projectId) {
+      return {
+        ok: false,
+        error: {
+          code: "PLAN_PROJECT_MISMATCH",
+          message: "This plan was created for a different project.",
+        },
+      };
+    }
+
+    // 2. Stale revision guard — never silently apply a stale plan
+    if (state.revision !== plan.baseRevision) {
+      return {
+        ok: false,
+        error: {
+          code: "PLAN_STALE",
+          message:
+            "This project changed since the plan was created. Regenerate the plan to continue.",
+        },
+      };
+    }
+
+    // 3. Resolve the selected operations, preserving original plan order
+    let selected: AiEditOperation[];
+    if (selectedOperationIds) {
+      const idSet = new Set(selectedOperationIds);
+      const unknown = selectedOperationIds.filter(
+        (id) => !plan.operations.some((o) => o.id === id),
+      );
+      if (unknown.length > 0) {
+        return {
+          ok: false,
+          error: {
+            code: "PLAN_OPERATION_INVALID",
+            message: `Unknown operation ids: ${unknown.join(", ")}`,
+          },
+        };
+      }
+      // Dependency closure — a selected op's dependencies must be selected
+      const byId = new Map(plan.operations.map((o) => [o.id, o]));
+      for (const id of idSet) {
+        for (const dep of byId.get(id)?.dependsOn ?? []) {
+          if (!idSet.has(dep)) {
+            return {
+              ok: false,
+              error: {
+                code: "PLAN_DEPENDENCY_INVALID",
+                message: `Operation "${id}" depends on "${dep}", which is not selected.`,
+              },
+            };
+          }
+        }
+      }
+      selected = plan.operations.filter((o) => idSet.has(o.id));
+    } else {
+      selected = plan.operations;
+    }
+
+    // 4. No-op selection — no history entry
+    if (selected.length === 0) {
+      return {
+        ok: true,
+        changed: false,
+        applied: 0,
+        skipped: plan.operations.length,
+        operationResults: [],
+      };
+    }
+
+    // 5. Destructive confirmation guard (high-risk ops)
+    const hasDestructive = selected.some((o) => o.risk === "high");
+    if (hasDestructive && options?.allowDestructive !== true) {
+      return {
+        ok: false,
+        error: {
+          code: "PLAN_DESTRUCTIVE_CONFIRMATION_REQUIRED",
+          message:
+            "This plan contains destructive changes. Confirm them before applying.",
+        },
+      };
+    }
+
+    // 6. Simulate the entire selected set on a clone — never the live store
+    const simulation = simulatePlan(state.project, selected, {
+      captureSnapshots: false,
+    });
+    if (!simulation.ok) {
+      return {
+        ok: false,
+        error: simulation.error,
+      };
+    }
+
+    // 7. Commit the resulting project as ONE history entry
+    set(
+      withHistory(state, (project) => {
+        const result = JSON.parse(JSON.stringify(simulation.project)) as Project;
+        Object.assign(project, result);
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
+
+    // 8. Keep selection valid — page still exists? section still exists?
+    const after = useEditorStore.getState();
+    const pageExists = after.project.pages.some(
+      (p) => p.id === state.selectedPageId,
+    );
+    const selectedPageId = pageExists
+      ? state.selectedPageId
+      : (after.project.pages[0]?.id ?? null);
+    let selectedSectionId = state.selectedSectionId;
+    if (selectedSectionId) {
+      const sectionExists = after.project.pages
+        .flatMap((p) => p.sections)
+        .some((s) => s.id === selectedSectionId);
+      if (!sectionExists) selectedSectionId = null;
+    }
+    set({ selectedPageId, selectedSectionId });
+
+    return {
+      ok: true,
+      changed: true,
+      applied: selected.length,
+      skipped: plan.operations.length - selected.length,
+      operationResults: simulation.operationResults,
+    };
   },
 
   updateSection: (sectionId, updates) => {

@@ -435,6 +435,177 @@ describe("ProjectController — error recovery", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Phase L — AI edit plan application through the controller
+// ---------------------------------------------------------------------------
+
+describe("ProjectController — AI edit plan application", () => {
+  beforeEach(() => {
+    resetStore();
+  });
+
+  it("applyAiEditPlan increments revision once, marks dirty once, schedules autosave", async () => {
+    const adapter = createMockAdapter();
+    const seeded = makeProject({
+      id: "seed-plan",
+      name: "Seed",
+      pages: [
+        {
+          id: "p1",
+          title: "Home",
+          slug: "/",
+          sections: [
+            {
+              id: "s-hero",
+              type: "hero",
+              order: 1,
+              visible: true,
+              props: { headline: "Original", subheadline: "Sub", primaryCta: { text: "Go", href: "#" } },
+              styles: {},
+            },
+          ],
+        },
+      ],
+    });
+    await adapter.saveProject({ project: seeded, revision: 1 });
+    await adapter.setActiveProjectId("seed-plan");
+
+    const controller = new ProjectController(adapter);
+    await controller.initialize();
+    expect(useEditorStore.getState().revision).toBe(1);
+    expect(useEditorStore.getState().isDirty).toBe(false);
+
+    const plan = {
+      version: 1 as const,
+      id: "plan-1",
+      projectId: "seed-plan",
+      baseRevision: 1,
+      scope: { type: "page" as const, pageId: "p1" },
+      instruction: "Improve the page",
+      summary: "One change.",
+      operations: [
+        {
+          id: "op-1",
+          type: "update-section-props" as const,
+          pageId: "p1",
+          sectionId: "s-hero",
+          sectionType: "hero",
+          label: "Improve hero",
+          explanation: "Refreshes the hero copy.",
+          risk: "medium" as const,
+          nextProps: { headline: "Improved", subheadline: "Sub", primaryCta: { text: "Go", href: "#" } },
+        },
+      ],
+      warnings: [],
+      createdAt: new Date().toISOString(),
+      provider: "rule-based" as const,
+    };
+
+    try {
+      const result = useEditorStore.getState().applyAiEditPlan(plan);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      // The controller's store subscription reacts to the single project
+      // reference change: exactly one revision increment and one dirty mark.
+      await new Promise((r) => setTimeout(r, 10));
+
+      const state = useEditorStore.getState();
+      expect(state.revision).toBe(2);
+      expect(state.isDirty).toBe(true);
+      expect(
+        state.project.pages[0].sections.find((s) => s.id === "s-hero")?.props.headline,
+      ).toBe("Improved");
+
+      // One autosave schedule → the coordinator persists the new revision.
+      await controller.saveNow();
+      const afterSave = useEditorStore.getState();
+      expect(afterSave.isDirty).toBe(false);
+    } finally {
+      await controller.shutdown();
+    }
+  });
+
+  it("a stale plan (revision mismatch) is rejected without touching revision or dirty", async () => {
+    const adapter = createMockAdapter();
+    const seeded = makeProject({
+      id: "seed-stale",
+      name: "Seed",
+      pages: [
+        {
+          id: "p1",
+          title: "Home",
+          slug: "/",
+          sections: [
+            {
+              id: "s-hero",
+              type: "hero",
+              order: 1,
+              visible: true,
+              props: { headline: "Original", subheadline: "Sub", primaryCta: { text: "Go", href: "#" } },
+              styles: {},
+            },
+          ],
+        },
+      ],
+    });
+    await adapter.saveProject({ project: seeded, revision: 1 });
+    await adapter.setActiveProjectId("seed-stale");
+
+    const controller = new ProjectController(adapter);
+    await controller.initialize();
+
+    // An edit moves the project to revision 2 — the plan created at revision
+    // 1 is now stale.
+    useEditorStore.getState().setProject({
+      ...useEditorStore.getState().project,
+      name: "Edited",
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(useEditorStore.getState().revision).toBe(2);
+
+    const stalePlan = {
+      version: 1 as const,
+      id: "plan-stale",
+      projectId: "seed-stale",
+      baseRevision: 1,
+      scope: { type: "page" as const, pageId: "p1" },
+      instruction: "Hide the hero",
+      summary: "One change.",
+      operations: [
+        {
+          id: "op-1",
+          type: "set-section-visibility" as const,
+          pageId: "p1",
+          sectionId: "s-hero",
+          label: "Hide hero",
+          explanation: "Hides the hero.",
+          risk: "low" as const,
+          visible: false,
+        },
+      ],
+      warnings: [],
+      createdAt: new Date().toISOString(),
+      provider: "rule-based" as const,
+    };
+    try {
+      const result = useEditorStore.getState().applyAiEditPlan(stalePlan);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe("PLAN_STALE");
+
+      await new Promise((r) => setTimeout(r, 10));
+      const state = useEditorStore.getState();
+      expect(state.revision).toBe(2);
+      expect(state.project.name).toBe("Edited");
+      expect(
+        state.project.pages[0].sections.find((s) => s.id === "s-hero")?.visible,
+      ).toBe(true);
+    } finally {
+      await controller.shutdown();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Phase C.5 — Failed-flush transition safety
 // ---------------------------------------------------------------------------
 
