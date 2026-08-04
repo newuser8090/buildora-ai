@@ -2,6 +2,10 @@
 
 import { useSectionAssets } from "@/features/editor/hooks/useSectionAssets";
 import { resolveAsset } from "@/features/assets/services/asset-resolver";
+import {
+  EditableHeading,
+  EditableText,
+} from "@/features/inline-editing/components/EditableText";
 import type { BaseSection } from "@/types/section";
 import type { CtaSectionProps } from "@/types/section";
 
@@ -54,30 +58,38 @@ export function CtaSection({ section }: { section: BaseSection }) {
           zIndex: 1,
         }}
       >
-        <h2
+        <EditableHeading
+          section={section}
+          fieldId="cta.headline"
+          value={headline}
+          as="h2"
           style={{
             fontSize: "clamp(1.5rem, 3vw, 2.25rem)",
             fontWeight: 700,
             color: "#ffffff",
             marginBottom: subheadline ? "0.75rem" : "1.5rem",
           }}
-        >
-          {headline}
-        </h2>
+        />
 
         {subheadline && (
-          <p
+          <EditableText
+            section={section}
+            fieldId="cta.subheadline"
+            value={subheadline}
+            as="p"
             style={{
               fontSize: "1.0625rem",
               color: "rgba(255,255,255,0.8)",
               marginBottom: "2rem",
             }}
-          >
-            {subheadline}
-          </p>
+          />
         )}
 
-        <span
+        <EditableText
+          section={section}
+          fieldId="cta.ctaText"
+          value={ctaText}
+          as="span"
           style={{
             display: "inline-block",
             padding: "0.75rem 2rem",
@@ -88,9 +100,7 @@ export function CtaSection({ section }: { section: BaseSection }) {
             fontSize: "0.9375rem",
             cursor: "default",
           }}
-        >
-          {ctaText}
-        </span>
+        />
       </div>
     </section>
   );

@@ -1,6 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import {
+  EditableHeading,
+  EditableText,
+} from "@/features/inline-editing/components/EditableText";
 import type { BaseSection } from "@/types/section";
 import type { FaqSectionProps } from "@/types/section";
 
@@ -27,16 +31,18 @@ export function FaqSection({ section }: { section: BaseSection }) {
           textAlign: "center",
         }}
       >
-        <h2
+        <EditableHeading
+          section={section}
+          fieldId="faq.title"
+          value={title}
+          as="h2"
           style={{
             fontSize: "clamp(1.5rem, 3vw, 2.25rem)",
             fontWeight: 700,
             color: "var(--foreground, #0a0a0a)",
             marginBottom: "3rem",
           }}
-        >
-          {title}
-        </h2>
+        />
 
         <div style={{ textAlign: "left" }}>
           {items.map((item, i) => {
@@ -68,7 +74,13 @@ export function FaqSection({ section }: { section: BaseSection }) {
                     textAlign: "left",
                   }}
                 >
-                  {question}
+                  <EditableText
+                    section={section}
+                    fieldId="faq.question"
+                    index={i}
+                    value={question}
+                    as="span"
+                  />
                   <span
                     style={{
                       transition: "transform 200ms",
@@ -85,16 +97,19 @@ export function FaqSection({ section }: { section: BaseSection }) {
                 </button>
 
                 {openIndex === i && answer && (
-                  <p
+                  <EditableText
+                    section={section}
+                    fieldId="faq.answer"
+                    index={i}
+                    value={answer}
+                    as="p"
                     style={{
                       marginTop: "1rem",
                       fontSize: "0.9375rem",
                       lineHeight: 1.7,
                       color: "var(--muted-foreground, #737373)",
                     }}
-                  >
-                    {answer}
-                  </p>
+                  />
                 )}
               </div>
             );

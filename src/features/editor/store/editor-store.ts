@@ -34,6 +34,9 @@ import type {
   AiEditPlan,
 } from "@/features/ai-editing/plan-types";
 import { simulatePlan } from "@/features/ai-editing/services/plan-simulator";
+import { updateEditableField } from "@/features/inline-editing/services/field-update";
+import type { EditableFieldDescriptor } from "@/features/inline-editing/types";
+import type { InlineFieldUpdateResult } from "@/features/inline-editing/types";
 
 // ---------------------------------------------------------------------------
 // Mutation result types
@@ -198,6 +201,12 @@ export interface EditorState {
     selectedOperationIds?: string[],
     options?: { allowDestructive?: boolean },
   ) => AiEditApplyResult;
+
+  // Inline field update (Phase M) — one validated, atomic history entry
+  updateEditableFieldValue: (
+    descriptor: EditableFieldDescriptor,
+    nextValue: string,
+  ) => InlineFieldUpdateResult;
 }
 
 // ---------------------------------------------------------------------------
@@ -798,6 +807,36 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       skipped: plan.operations.length - selected.length,
       operationResults: simulation.operationResults,
     };
+  },
+
+  // ---- Inline field update (Phase M) ----
+  //
+  // Applies ONE validated field value as a single atomic history entry.
+  // The pure update service validates page/section/type/path/value and the
+  // resulting section schema before any live mutation happens. A no-op
+  // (unchanged value) skips history entirely.
+  //
+  // Revision, dirty flag, and autosave are handled by the controller's normal
+  // store subscription (one project-reference change → one revision).
+
+  updateEditableFieldValue: (descriptor, nextValue) => {
+    const state = get();
+
+    const result = updateEditableField(state.project, descriptor, nextValue);
+    if (!result.ok) return { ok: false, error: result.error };
+    if (!result.changed) return { ok: true, changed: false };
+
+    // Commit the resulting project as ONE history entry. Selection is
+    // preserved (selection is separate store state, untouched here).
+    set(
+      withHistory(state, (project) => {
+        const next = JSON.parse(JSON.stringify(result.project)) as Project;
+        Object.assign(project, next);
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
+
+    return { ok: true, changed: true };
   },
 
   updateSection: (sectionId, updates) => {

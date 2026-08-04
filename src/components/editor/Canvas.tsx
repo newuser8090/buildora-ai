@@ -7,6 +7,8 @@ import { useEditorStore } from "@/features/editor/store/editor-store";
 import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
 import { SectionRenderer } from "@/features/editor/renderer/SectionRenderer";
 import { scrollSectionIntoView } from "@/features/editor/utils/scroll-section-into-view";
+import { InlineEditLayer } from "@/features/inline-editing/components/InlineEditLayer";
+import { useInlineEditShortcuts } from "@/features/inline-editing/hooks/useInlineEditShortcuts";
 
 
 // ---------------------------------------------------------------------------
@@ -181,6 +183,9 @@ export function Canvas() {
     clearSelection();
   }, [clearSelection]);
 
+  // Inline editing (Phase M) — floating toolbar/popover layer + shortcuts.
+  useInlineEditShortcuts();
+
   // Selection sync — when a section is selected from the STRUCTURE panel (or
   // programmatically via insert/duplicate), scroll the canvas element into
   // view. Canvas-initiated clicks are excluded via selectionSource so we never
@@ -296,13 +301,16 @@ export function Canvas() {
                   }
                 `}</style>
               )}
-              <SectionRenderer sections={activePage.sections} />
+              <SectionRenderer sections={activePage.sections} pageId={activePage.id} />
             </>
           ) : (
             !isGenerating && <EmptyCanvasState />
           )}
         </div>
       </div>
+
+      {/* Inline editing layer (Phase M) — floats above the preview frame */}
+      <InlineEditLayer />
     </main>
   );
 }

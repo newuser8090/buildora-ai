@@ -24,8 +24,12 @@ async function getStructureOrder(page: Page) {
 
 /** Ordered visible section ids rendered on the canvas. */
 async function getCanvasOrder(page: Page) {
+  // Only the section-level wrapper carries a section id (SelectableSection);
+  // Phase M editable fields also use data-section-id, so exclude those.
   return page
-    .locator('[data-testid="preview-content"] [data-section-id]')
+    .locator(
+      '[data-testid="preview-content"] [data-testid="section-wrapper"], [data-testid="preview-content"] [data-testid="selected-section"]',
+    )
     .evaluateAll((els) =>
       els.map((el) => el.getAttribute("data-section-id") ?? ""),
     );

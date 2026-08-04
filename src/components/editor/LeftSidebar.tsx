@@ -20,6 +20,7 @@ import { useGeneration } from "@/features/generation/hooks/useGeneration";
 import { useAiEdit } from "@/features/ai-editing/hooks/useAiEdit";
 import { useAiPlanEdit } from "@/features/ai-editing/hooks/useAiPlanEdit";
 import { AiEditPlanReview } from "@/features/ai-editing/components/AiEditPlanReview";
+import { useInlineEdit } from "@/features/inline-editing/hooks/useInlineEdit";
 import { useChatStore } from "@/features/chat/store/chat-store";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { sectionLabel } from "@/features/ai-editing/rules/rule-based-editor";
@@ -71,6 +72,14 @@ export function LeftSidebar() {
   const [reviewSignal, setReviewSignal] = useState(0);
   const messages = useChatStore((s) => s.messages);
 
+  // Phase M — inline field context. When a field is selected, the composer
+  // routes to the quick inline suggestion flow (priority over section scope).
+  const {
+    selectedField,
+    suggest,
+    clearField,
+    isBusy: inlineBusy,
+  } = useInlineEdit();
   // Selected section → edit target. When a section is selected, chat messages
   // route to the AI-editing (modify) flow instead of full regeneration.
   const project = useEditorStore((s) => s.project);
@@ -139,12 +148,18 @@ export function LeftSidebar() {
     }
   }, [messagesLength, lastContent, isNearBottom]);
 
-  const isBusy = isLoading || isEditing || planBusy;
+  const isBusy = isLoading || isEditing || planBusy || inlineBusy;
 
   const handleSubmit = async () => {
     const prompt = input.trim();
     if (!prompt || isBusy) return;
     setInput("");
+    // Phase M inline priority applies in AUTO mode; an explicitly chosen
+    // scope (Section/Page/Website) always wins so Phase K/L flows stay intact.
+    if (selectedField && scopeChoice === "auto") {
+      await suggest(prompt);
+      return;
+    }
     if (effectiveScopeChoice === "create" || !selectedPageId) {
       // Create mode — full website generation (unchanged).
       await generate(prompt);
@@ -469,6 +484,49 @@ export function LeftSidebar() {
           </div>
         )}
 
+        {/* ---- Inline field chip (Phase M) — shown while a field is selected ---- */}
+        {selectedField && (
+          <div
+            data-testid="inline-field-chip"
+            className="mb-3 flex flex-col gap-1.5 rounded-xl border border-accent/25 bg-accent/[0.06] px-3 py-2"
+          >
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-3.5 w-3.5 shrink-0 text-accent" />
+              <span className="min-w-0 flex-1 truncate text-xs text-text-primary">
+                Editing:{" "}
+                <span className="font-medium text-accent">
+                  {selectedField.sectionType[0].toUpperCase() +
+                    selectedField.sectionType.slice(1)}{" "}
+                  → {selectedField.label}
+                </span>
+              </span>
+              <button
+                type="button"
+                onClick={clearField}
+                disabled={isBusy}
+                aria-label="Stop editing field"
+                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-text-dim transition-colors hover:bg-border hover:text-text-primary disabled:opacity-40"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+            <div className="flex items-center gap-1">
+              {["Shorter", "More premium", "Friendlier"].map((q) => (
+                <button
+                  key={q}
+                  type="button"
+                  onClick={() => void suggest(q)}
+                  disabled={isBusy}
+                  data-testid={`inline-quick-${q.replace(/ /g, "-").toLowerCase()}`}
+                  className="flex items-center gap-1 rounded-full border border-border bg-base px-2 py-0.5 text-[10px] font-medium text-text-muted transition-all duration-150 hover:border-accent/30 hover:text-accent active:scale-95 disabled:opacity-40"
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Edit-target chip — shown only in section scope (Phase K) */}
         {effectiveScopeChoice === "section" && editTarget && (
           <div
@@ -511,21 +569,25 @@ export function LeftSidebar() {
             onKeyDown={handleKeyDown}
             data-testid="prompt-input"
             placeholder={
-              effectiveScopeChoice === "create"
-                ? "Describe your website..."
-                : effectiveScopeChoice === "section" && editTarget
-                  ? `Describe how to edit the ${(editTarget.label ?? "section").toLowerCase()}...`
-                  : effectiveScopeChoice === "page"
-                    ? `Edit the whole "${selectedPage?.title ?? "page"}" page...`
-                    : "Edit the entire website..."
+              selectedField && scopeChoice === "auto"
+                ? `Ask AI to improve this ${selectedField.label.toLowerCase()}…`
+                : effectiveScopeChoice === "create"
+                  ? "Describe your website..."
+                  : effectiveScopeChoice === "section" && editTarget
+                    ? `Describe how to edit the ${(editTarget.label ?? "section").toLowerCase()}...`
+                    : effectiveScopeChoice === "page"
+                      ? `Edit the whole "${selectedPage?.title ?? "page"}" page...`
+                      : "Edit the entire website..."
             }
             disabled={isBusy}
             className="w-full resize-none rounded-2xl border border-border bg-base px-4 py-3 pr-12 text-sm text-text-primary placeholder:text-text-dim transition-all duration-200 focus:border-accent/40 focus:outline-none focus:ring-2 focus:ring-accent/10 disabled:opacity-50"
             style={{ maxHeight: "160px" }}
             aria-label={
-              effectiveScopeChoice === "create"
-                ? "Website description"
-                : "Website editing instruction"
+              selectedField && scopeChoice === "auto"
+                ? "Inline field instruction"
+                : effectiveScopeChoice === "create"
+                  ? "Website description"
+                  : "Website editing instruction"
             }
           />
           <button
@@ -533,15 +595,19 @@ export function LeftSidebar() {
             disabled={isBusy || !input.trim()}
             className="absolute bottom-3 right-3 flex h-8 w-8 items-center justify-center rounded-xl bg-accent text-white transition-all duration-200 hover:bg-accent-hover active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
             aria-label={
-              effectiveScopeChoice === "create"
-                ? "Send message"
-                : effectiveScopeChoice === "section" && editTarget
-                  ? "Apply edit"
-                  : "Prepare plan"
+              selectedField && scopeChoice === "auto"
+                ? "Improve field with AI"
+                : effectiveScopeChoice === "create"
+                  ? "Send message"
+                  : effectiveScopeChoice === "section" && editTarget
+                    ? "Apply edit"
+                    : "Prepare plan"
             }
           >
             {isBusy ? (
               <Loader2 className="h-4 w-4 animate-spin" />
+            ) : selectedField && scopeChoice === "auto" ? (
+              <Sparkles className="h-4 w-4" />
             ) : effectiveScopeChoice === "create" ? (
               <Send className="h-4 w-4" />
             ) : effectiveScopeChoice === "section" && editTarget ? (
@@ -564,9 +630,16 @@ export function LeftSidebar() {
               <Loader2 className="h-4 w-4 animate-spin" />
               {isEditing
                 ? "Editing..."
-                : planBusy
-                  ? "Planning..."
-                  : "Generating..."}
+                : inlineBusy
+                  ? "Improving..."
+                  : planBusy
+                    ? "Planning..."
+                    : "Generating..."}
+            </>
+          ) : selectedField && scopeChoice === "auto" ? (
+            <>
+              <Sparkles className="h-4 w-4" />
+              Improve Field
             </>
           ) : effectiveScopeChoice === "create" ? (
             <>

@@ -3,6 +3,10 @@
 import { useSectionAssets } from "@/features/editor/hooks/useSectionAssets";
 import { resolveAsset } from "@/features/assets/services/asset-resolver";
 import { ResolvedAssetImage } from "@/features/assets/components/ResolvedAssetImage";
+import {
+  EditableText,
+  EditableLinkText,
+} from "@/features/inline-editing/components/EditableText";
 import type { BaseSection } from "@/types/section";
 import type { FooterSectionProps } from "@/types/section";
 
@@ -49,21 +53,27 @@ export function FooterSection({ section }: { section: BaseSection }) {
             fallback={<span style={{ fontSize: "0.875rem", color: "var(--muted-foreground, #737373)" }}>{text}</span>}
           />
         ) : (
-          <span
+          <EditableText
+            section={section}
+            fieldId="footer.text"
+            value={text}
+            as="span"
             style={{
               fontSize: "0.875rem",
               color: "var(--muted-foreground, #737373)",
             }}
-          >
-            {text}
-          </span>
+          />
         )}
 
         {links.length > 0 && (
           <nav style={{ display: "flex", gap: "1.5rem" }}>
             {links.map((link, idx) => (
-              <span
+              <EditableLinkText
                 key={typeof link.text === "string" ? link.text : `link-${idx}`}
+                section={section}
+                fieldId="footer.links.text"
+                index={idx}
+                value={typeof link.text === "string" ? link.text : "Link"}
                 style={{
                   fontSize: "0.875rem",
                   color: "var(--muted-foreground, #737373)",
@@ -78,9 +88,7 @@ export function FooterSection({ section }: { section: BaseSection }) {
                   (e.target as HTMLElement).style.color =
                     "var(--muted-foreground, #737373)";
                 }}
-              >
-                {typeof link.text === "string" ? link.text : "Link"}
-              </span>
+              />
             ))}
           </nav>
         )}

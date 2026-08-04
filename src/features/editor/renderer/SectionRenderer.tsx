@@ -3,6 +3,7 @@ import { sectionRegistry } from "@/features/editor/registry/section-registry";
 import { SelectableSection } from "@/features/editor/components/SelectableSection";
 import { ErrorBoundary } from "@/features/editor/components/ErrorBoundary";
 import { validateSectionSafe } from "@/features/editor/schemas/section-schemas";
+import { InlineEditPageProvider } from "@/features/inline-editing/context/InlineEditPageContext";
 import type { BaseSection } from "@/types/section";
 import type { ReactNode } from "react";
 
@@ -12,6 +13,8 @@ import type { ReactNode } from "react";
 
 export interface SectionRendererProps {
   sections: BaseSection[];
+  /** Active page id — enables inline editing bindings inside the preview. */
+  pageId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -75,7 +78,7 @@ function ValidatedSectionRenderer({ section }: { section: BaseSection }) {
  * Every section is validated against its **section-specific Zod schema**
  * before rendering to catch malformed data.
  */
-export function SectionRenderer({ sections }: SectionRendererProps) {
+export function SectionRenderer({ sections, pageId }: SectionRendererProps) {
   const visible = sections
     .filter((s) => s.visible)
     .sort((a, b) => a.order - b.order);
@@ -97,14 +100,19 @@ export function SectionRenderer({ sections }: SectionRendererProps) {
     );
   }
 
-  return (
-    <>
-      {visible.map((section) => (
-        <SelectableSection key={section.id} section={section}>
-          <ValidatedSectionRenderer section={section} />
-        </SelectableSection>
-      ))}
-    </>
+  const content = visible.map((section) => (
+    <SelectableSection key={section.id} section={section}>
+      <ValidatedSectionRenderer section={section} />
+    </SelectableSection>
+  ));
+
+  // The page context powers inline field bindings in the editor preview.
+  // Absent (thumbnails), section components render plain text with no
+  // data attributes or handlers.
+  return pageId ? (
+    <InlineEditPageProvider pageId={pageId}>{content}</InlineEditPageProvider>
+  ) : (
+    <>{content}</>
   );
 }
 

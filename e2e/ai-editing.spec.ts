@@ -126,6 +126,11 @@ test.describe("AI editing", () => {
     await preview.getByText("Hero Title").click();
     await expect(page.locator('[data-testid="edit-target-chip"]')).toBeVisible();
 
+    // Phase M: clicking a text element also selects an inline field, so the
+    // composer routes to inline suggestions in auto mode. Explicitly choosing
+    // the Section scope keeps the Phase K modify flow active.
+    await page.locator('[data-testid="ai-scope-section"]').click();
+
     await page.locator('[data-testid="prompt-input"]').fill("Make it more playful");
     await page.keyboard.press("Enter");
 
