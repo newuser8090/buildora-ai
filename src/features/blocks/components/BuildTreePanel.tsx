@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { cn } from "@/utils/cn";
 import {
   ChevronRight,
+  Code2,
   Copy,
   Eye,
   EyeOff,
@@ -25,6 +26,7 @@ import {
   propsFingerprint,
 } from "@/features/blocks/adapters/section-block-adapter";
 import { rootIdOf } from "../engine/tree-traversal";
+import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
 import type { BlockNode, BlockTree } from "../types";
 import { getGuidedSectionLabel } from "@/features/guided-builder/registry/guided-section-language";
 import type { BlockOperations } from "../hooks/useBlockOperations";
@@ -349,20 +351,43 @@ export function BuildTreePanel() {
             Build Tree
           </h3>
         </div>
-        <button
-          type="button"
-          data-testid="open-block-browser"
-          onClick={() => {
-            const root = forest.rootIds[0];
-            if (root) {
-              openBrowser({ pageId: selectedPageId ?? "", sectionId: root });
-            }
-          }}
-          className="flex items-center gap-1 rounded-lg bg-accent/10 px-2 py-1 text-[11px] font-medium text-accent transition-colors hover:bg-accent/20 active:scale-95"
-        >
-          <Plus className="h-3 w-3" />
-          Add block
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            data-testid="build-tree-import-code"
+            onClick={() => {
+              const root = selectedBlockId && rootIdOf(forest, selectedBlockId)
+                ? rootIdOf(forest, selectedBlockId)
+                : forest.rootIds[0];
+              if (!root) return;
+              useEditorUiStore.getState().openCodeImportDialog({
+                pageId: selectedPageId ?? "",
+                sectionId: root,
+                // When a block inside the tree is selected, prefer it as the
+                // placement target ("import into selected block").
+                parentBlockId: selectedBlockId && selectedBlockId !== root ? selectedBlockId : undefined,
+              });
+            }}
+            className="flex items-center gap-1 rounded-lg border border-border/60 px-2 py-1 text-[11px] font-medium text-text-muted transition-colors hover:bg-card hover:text-text-primary active:scale-95"
+          >
+            <Code2 className="h-3 w-3" />
+            Import code
+          </button>
+          <button
+            type="button"
+            data-testid="open-block-browser"
+            onClick={() => {
+              const root = forest.rootIds[0];
+              if (root) {
+                openBrowser({ pageId: selectedPageId ?? "", sectionId: root });
+              }
+            }}
+            className="flex items-center gap-1 rounded-lg bg-accent/10 px-2 py-1 text-[11px] font-medium text-accent transition-colors hover:bg-accent/20 active:scale-95"
+          >
+            <Plus className="h-3 w-3" />
+            Add block
+          </button>
+        </div>
       </div>
 
       {sessionCount > 0 && (

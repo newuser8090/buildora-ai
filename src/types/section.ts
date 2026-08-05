@@ -12,6 +12,8 @@ export interface BaseSection {
 }
 
 import type { AssetRef } from "@/features/assets/types";
+import type { BlockTree } from "@/features/blocks/types";
+import type { ImportedCodeLanguage } from "@/features/code-import/types";
 
 // ---------------------------------------------------------------------------
 // Typed props for each known section type
@@ -89,6 +91,23 @@ export interface FooterSectionProps {
   logoImage?: AssetRef;
 }
 
+export interface CustomBlockSourceMetadataProps {
+  language: ImportedCodeLanguage;
+  importedAt: string;
+  sourceHash: string;
+  converterVersion: number;
+  warningCount: number;
+}
+
+export interface CustomBlockSectionProps {
+  /** Friendly name shown in the build tree and inspector. */
+  name: string;
+  /** The editable BlockTree — the persistent result of an import. */
+  tree: BlockTree;
+  /** Safe metadata only — the pasted source code itself is never stored. */
+  sourceMetadata?: CustomBlockSourceMetadataProps;
+}
+
 // ---------------------------------------------------------------------------
 // Section props map — maps section type strings to their typed props
 // ---------------------------------------------------------------------------
@@ -101,6 +120,7 @@ export interface SectionPropsMap {
   faq: FaqSectionProps;
   cta: CtaSectionProps;
   footer: FooterSectionProps;
+  "custom-block": CustomBlockSectionProps;
 }
 
 // Convenience type for a section with known typed props

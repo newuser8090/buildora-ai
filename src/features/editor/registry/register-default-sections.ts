@@ -9,6 +9,8 @@ import { PricingSection } from "@/features/editor/sections/PricingSection";
 import { FaqSection } from "@/features/editor/sections/FaqSection";
 import { CtaSection } from "@/features/editor/sections/CtaSection";
 import { FooterSection } from "@/features/editor/sections/FooterSection";
+import { CustomBlockSection } from "@/features/editor/sections/CustomBlockSection";
+import { CUSTOM_BLOCK_SECTION_TYPE } from "@/features/code-import/schemas/custom-block-schema";
 
 /**
  * Client component that registers all built-in section types.
@@ -24,6 +26,7 @@ export function useRegisterDefaultSections() {
       ["faq", FaqSection],
       ["cta", CtaSection],
       ["footer", FooterSection],
+      [CUSTOM_BLOCK_SECTION_TYPE, CustomBlockSection],
     ]);
   }, []);
 }

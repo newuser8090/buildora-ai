@@ -6,6 +6,7 @@ import { generatePricingComponent } from "./pricing-generator";
 import { generateFaqComponent } from "./faq-generator";
 import { generateCtaComponent } from "./cta-generator";
 import { generateFooterComponent } from "./footer-generator";
+import { generateCustomBlockComponent } from "./custom-block-generator";
 
 // ---------------------------------------------------------------------------
 // Section generator registry — maps type string to generator function
@@ -24,9 +25,19 @@ const sectionGenerators: Record<string, SectionGenerator> = {
   faq: generateFaqComponent,
   cta: generateCtaComponent,
   footer: generateFooterComponent,
+  "custom-block": generateCustomBlockComponent,
 };
 
-export { generateHeaderComponent, generateHeroComponent, generateFeaturesComponent, generatePricingComponent, generateFaqComponent, generateCtaComponent, generateFooterComponent };
+export {
+  generateHeaderComponent,
+  generateHeroComponent,
+  generateFeaturesComponent,
+  generatePricingComponent,
+  generateFaqComponent,
+  generateCtaComponent,
+  generateFooterComponent,
+  generateCustomBlockComponent,
+};
 
 /** Get a section generator by type. Returns undefined for unknown types. */
 export function getSectionGenerator(type: string): SectionGenerator | undefined {

@@ -16,8 +16,14 @@
 
 import type { BaseSection } from "@/types/section";
 import { validateSectionSafe } from "@/features/editor/schemas/section-schemas";
+import {
+  CustomBlockSectionPropsSchema,
+  normalizeCustomBlockTree,
+  validateCustomBlockTree,
+} from "@/features/code-import/schemas/custom-block-schema";
 import { createBlock } from "../engine/block-operations";
 import { allNodes } from "../engine/tree-traversal";
+import { validateTree } from "../engine/nesting-rules";
 import type { BlockNode, BlockResult, BlockTree, BlockType } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -284,11 +290,117 @@ export function bindingsForSection(section: BaseSection): BlockFieldBinding[] {
 }
 
 // ---------------------------------------------------------------------------
+// Custom-block sections (Phase P3) — persistent free-form BlockTrees
+// ---------------------------------------------------------------------------
+
+/** True when a section is a persisted custom-block (imported design). */
+export function isCustomBlockSection(section: BaseSection): boolean {
+  return section.type === "custom-block";
+}
+
+/** Deep-clone a tree node (plain JSON clone keeps it serialization-safe). */
+function cloneNodeDeep(node: BlockNode): BlockNode {
+  return JSON.parse(JSON.stringify(node)) as BlockNode;
+}
+
+/** Deep-clone a whole tree. */
+function cloneTreeDeep(tree: BlockTree): BlockTree {
+  const nodes: Record<string, BlockNode> = {};
+  for (const [id, node] of Object.entries(tree.nodes)) {
+    nodes[id] = cloneNodeDeep(node);
+  }
+  return { rootIds: [...tree.rootIds], nodes };
+}
+
+/**
+ * Project a custom-block section into a one-root BlockTree.
+ *
+ * The stored tree IS the editable model: it is deep-cloned (never mutated),
+ * normalized defensively, and re-rooted so the section id is the root block
+ * id (the invariant the build tree and rootIdOf rely on). Internal marker
+ * props are (re)applied on the projected root only.
+ */
+export function customBlockTreeFromSection(section: BaseSection): BlockTree {
+  const normalized = normalizeCustomBlockTree(section.props.tree);
+  if (!normalized || normalized.rootIds.length === 0) {
+    // Unrecoverable/missing tree — project a minimal container so the section
+    // still renders and remains selectable in the build tree.
+    const root = createBlock("container", { id: section.id });
+    root.props = {
+      ...root.props,
+      name: typeof section.props.name === "string" ? section.props.name : "Imported design",
+      [ROOT_SECTION_TYPE_KEY]: "custom-block",
+      [ROOT_SECTION_ID_KEY]: section.id,
+    };
+    root.style = { ...(section.styles ?? {}) };
+    return { rootIds: [root.id], nodes: { [root.id]: root } };
+  }
+
+  const tree = cloneTreeDeep(normalized);
+  const sectionRootId = section.id;
+  const roots = tree.rootIds;
+
+  // Guarantee exactly one root: re-root the first root to the section id, or
+  // wrap multiple roots in a fresh container root.
+  let remap: Map<string, string> = new Map();
+  if (roots.length === 1) {
+    const only = roots[0];
+    if (only !== sectionRootId) {
+      remap = new Map([[only, sectionRootId]]);
+    }
+  } else {
+    const wrapper = createBlock("container", { id: sectionRootId });
+    wrapper.children = roots;
+    tree.nodes[sectionRootId] = wrapper;
+    tree.rootIds = [sectionRootId];
+    for (const childId of roots) {
+      const child = tree.nodes[childId];
+      if (child) child.parentId = sectionRootId;
+    }
+  }
+
+  if (remap.size > 0) {
+    const next: Record<string, BlockNode> = {};
+    for (const [id, node] of Object.entries(tree.nodes)) {
+      const nextId = remap.get(id) ?? id;
+      next[nextId] = {
+        ...node,
+        id: nextId,
+        parentId: node.parentId === null ? null : (remap.get(node.parentId) ?? node.parentId),
+        children: node.children.map((c) => remap.get(c) ?? c),
+      };
+    }
+    tree.nodes = next;
+    tree.rootIds = [sectionRootId];
+  }
+
+  const root = tree.nodes[sectionRootId];
+  if (root) {
+    root.props = {
+      ...root.props,
+      [ROOT_SECTION_TYPE_KEY]: "custom-block",
+      [ROOT_SECTION_ID_KEY]: section.id,
+      name:
+        typeof section.props.name === "string" && section.props.name.trim().length > 0
+          ? section.props.name
+          : (root.props.name ?? "Imported design"),
+    };
+    root.style = { ...(section.styles ?? {}), ...root.style };
+  }
+
+  return tree;
+}
+
+// ---------------------------------------------------------------------------
 // section → block tree
 // ---------------------------------------------------------------------------
 
 /** Project a section into a one-root block tree (Container root + bound children). */
 export function sectionToBlockTree(section: BaseSection): BlockTree {
+  if (isCustomBlockSection(section)) {
+    return customBlockTreeFromSection(section);
+  }
+
   const root = createBlock("container", { id: section.id });
   root.props = {
     ...root.props,
@@ -344,6 +456,116 @@ export function boundBlockId(
 // block tree → section
 // ---------------------------------------------------------------------------
 
+/** Strip internal `_`-prefixed marker props (binding/section markers). */
+function stripInternalProps(tree: BlockTree): BlockTree {
+  const nodes: Record<string, BlockNode> = {};
+  for (const [id, node] of Object.entries(tree.nodes)) {
+    const props: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(node.props)) {
+      if (key.startsWith("_")) continue;
+      props[key] = value;
+    }
+    nodes[id] = { ...node, props };
+  }
+  return { rootIds: [...tree.rootIds], nodes };
+}
+
+/**
+ * Fold a custom-block section's whole tree back into its props.
+ *
+ * - deep-clones the tree (no shared references)
+ * - re-roots to the section id (the stored root is always the section)
+ * - strips internal marker props before persistence
+ * - validates structurally (custom-block schema) AND against the Phase O
+ *   engine (nesting rules, registry types, tree invariants)
+ * - syncs the section name with the root block name
+ * - returns appliedFields: 0 when nothing changed (skips history)
+ */
+function foldCustomBlockTree(
+  tree: BlockTree,
+  original: BaseSection,
+): BlockResult<BlockCommitResult> {
+  const rootId = tree.rootIds[0];
+  if (!rootId || !tree.nodes[rootId]) {
+    return {
+      ok: false,
+      error: { code: "INVALID_TREE", message: "The block tree has no root." },
+    };
+  }
+
+  // Deep clone, strip internal markers, re-root to the section id.
+  let nextTree = stripInternalProps(cloneTreeDeep(tree));
+  if (rootId !== original.id) {
+    const remap = new Map<string, string>([[rootId, original.id]]);
+    const nodes: Record<string, BlockNode> = {};
+    for (const [id, node] of Object.entries(nextTree.nodes)) {
+      const nextId = remap.get(id) ?? id;
+      nodes[nextId] = {
+        ...node,
+        id: nextId,
+        parentId: node.parentId === null ? null : (remap.get(node.parentId) ?? node.parentId),
+        children: node.children.map((c) => remap.get(c) ?? c),
+      };
+    }
+    nextTree = { rootIds: [original.id], nodes };
+  }
+
+  // Structural validation.
+  const structural = validateCustomBlockTree(nextTree);
+  if (!structural.valid) {
+    return {
+      ok: false,
+      error: { code: "INVALID_TREE", message: structural.problems[0]?.message ?? "Invalid block tree." },
+    };
+  }
+  // Engine validation (nesting rules + registry types).
+  const engine = validateTree(nextTree);
+  if (!engine.valid) {
+    return {
+      ok: false,
+      error: { code: "INVALID_TREE", message: engine.problems[0]?.message ?? "Invalid block tree." },
+    };
+  }
+
+  const root = nextTree.nodes[original.id];
+  const rootName = root?.props.name;
+  const nextName =
+    typeof rootName === "string" && rootName.trim().length > 0
+      ? rootName.trim().slice(0, 80)
+      : (typeof original.props.name === "string" ? original.props.name : "Imported design");
+
+  const candidateProps = {
+    ...original.props,
+    name: nextName,
+    tree: nextTree,
+  };
+  const propsValidation = CustomBlockSectionPropsSchema.safeParse(candidateProps);
+  if (!propsValidation.success) {
+    const message = propsValidation.error.issues
+      .map((issue) => issue.path.join(".") + ": " + issue.message)
+      .join("; ");
+    return {
+      ok: false,
+      error: { code: "INVALID_TREE", message: `Folded custom block failed validation: ${message}` },
+    };
+  }
+
+  if (JSON.stringify(original.props) === JSON.stringify(candidateProps)) {
+    return { ok: true, value: { section: original, appliedFields: 0, warnings: [] } };
+  }
+
+  const section: BaseSection = {
+    id: original.id,
+    type: original.type,
+    order: original.order,
+    visible: original.visible,
+    props: candidateProps,
+    styles: original.styles,
+  };
+
+  return { ok: true, value: { section, appliedFields: 1, warnings: [] } };
+}
+
 export interface BlockCommitResult {
   /** The folded section (validated). */
   section: BaseSection;
@@ -389,6 +611,14 @@ export function blockTreeToSection(
   tree: BlockTree,
   original: BaseSection,
 ): BlockResult<BlockCommitResult> {
+  // Custom-block sections persist the WHOLE tree — structural edits, style
+  // edits, renames, text and visibility changes all fold back in one go.
+  // The folded tree is validated structurally AND against the Phase O engine
+  // before anything is written back.
+  if (isCustomBlockSection(original)) {
+    return foldCustomBlockTree(tree, original);
+  }
+
   const root = tree.nodes[tree.rootIds[0]];
   if (!root) {
     return { ok: false, error: { code: "INVALID_TREE", message: "The block tree has no root." } };

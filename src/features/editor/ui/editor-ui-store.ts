@@ -7,6 +7,8 @@
 
 import { create } from "zustand";
 import type { SectionInsertPosition } from "@/features/editor/store/section-structure";
+import { useCodeImportStore } from "@/features/code-import/store/code-import-store";
+import type { ImportInsertionTarget } from "@/features/code-import/store/code-import-store";
 
 export type RightSidebarTab = "structure" | "design" | "blocks";
 
@@ -34,6 +36,10 @@ interface EditorUiState {
    */
   selectionSource: "canvas" | "structure" | null;
   setSelectionSource: (source: "canvas" | "structure" | null) => void;
+
+  // ---- Import Studio (Phase P3) — opens the shared CodeImportDialog ----
+  openCodeImportDialog: (target?: ImportInsertionTarget | null) => void;
+  closeCodeImportDialog: () => void;
 }
 
 export const useEditorUiStore = create<EditorUiState>()((set) => ({
@@ -60,4 +66,11 @@ export const useEditorUiStore = create<EditorUiState>()((set) => ({
 
   selectionSource: null,
   setSelectionSource: (source) => set({ selectionSource: source }),
+
+  openCodeImportDialog: (target) => {
+    useCodeImportStore.getState().openDialog(target ?? null);
+  },
+  closeCodeImportDialog: () => {
+    useCodeImportStore.getState().closeDialog();
+  },
 }));
