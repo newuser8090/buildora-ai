@@ -1,5 +1,9 @@
 import { z } from "zod";
 import { AssetRefSchema } from "@/features/assets/schemas/asset-schema";
+import {
+  CUSTOM_BLOCK_SECTION_TYPE,
+  CustomBlockSectionPropsSchema,
+} from "@/features/code-import/schemas/custom-block-schema";
 
 // ---------------------------------------------------------------------------
 // Canonical link item schema
@@ -147,6 +151,11 @@ export const FooterSectionSchema = BaseSectionSchema.extend({
   props: FooterSectionPropsSchema,
 });
 
+export const CustomBlockSectionSchema = BaseSectionSchema.extend({
+  type: z.literal(CUSTOM_BLOCK_SECTION_TYPE),
+  props: CustomBlockSectionPropsSchema,
+});
+
 // ---------------------------------------------------------------------------
 // Discriminated union — the canonical validation for all section types
 // ---------------------------------------------------------------------------
@@ -159,6 +168,7 @@ export const AnySectionSchema = z.discriminatedUnion("type", [
   FaqSectionSchema,
   CtaSectionSchema,
   FooterSectionSchema,
+  CustomBlockSectionSchema,
 ]);
 
 // ---------------------------------------------------------------------------
@@ -195,4 +205,5 @@ export type ValidatedPricingSection = z.infer<typeof PricingSectionSchema>;
 export type ValidatedFaqSection = z.infer<typeof FaqSectionSchema>;
 export type ValidatedCtaSection = z.infer<typeof CtaSectionSchema>;
 export type ValidatedFooterSection = z.infer<typeof FooterSectionSchema>;
+export type ValidatedCustomBlockSection = z.infer<typeof CustomBlockSectionSchema>;
 export type ValidatedAnySection = z.infer<typeof AnySectionSchema>;

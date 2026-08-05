@@ -21,6 +21,7 @@ import { AddSectionDialog } from "@/features/editor/components/AddSectionDialog"
 import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
 import { CommandPalette } from "@/features/guided-builder/components/CommandPalette";
 import { TryGuidedBanner } from "@/features/guided-builder/components/TryGuidedBanner";
+import { CodeImportDialog } from "@/features/code-import/components/CodeImportDialog";
 import { getProjectController } from "@/features/persistence/services/project-controller";
 import { ensureProjectController } from "@/features/persistence/hooks/useProjectController";
 import { useEditorStore } from "@/features/editor/store/editor-store";
@@ -285,6 +286,9 @@ function EditorShell() {
       {/* Phase N: beginner command palette (Ctrl/Cmd+K) + Try Guided banner */}
       <CommandPalette />
       <TryGuidedBanner />
+
+      {/* Phase P3: Import Studio — one canonical dialog for every entry point */}
+      <CodeImportDialog />
     </>
   );
 }

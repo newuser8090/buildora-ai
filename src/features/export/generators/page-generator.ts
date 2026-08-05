@@ -27,6 +27,7 @@ const SECTION_COMPONENTS: Record<string, SectionComponentInfo> = {
   faq:      { importPath: "@/components/sections/faq",      componentName: "Faq" },
   cta:      { importPath: "@/components/sections/cta",      componentName: "Cta" },
   footer:   { importPath: "@/components/sections/footer",   componentName: "Footer" },
+  "custom-block": { importPath: "@/components/sections/custom-block", componentName: "CustomBlock" },
 };
 
 // ---------------------------------------------------------------------------

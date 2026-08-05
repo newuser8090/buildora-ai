@@ -79,6 +79,12 @@ const REGISTRY: Record<SectionType, EditableFieldDefinition[]> = {
   faq: FAQ_FIELDS,
   cta: CTA_FIELDS,
   footer: FOOTER_FIELDS,
+  // custom-block text lives inside the BlockTree at arbitrary depth, so
+  // section-level field paths cannot describe it. Inline text editing for
+  // custom-block flows through the block editor store (useBlockOperations
+  // → updateBlockText), which persists edits into props.tree — no registry
+  // entries needed here.
+  "custom-block": [],
 };
 
 // ---------------------------------------------------------------------------

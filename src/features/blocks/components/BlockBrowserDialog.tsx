@@ -10,6 +10,7 @@ import { useBlockOperations } from "../hooks/useBlockOperations";
 import { BlockIcon } from "./BlockIcon";
 import { bindingsForSection } from "../adapters/section-block-adapter";
 import { useEditorStore } from "@/features/editor/store/editor-store";
+import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
 
 // ---------------------------------------------------------------------------
 // Friendly categories for the browser (plain-language, Phase O)
@@ -161,6 +162,17 @@ export function BlockBrowserDialog() {
     closeBrowser();
   };
 
+  const openImport = () => {
+    // Open the shared Import Studio with the current insertion target so the
+    // placement step can suggest "inside this design" where valid.
+    useEditorUiStore.getState().openCodeImportDialog({
+      pageId: target.pageId,
+      sectionId: target.sectionId,
+      parentBlockId: target.parentId,
+    });
+    closeBrowser();
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
@@ -259,6 +271,32 @@ export function BlockBrowserDialog() {
             })}
           </div>
         )}
+
+        {/* Import code — Phase P3 entry point */}
+        <div className="border-b border-border px-4 py-3">
+          <button
+            type="button"
+            data-testid="browser-import-code"
+            onClick={openImport}
+            className="group flex w-full items-center gap-3 rounded-xl border border-dashed border-accent/30 bg-accent/5 p-3 text-left transition-all duration-200 hover:border-accent/50 hover:bg-accent/10"
+          >
+            <span className="flex h-8 w-8 flex-none items-center justify-center rounded-lg bg-accent/15">
+              <Sparkles className="h-4 w-4 text-accent" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-xs font-semibold text-text-primary group-hover:text-accent">
+                Import code
+              </span>
+              <span className="mt-0.5 block text-[10px] leading-relaxed text-text-dim">
+                Paste HTML, JSX, React or Tailwind and turn it into editable
+                building blocks
+              </span>
+            </span>
+            <span className="flex-none rounded-lg bg-accent/10 px-2 py-1 text-[10px] font-semibold text-accent">
+              Open
+            </span>
+          </button>
+        </div>
 
         {/* Grid */}
         <div className="min-h-0 flex-1 overflow-y-auto p-4">

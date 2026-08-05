@@ -11,8 +11,9 @@
 "use client";
 
 import { useMemo } from "react";
-import { Sparkles, LayoutGrid } from "lucide-react";
+import { Sparkles, LayoutGrid, ClipboardPaste } from "lucide-react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
+import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
 import { useGuidedActions } from "../hooks/useGuidedActions";
 import {
   getGuidedSectionExample,
@@ -52,6 +53,11 @@ export function GuidedStartScreen({
   }, [pages, pageId]);
   const { addBlock, browseBlocks, askAi } = useGuidedActions();
 
+  const openImport = () => {
+    // Phase P3 — "Bring your own design" opens the shared Import Studio.
+    useEditorUiStore.getState().openCodeImportDialog({ pageId });
+  };
+
   const handleAdd = (sectionType: SectionType) => {
     const ids = existingSectionIds;
     void addBlock(pageId, sectionType, { type: "end" }, ids);
@@ -81,6 +87,15 @@ export function GuidedStartScreen({
             </button>
           );
         })}
+        <button
+          type="button"
+          data-testid="guided-start-import"
+          onClick={openImport}
+          className="flex h-8 items-center gap-1.5 rounded-full border border-dashed border-accent/40 bg-accent/5 px-3 text-xs font-medium text-text-primary transition-all duration-200 hover:border-accent/60 hover:bg-accent/10 active:scale-95"
+        >
+          <ClipboardPaste className="h-3 w-3 text-accent" />
+          Bring your own design
+        </button>
         <button
           type="button"
           data-testid="guided-start-browse"
@@ -140,6 +155,16 @@ export function GuidedStartScreen({
       </div>
 
       <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
+        <button
+          type="button"
+          data-testid="guided-start-import"
+          onClick={openImport}
+          title="Paste something you found or created elsewhere, and Buildora will turn the parts it understands into editable building blocks."
+          className="flex h-9 items-center gap-2 rounded-lg border border-dashed border-accent/40 bg-accent/5 px-4 text-sm font-medium text-text-primary transition-all duration-200 hover:border-accent/60 hover:bg-accent/10 active:scale-95"
+        >
+          <ClipboardPaste className="h-4 w-4 text-accent" />
+          Bring your own design
+        </button>
         <button
           type="button"
           data-testid="guided-start-browse"

@@ -33,8 +33,30 @@ function buildCommands(handlers: {
   setHasExported: (v: boolean) => void;
   undo: () => void;
   askAi: (scope?: "create" | "section" | "page" | "project") => void;
+  importCode: () => void;
 }): PaletteCommand[] {
   return [
+    {
+      id: "import-code",
+      label: "Import copied code",
+      keywords: [
+        "import",
+        "paste",
+        "code",
+        "component",
+        "html",
+        "react",
+        "tailwind",
+        "design",
+        "bring",
+        "copied",
+        "button",
+        "section",
+        "jsx",
+      ],
+      hint: "Turn pasted code into editable blocks",
+      run: () => handlers.importCode(),
+    },
     {
       id: "add-something",
       label: "Add something",
@@ -243,6 +265,14 @@ export function CommandPalette() {
   const setHasPreviewedMobile = useGuidedBuilderStore((s) => s.setHasPreviewedMobile);
   const setHasExported = useGuidedBuilderStore((s) => s.setHasExported);
   const { browseBlocks, askAi } = useGuidedActions();
+  const selectedPageId = useEditorStore((s) => s.selectedPageId);
+
+  const importCode = useCallback(() => {
+    // Phase P3 — opens the shared Import Studio.
+    useEditorUiStore.getState().openCodeImportDialog(
+      selectedPageId ? { pageId: selectedPageId } : null,
+    );
+  }, [selectedPageId]);
 
   const commands = useMemo(
     () =>
@@ -255,6 +285,7 @@ export function CommandPalette() {
         setHasExported,
         undo,
         askAi,
+        importCode,
       }),
     [
       browseBlocks,
@@ -265,6 +296,7 @@ export function CommandPalette() {
       setHasExported,
       undo,
       askAi,
+      importCode,
     ],
   );
 

@@ -26,6 +26,7 @@ import {
   deleteGroupFromProps,
   duplicateGroupInProps,
   extractSectionTree,
+  isCustomBlockSection,
   propsFingerprint,
   validatePropsChange,
 } from "../adapters/section-block-adapter";
@@ -97,6 +98,25 @@ export function useBlockOperations(pageId: string | null): BlockOperations {
     [setSessionTree],
   );
 
+  /**
+   * Persist a whole-tree change for a custom-block section through the editor
+   * store (ONE atomic history entry). The folded tree is validated by the
+   * custom-block schema + Phase O engine inside commitBlockTree.
+   */
+  const commitCustom = useCallback(
+    (section: BaseSection, tree: BlockTree, selectNewId?: string) => {
+      const commit = commitBlockTree(page?.id ?? "", section.id, tree);
+      if (!commit.ok) {
+        setFeedback({ code: "INVALID_TREE", message: commit.error.message });
+        return false;
+      }
+      if (selectNewId) selectBlock(selectNewId);
+      setFeedback(null);
+      return true;
+    },
+    [commitBlockTree, page, setFeedback, selectBlock],
+  );
+
   const updateBlockText = useCallback(
     (nodeId: string, value: string) => {
       const section = sectionFor(nodeId);
@@ -104,6 +124,18 @@ export function useBlockOperations(pageId: string | null): BlockOperations {
       const { tree, sessionActive } = treeFor(section);
       const node = getNode(tree, nodeId);
       if (!node) return setFeedback({ code: "BLOCK_NOT_FOUND", message: "This block no longer exists." });
+
+      // Custom-block sections persist every text edit through the whole tree.
+      if (isCustomBlockSection(section)) {
+        const result = applyBlockOperation(tree, {
+          kind: "update-props",
+          blockId: nodeId,
+          props: { text: value },
+        });
+        if (!result.ok) return setFeedback(result.error);
+        commitCustom(section, result.value as BlockTree);
+        return;
+      }
 
       const binding = bindingOf(node);
       if (!binding) {
@@ -134,7 +166,7 @@ export function useBlockOperations(pageId: string | null): BlockOperations {
       if (sessionActive) storeSession(section, nextTree);
       setFeedback(null);
     },
-    [sectionFor, treeFor, storeSession, commitBlockTree, page, setFeedback],
+    [sectionFor, treeFor, storeSession, commitCustom, commitBlockTree, page, setFeedback],
   );
 
   const deleteBlock = useCallback(
@@ -144,6 +176,14 @@ export function useBlockOperations(pageId: string | null): BlockOperations {
       const { tree, sessionActive } = treeFor(section);
       const node = getNode(tree, nodeId);
       if (!node) return setFeedback({ code: "BLOCK_NOT_FOUND", message: "This block no longer exists." });
+
+      // Custom-block sections persist deletes through the whole tree.
+      if (isCustomBlockSection(section)) {
+        const result = applyBlockOperation(tree, { kind: "delete", blockId: nodeId });
+        if (!result.ok) return setFeedback(result.error);
+        if (commitCustom(section, result.value as BlockTree)) selectBlock(null);
+        return;
+      }
 
       const binding = bindingOf(node);
       if (binding?.groupPath) {
@@ -166,7 +206,7 @@ export function useBlockOperations(pageId: string | null): BlockOperations {
       selectBlock(null);
       setFeedback(null, [SESSION_WARNING]);
     },
-    [sectionFor, treeFor, storeSession, updateSectionProps, selectBlock, setFeedback],
+    [sectionFor, treeFor, storeSession, commitCustom, updateSectionProps, selectBlock, setFeedback],
   );
 
   const duplicateBlock = useCallback(
@@ -176,6 +216,15 @@ export function useBlockOperations(pageId: string | null): BlockOperations {
       const { tree, sessionActive } = treeFor(section);
       const node = getNode(tree, nodeId);
       if (!node) return setFeedback({ code: "BLOCK_NOT_FOUND", message: "This block no longer exists." });
+
+      // Custom-block sections persist duplicates through the whole tree.
+      if (isCustomBlockSection(section)) {
+        const result = applyBlockOperation(tree, { kind: "duplicate", blockId: nodeId });
+        if (!result.ok) return setFeedback(result.error);
+        const value = result.value as { tree: BlockTree; newId: string };
+        commitCustom(section, value.tree, value.newId);
+        return;
+      }
 
       const binding = bindingOf(node);
       if (binding?.groupPath) {
@@ -199,7 +248,7 @@ export function useBlockOperations(pageId: string | null): BlockOperations {
       selectBlock(value.newId);
       setFeedback(null, [SESSION_WARNING]);
     },
-    [sectionFor, treeFor, storeSession, updateSectionProps, selectBlock, setFeedback],
+    [sectionFor, treeFor, storeSession, commitCustom, updateSectionProps, selectBlock, setFeedback],
   );
 
   const insertBlock = useCallback(
@@ -215,12 +264,17 @@ export function useBlockOperations(pageId: string | null): BlockOperations {
         block,
       });
       if (!result.ok) return setFeedback(result.error);
+      // Custom-block sections persist insertions through the whole tree.
+      if (isCustomBlockSection(section)) {
+        if (commitCustom(section, result.value as BlockTree, block.id)) addRecent(type);
+        return;
+      }
       storeSession(section, result.value as BlockTree);
       selectBlock(block.id);
       addRecent(type);
       setFeedback(null, [SESSION_WARNING]);
     },
-    [page, sectionFor, treeFor, storeSession, selectBlock, addRecent, setFeedback],
+    [page, sectionFor, treeFor, storeSession, commitCustom, selectBlock, addRecent, setFeedback],
   );
 
   const renameBlock = useCallback(
@@ -230,10 +284,14 @@ export function useBlockOperations(pageId: string | null): BlockOperations {
       const { tree } = treeFor(section);
       const result = applyBlockOperation(tree, { kind: "rename", blockId: nodeId, label });
       if (!result.ok) return setFeedback(result.error);
+      if (isCustomBlockSection(section)) {
+        commitCustom(section, result.value as BlockTree);
+        return;
+      }
       storeSession(section, result.value as BlockTree);
       setFeedback(null, [SESSION_WARNING]);
     },
-    [sectionFor, treeFor, storeSession, setFeedback],
+    [sectionFor, treeFor, storeSession, commitCustom, setFeedback],
   );
 
   const setLocked = useCallback(
@@ -243,10 +301,14 @@ export function useBlockOperations(pageId: string | null): BlockOperations {
       const { tree } = treeFor(section);
       const result = applyBlockOperation(tree, { kind: "lock", blockId: nodeId, locked });
       if (!result.ok) return setFeedback(result.error);
+      if (isCustomBlockSection(section)) {
+        commitCustom(section, result.value as BlockTree);
+        return;
+      }
       storeSession(section, result.value as BlockTree);
       setFeedback(null, [SESSION_WARNING]);
     },
-    [sectionFor, treeFor, storeSession, setFeedback],
+    [sectionFor, treeFor, storeSession, commitCustom, setFeedback],
   );
 
   const setHidden = useCallback(
@@ -256,10 +318,14 @@ export function useBlockOperations(pageId: string | null): BlockOperations {
       const { tree } = treeFor(section);
       const result = applyBlockOperation(tree, { kind: "hide", blockId: nodeId, hidden });
       if (!result.ok) return setFeedback(result.error);
+      if (isCustomBlockSection(section)) {
+        commitCustom(section, result.value as BlockTree);
+        return;
+      }
       storeSession(section, result.value as BlockTree);
       setFeedback(null, [SESSION_WARNING]);
     },
-    [sectionFor, treeFor, storeSession, setFeedback],
+    [sectionFor, treeFor, storeSession, commitCustom, setFeedback],
   );
 
   const applyPreset = useCallback(
@@ -273,10 +339,14 @@ export function useBlockOperations(pageId: string | null): BlockOperations {
         presetId,
       });
       if (!result.ok) return setFeedback(result.error);
+      if (isCustomBlockSection(section)) {
+        commitCustom(section, result.value as BlockTree);
+        return;
+      }
       storeSession(section, result.value as BlockTree);
       setFeedback(null, [SESSION_WARNING]);
     },
-    [sectionFor, treeFor, storeSession, setFeedback],
+    [sectionFor, treeFor, storeSession, commitCustom, setFeedback],
   );
 
   return {
