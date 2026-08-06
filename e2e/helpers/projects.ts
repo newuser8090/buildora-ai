@@ -33,10 +33,13 @@ export async function createSaaSProjectAndOpenEditor(page: Page): Promise<string
   await expect(page.locator("#new-project-name")).toHaveValue("SaaS Landing Page");
 
   await page.locator('[data-testid="create-project-button"]').click();
-  await page.waitForURL(/\/editor\/.+/, { timeout: 15000 });
+  // Generous timeout: on a cold webpack dev server (Windows junction
+  // workaround) the first compile of the editor route can take >30s and
+  // the router push is blocked until the chunk is ready.
+  await page.waitForURL(/\/editor\/.+/, { timeout: 90000 });
 
   await expect(page.locator('[data-testid="editor-root"]')).toBeVisible({
-    timeout: 15000,
+    timeout: 90000,
   });
 
   const match = page.url().match(/\/editor\/([^/?]+)/);
@@ -67,10 +70,13 @@ export async function createBlankProjectAndOpenEditor(
   await expect(page.locator("#new-project-name")).toHaveValue("Untitled Project");
 
   await page.locator('[data-testid="create-project-button"]').click();
-  await page.waitForURL(/\/editor\/.+/, { timeout: 15000 });
+  // Generous timeout: on a cold webpack dev server (Windows junction
+  // workaround) the first compile of the editor route can take >30s and
+  // the router push is blocked until the chunk is ready.
+  await page.waitForURL(/\/editor\/.+/, { timeout: 90000 });
 
   await expect(page.locator('[data-testid="editor-root"]')).toBeVisible({
-    timeout: 15000,
+    timeout: 90000,
   });
 
   const match = page.url().match(/\/editor\/([^/?]+)/);

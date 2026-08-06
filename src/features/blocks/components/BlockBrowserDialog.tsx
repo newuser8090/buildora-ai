@@ -11,6 +11,12 @@ import { BlockIcon } from "./BlockIcon";
 import { bindingsForSection } from "../adapters/section-block-adapter";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
+import { useMyBlocksUiStore } from "@/features/my-blocks/store/my-blocks-ui-store";
+import { getMyBlocksAdapter } from "@/features/my-blocks/storage/my-blocks-singleton";
+import { insertMyBlock } from "@/features/my-blocks/services/insert-my-block";
+import { MyBlockPreview } from "@/features/my-blocks/components/MyBlockPreview";
+import { scrollSectionIntoView } from "@/features/editor/utils/scroll-section-into-view";
+import type { MyBlockRecord } from "@/features/my-blocks/types";
 
 // ---------------------------------------------------------------------------
 // Friendly categories for the browser (plain-language, Phase O)
@@ -50,6 +56,13 @@ const CATEGORIES: BrowserCategory[] = [
     id: "navigation",
     label: "Navigation",
     match: (t) => blockCategoryOf(t) === "navigation",
+  },
+  {
+    id: "my-blocks",
+    label: "My blocks",
+    // My Blocks are NOT registered BlockTypes — this category is handled
+    // specially (a library view, not a registry category).
+    match: () => false,
   },
 ];
 
@@ -127,6 +140,88 @@ export function BlockBrowserDialog() {
     };
   }, [open, closeBrowser]);
 
+  // ---- My Blocks library (Phase P4) ----
+  // `myBlocks` is null while loading (never re-shows stale data). The reset
+  // happens in a render-phase adjustment, not inside the effect.
+  const [myBlocks, setMyBlocks] = useState<MyBlockRecord[] | null>(null);
+  const [insertingMyBlockId, setInsertingMyBlockId] = useState<string | null>(null);
+  const showToast = useMyBlocksUiStore((s) => s.showToast);
+
+  const [prevMyBlocksView, setPrevMyBlocksView] = useState({ open, category });
+  if (prevMyBlocksView.open !== open || prevMyBlocksView.category !== category) {
+    setPrevMyBlocksView({ open, category });
+    if (open && category === "my-blocks") {
+      setMyBlocks(null);
+    }
+  }
+
+  useEffect(() => {
+    if (!open || category !== "my-blocks") return;
+    let cancelled = false;
+    getMyBlocksAdapter()
+      .listMyBlocks()
+      .then((result) => {
+        if (cancelled) return;
+        setMyBlocks(result.ok ? result.value : []);
+      })
+      .catch(() => {
+        if (!cancelled) setMyBlocks([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, category]);
+
+  const filteredMyBlocks = useMemo(() => {
+    if (!myBlocks) return [];
+    const q = query.trim().toLowerCase();
+    if (!q) return myBlocks;
+    return myBlocks.filter((b) => {
+      const haystack = [b.name, b.description ?? "", ...b.tags].join(" ").toLowerCase();
+      return q.split(/\s+/).every((token) => haystack.includes(token));
+    });
+  }, [myBlocks, query]);
+
+  const insertMyBlockInto = async (block: MyBlockRecord) => {
+    if (!target || insertingMyBlockId) return;
+    setInsertingMyBlockId(block.id);
+    // Choose a valid placement for the browser target: inside an imported
+    // design when the target section hosts custom blocks, otherwise as a new
+    // section right after the selected one.
+    const section = project.pages
+      .flatMap((p) => p.sections)
+      .find((s) => s.id === target.sectionId);
+    const placement =
+      section?.type === "custom-block"
+        ? {
+            kind: "inside-custom-block" as const,
+            pageId: target.pageId,
+            sectionId: target.sectionId,
+            parentBlockId: target.parentId ?? target.sectionId,
+          }
+        : {
+            kind: "after-section" as const,
+            pageId: target.pageId,
+            sectionId: target.sectionId,
+          };
+    const result = await insertMyBlock({
+      projectId: useEditorStore.getState().project.id,
+      blockId: block.id,
+      placement,
+      adapter: getMyBlocksAdapter(),
+    });
+    setInsertingMyBlockId(null);
+    if (!result.ok) {
+      showToast(result.error.message);
+      return;
+    }
+    useEditorStore.getState().selectSection(result.sectionId);
+    useEditorUiStore.getState().setRightSidebarTab("blocks");
+    window.setTimeout(() => scrollSectionIntoView(result.sectionId, { block: "center" }), 0);
+    showToast(`"${block.name}" added to your page`);
+    closeBrowser();
+  };
+
   // Recommended types: the block types bound by the target section.
   const recommended = useMemo(() => {
     if (!target) return [] as BlockType[];
@@ -152,6 +247,9 @@ export function BlockBrowserDialog() {
       return ra - rb;
     });
   }, [allBlocks, category, query, recommended]);
+
+  // My Blocks are handled as a separate view inside the same dialog.
+  const showMyBlocks = category === "my-blocks";
 
   if (!open || !target) return null;
 
@@ -247,8 +345,8 @@ export function BlockBrowserDialog() {
           ))}
         </div>
 
-        {/* Recents */}
-        {recentBlockTypes.length > 0 && (
+        {/* Recents (native blocks only — My Blocks have their own list) */}
+        {!showMyBlocks && recentBlockTypes.length > 0 && (
           <div className="flex items-center gap-1.5 border-b border-border px-4 py-2">
             <span className="text-[10px] font-semibold uppercase tracking-wide text-text-dim/70">
               Recent
@@ -298,8 +396,58 @@ export function BlockBrowserDialog() {
           </button>
         </div>
 
-        {/* Grid */}
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        {/* My Blocks grid (Phase P4) */}
+        {showMyBlocks ? (
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            {myBlocks === null ? (
+              <div data-testid="my-blocks-browser-loading" className="flex justify-center py-12">
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-accent/30 border-t-accent" />
+              </div>
+            ) : filteredMyBlocks.length === 0 ? (
+              <div data-testid="my-blocks-browser-empty" className="py-12 text-center">
+                <p className="text-sm text-text-dim">
+                  {myBlocks.length === 0
+                    ? "Save a design once and reuse it in any project."
+                    : `No saved blocks match “${query}”.`}
+                </p>
+                {myBlocks.length === 0 && (
+                  <p className="mt-1 text-xs text-text-dim/60">
+                    Import a design and choose “Save as My Block” to build your library.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {filteredMyBlocks.map((block) => (
+                  <div
+                    key={block.id}
+                    data-testid={`my-block-browser-card-${block.id}`}
+                    className="group relative flex flex-col rounded-xl border border-border bg-secondary p-2 transition-all duration-200 hover:border-accent/40 hover:bg-card"
+                  >
+                    <div className="mb-1.5">
+                      <MyBlockPreview tree={block.tree} height={72} maxNodes={20} />
+                    </div>
+                    <h4 className="truncate text-xs font-semibold text-text-primary">{block.name}</h4>
+                    <p className="mt-0.5 text-[10px] text-text-dim">
+                      {block.previewMetadata.blockCount} blocks
+                    </p>
+                    <button
+                      type="button"
+                      data-testid={`my-block-browser-add-${block.id}`}
+                      onClick={() => void insertMyBlockInto(block)}
+                      disabled={!!insertingMyBlockId}
+                      className="mt-2 flex-1 rounded-lg bg-accent/10 py-1 text-[11px] font-medium text-accent transition-colors hover:bg-accent/20 active:scale-95 disabled:opacity-50"
+                    >
+                      {insertingMyBlockId === block.id ? "Adding…" : "Insert"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          /* Grid */
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
           {recommended.length > 0 && (
             <div
               data-testid="block-recommended"
@@ -368,7 +516,8 @@ export function BlockBrowserDialog() {
               })}
             </div>
           )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

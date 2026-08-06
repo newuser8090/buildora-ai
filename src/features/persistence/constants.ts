@@ -78,8 +78,9 @@ export const DATABASE_NAME = "buildora";
  * Version history:
  *   1 — projects + metadata stores.
  *   2 — added projectThumbnails store (binary Blob thumbnails, keyed by projectId).
+ *   3 — added myBlocks store (Phase P4 personal block library).
  */
-export const DATABASE_VERSION = 2;
+export const DATABASE_VERSION = 3;
 
 /** Object store for project records. */
 export const STORE_PROJECTS = "projects";
@@ -89,6 +90,9 @@ export const STORE_METADATA = "metadata";
 
 /** Object store for project thumbnail Blob records (database version 2). */
 export const STORE_PROJECT_THUMBNAILS = "projectThumbnails";
+
+/** Object store for saved personal building blocks (database version 3, Phase P4). */
+export const STORE_MY_BLOCKS = "myBlocks";
 
 /** Key for the active project ID in the metadata store. */
 export const METADATA_KEY_ACTIVE_PROJECT = "activeProjectId";

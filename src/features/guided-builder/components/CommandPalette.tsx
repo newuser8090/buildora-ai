@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Search, CornerDownLeft } from "lucide-react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
+import { useMyBlocksUiStore } from "@/features/my-blocks/store/my-blocks-ui-store";
 import { useGuidedBuilderStore } from "../store/guided-builder-store";
 import { useGuidedActions } from "../hooks/useGuidedActions";
 import { EXPORT_SITE_EVENT } from "../constants";
@@ -34,6 +35,8 @@ function buildCommands(handlers: {
   undo: () => void;
   askAi: (scope?: "create" | "section" | "page" | "project") => void;
   importCode: () => void;
+  saveSelectedAsBlock: () => void;
+  exportSelectedAsBlock: () => void;
 }): PaletteCommand[] {
   return [
     {
@@ -132,6 +135,34 @@ function buildCommands(handlers: {
         handlers.setHasExported(true);
         window.dispatchEvent(new CustomEvent(EXPORT_SITE_EVENT));
       },
+    },
+    {
+      id: "open-my-blocks",
+      label: "Open my saved blocks",
+      keywords: ["my blocks", "saved blocks", "reusable blocks", "library", "saved pieces", "reuse a design"],
+      hint: "Browse designs you saved earlier",
+      run: () => useMyBlocksUiStore.getState().openLibrary(),
+    },
+    {
+      id: "save-this-block",
+      label: "Save this design to My Blocks",
+      keywords: ["save block", "save this block", "save design", "reuse later", "save to library", "remember this"],
+      hint: "Reuse this design in any project",
+      run: () => handlers.saveSelectedAsBlock(),
+    },
+    {
+      id: "import-saved-block",
+      label: "Import a saved block file",
+      keywords: ["import saved block", "import block", "block file", "buildora-block"],
+      hint: "Add a block file to your library",
+      run: () => useMyBlocksUiStore.getState().openImport(),
+    },
+    {
+      id: "export-saved-block",
+      label: "Export a saved block file",
+      keywords: ["export block", "download block", "share block", "backup block"],
+      hint: "Download one saved block as a file",
+      run: () => handlers.exportSelectedAsBlock(),
     },
   ];
 }
@@ -266,6 +297,8 @@ export function CommandPalette() {
   const setHasExported = useGuidedBuilderStore((s) => s.setHasExported);
   const { browseBlocks, askAi } = useGuidedActions();
   const selectedPageId = useEditorStore((s) => s.selectedPageId);
+  const project = useEditorStore((s) => s.project);
+  const selectedSectionId = useEditorStore((s) => s.selectedSectionId);
 
   const importCode = useCallback(() => {
     // Phase P3 — opens the shared Import Studio.
@@ -273,6 +306,27 @@ export function CommandPalette() {
       selectedPageId ? { pageId: selectedPageId } : null,
     );
   }, [selectedPageId]);
+
+  // Phase P4 — save the selected custom-block section to the library.
+  const saveSelectedAsBlock = useCallback(() => {
+    const section = project.pages
+      .flatMap((p) => p.sections)
+      .find((s) => s.id === selectedSectionId);
+    if (!section || section.type !== "custom-block") {
+      useMyBlocksUiStore.getState().showToast(
+        "Select an imported design first, then save it.",
+      );
+      return;
+    }
+    useMyBlocksUiStore.getState().openSaveDialog({ kind: "section", section });
+  }, [project.pages, selectedSectionId]);
+
+  const exportSelectedAsBlock = useCallback(() => {
+    useMyBlocksUiStore.getState().openLibrary();
+    useMyBlocksUiStore.getState().showToast(
+      "Open a saved block and choose Export.",
+    );
+  }, []);
 
   const commands = useMemo(
     () =>
@@ -286,6 +340,8 @@ export function CommandPalette() {
         undo,
         askAi,
         importCode,
+        saveSelectedAsBlock,
+        exportSelectedAsBlock,
       }),
     [
       browseBlocks,
@@ -297,6 +353,8 @@ export function CommandPalette() {
       undo,
       askAi,
       importCode,
+      saveSelectedAsBlock,
+      exportSelectedAsBlock,
     ],
   );
 

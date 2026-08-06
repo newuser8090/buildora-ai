@@ -20,9 +20,11 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "npm run dev",
+    // Windows workaround: Turbopack dev can fail to create junction points
+    // ("os error 80"). Opt out with the supported --webpack flag.
+    command: "npm run dev -- --webpack",
     url: "http://localhost:3000",
     reuseExistingServer: true,
-    timeout: 30_000,
+    timeout: 60_000,
   },
 });

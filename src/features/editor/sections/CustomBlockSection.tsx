@@ -14,6 +14,7 @@
 // ---------------------------------------------------------------------------
 
 import { useMemo } from "react";
+import { BookmarkPlus } from "lucide-react";
 import type { BaseSection } from "@/types/section";
 import { customBlockTreeFromSection } from "@/features/blocks/adapters/section-block-adapter";
 import { BlockRenderer } from "@/features/blocks/render/BlockRenderer";
@@ -23,6 +24,7 @@ import { useBlockOperations } from "@/features/blocks/hooks/useBlockOperations";
 import { rootIdOf } from "@/features/blocks/engine/tree-traversal";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { useInlineEditPageId } from "@/features/inline-editing/context/InlineEditPageContext";
+import { useMyBlocksUiStore } from "@/features/my-blocks/store/my-blocks-ui-store";
 
 const VIEWPORT_WIDTHS: Record<string, number> = {
   desktop: 1440,
@@ -42,6 +44,11 @@ export function CustomBlockSection({ section }: { section: BaseSection }) {
 
   const interactive = !!pageId;
 
+  // Phase P4 — "Save as reusable block" quick action (canvas hover only).
+  const handleSaveAsBlock = () => {
+    useMyBlocksUiStore.getState().openSaveDialog({ kind: "section", section });
+  };
+
   if (tree.rootIds.length === 0) {
     return (
       <section
@@ -59,7 +66,23 @@ export function CustomBlockSection({ section }: { section: BaseSection }) {
   }
 
   return (
-    <section data-testid="custom-block-section" style={styleTokensToCss(section.styles ?? {})}>
+    <section data-testid="custom-block-section" style={{ position: "relative", ...styleTokensToCss(section.styles ?? {}) }}>
+      {/* Phase P4 — hover action to save this design to the library */}
+      {interactive && (
+        <button
+          type="button"
+          data-testid="custom-block-save-to-my-blocks"
+          title="Save as reusable block"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleSaveAsBlock();
+          }}
+          className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-lg border border-border/60 bg-base/90 px-2 py-1 text-[10px] font-medium text-text-muted opacity-0 shadow-sm backdrop-blur transition-all duration-200 hover:border-accent/40 hover:text-accent group-hover:opacity-100 hover:opacity-100 focus-visible:opacity-100"
+        >
+          <BookmarkPlus className="h-3 w-3" />
+          Save as reusable block
+        </button>
+      )}
       <BlockRenderer
         tree={tree}
         viewportWidth={VIEWPORT_WIDTHS[viewport] ?? 1440}

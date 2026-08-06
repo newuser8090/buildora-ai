@@ -11,9 +11,10 @@
 "use client";
 
 import { useMemo } from "react";
-import { Sparkles, LayoutGrid, ClipboardPaste } from "lucide-react";
+import { Sparkles, LayoutGrid, ClipboardPaste, BookMarked } from "lucide-react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
+import { useMyBlocksUiStore } from "@/features/my-blocks/store/my-blocks-ui-store";
 import { useGuidedActions } from "../hooks/useGuidedActions";
 import {
   getGuidedSectionExample,
@@ -98,6 +99,16 @@ export function GuidedStartScreen({
         </button>
         <button
           type="button"
+          data-testid="guided-start-my-blocks-compact"
+          title="Reuse designs you saved earlier."
+          onClick={() => useMyBlocksUiStore.getState().openLibrary()}
+          className="flex h-8 items-center gap-1.5 rounded-full border border-border/60 bg-card/80 px-3 text-xs font-medium text-text-primary transition-all duration-200 hover:border-accent/40 hover:bg-card active:scale-95"
+        >
+          <BookMarked className="h-3 w-3 text-accent" />
+          My saved pieces
+        </button>
+        <button
+          type="button"
           data-testid="guided-start-browse"
           onClick={() => browseBlocks()}
           className="flex h-8 items-center gap-1.5 rounded-full border border-border/60 bg-card/80 px-3 text-xs font-medium text-text-primary transition-all duration-200 hover:border-accent/40 hover:bg-card active:scale-95"
@@ -164,6 +175,16 @@ export function GuidedStartScreen({
         >
           <ClipboardPaste className="h-4 w-4 text-accent" />
           Bring your own design
+        </button>
+        <button
+          type="button"
+          data-testid="guided-start-my-blocks"
+          title="Reuse designs you saved earlier."
+          onClick={() => useMyBlocksUiStore.getState().openLibrary()}
+          className="flex h-9 items-center gap-2 rounded-lg border border-border bg-card px-4 text-sm font-medium text-text-primary transition-all duration-200 hover:bg-base active:scale-95"
+        >
+          <BookMarked className="h-4 w-4 text-accent" />
+          My saved pieces
         </button>
         <button
           type="button"

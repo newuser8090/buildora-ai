@@ -291,6 +291,7 @@ export function TopNav() {
         </button>
 
         <button
+          data-testid="topnav-save-button"
           onClick={handleSave}
           disabled={saveStatus === "saving" || saveStatus === "hydrating" || !isHydrated}
           className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-sm text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
