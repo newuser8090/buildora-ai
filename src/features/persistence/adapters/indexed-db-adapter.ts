@@ -20,10 +20,9 @@ import {
   DATABASE_VERSION,
   STORE_PROJECTS,
   STORE_METADATA,
-  STORE_PROJECT_THUMBNAILS,
-  STORE_MY_BLOCKS,
   METADATA_KEY_ACTIVE_PROJECT,
 } from "../constants";
+import { ensureDatabaseStores } from "../services/db-schema";
 import { serializeProject } from "../services/project-serializer";
 import { deserializeProject } from "../services/project-serializer";
 import { getStorageEstimate } from "../services/storage-estimate";
@@ -117,24 +116,11 @@ export class IndexedDbProjectAdapter implements ProjectPersistenceAdapter {
 
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result;
-
         // Non-destructive upgrade: create missing stores only. Existing
         // projects / metadata are never touched during a version upgrade.
-        if (!db.objectStoreNames.contains(STORE_PROJECTS)) {
-          db.createObjectStore(STORE_PROJECTS, { keyPath: "id" });
-        }
-        if (!db.objectStoreNames.contains(STORE_METADATA)) {
-          db.createObjectStore(STORE_METADATA, { keyPath: "key" });
-        }
-        if (!db.objectStoreNames.contains(STORE_PROJECT_THUMBNAILS)) {
-          db.createObjectStore(STORE_PROJECT_THUMBNAILS, { keyPath: "projectId" });
-        }
-        // Phase P4: personal block library — non-destructive addition. The
-        // myBlocks store is also created by the MyBlocks adapter's own upgrade
-        // handler, so either connection may trigger the version bump.
-        if (!db.objectStoreNames.contains(STORE_MY_BLOCKS)) {
-          db.createObjectStore(STORE_MY_BLOCKS, { keyPath: "id" });
-        }
+        // Shared schema helper guarantees EVERY store exists regardless of
+        // which adapter triggers the version bump (first-connection safety).
+        ensureDatabaseStores(db);
       };
 
       request.onsuccess = (event) => {

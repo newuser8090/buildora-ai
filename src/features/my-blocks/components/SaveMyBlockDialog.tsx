@@ -26,6 +26,7 @@ import { Select } from "@/components/ui/Select";
 import { MY_BLOCK_CATEGORIES } from "../types";
 import { saveSectionAsMyBlock, saveTreeAsMyBlock } from "../services/my-blocks-service";
 import { getMyBlocksAdapter } from "../storage/my-blocks-singleton";
+import { ensureThumbnailForSavedRecord } from "../thumbnails/my-block-thumbnail-singleton";
 import { useMyBlocksUiStore } from "../store/my-blocks-ui-store";
 import { MyBlockPreview } from "./MyBlockPreview";
 import { generateUniqueName } from "../schemas/my-block-schema";
@@ -191,6 +192,8 @@ export function SaveMyBlockDialog() {
       setSaved(true);
       bumpRefresh();
       showToast(`"${result.value.name}" saved to My Blocks`);
+      // Phase P5: persistent thumbnail, generated from the validated tree.
+      void ensureThumbnailForSavedRecord(result.value);
       if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
       closeTimerRef.current = setTimeout(() => {
         close();

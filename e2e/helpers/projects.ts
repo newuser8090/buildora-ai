@@ -2,6 +2,51 @@ import { expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 // ---------------------------------------------------------------------------
+// My Blocks helpers (Phase P4/P5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Import an HTML snippet through the Import Studio, then save the converted
+ * design as a My Block with the given name. Leaves the editor clean (all
+ * dialogs closed). Used by the My Blocks E2E specs to seed the library.
+ */
+export async function importHtmlAndSaveAsMyBlock(
+  page: Page,
+  html: string,
+  blockName: string,
+  category?: string,
+): Promise<void> {
+  // Open Import Studio from the Blocks tab.
+  await page.locator('[data-testid="right-tab-blocks"]').click();
+  await expect(page.locator('[data-testid="build-tree-panel"]')).toBeVisible();
+  await page.locator('[data-testid="build-tree-import-code"]').click();
+  await expect(page.locator('[data-testid="code-import-dialog"]')).toBeVisible({ timeout: 5000 });
+  await page.locator('[data-testid="code-import-source"]').fill(html);
+  await page.locator('[data-testid="code-import-analyse"]').click();
+  await expect(page.locator('[data-testid="analysis-result"]')).toBeVisible({ timeout: 10000 });
+  await page.locator('[data-testid="analysis-continue"]').click();
+  await expect(page.locator('[data-testid="review-step"]')).toBeVisible();
+  await page.locator('[data-testid="review-continue"]').click();
+  await expect(page.locator('[data-testid="placement-step"]')).toBeVisible();
+  await page.locator('[data-testid="insert-button"]').click();
+  await expect(page.locator('[data-testid="import-success"]')).toBeVisible({ timeout: 5000 });
+
+  // Save as My Block.
+  await page.locator('[data-testid="success-save-block"]').click();
+  await expect(page.locator('[data-testid="save-my-block-dialog"]')).toBeVisible({ timeout: 5000 });
+  await page.locator('[data-testid="save-block-name"]').fill(blockName);
+  if (category) {
+    // The save dialog defaults to "other" — set the category explicitly when
+    // a test needs to exercise the category filter.
+    await page.locator('[data-testid="save-block-category"]').selectOption(category);
+  }
+  await page.locator('[data-testid="save-block-submit"]').click();
+  await expect(page.locator('[data-testid="my-blocks-toast"]')).toContainText("saved to My Blocks", {
+    timeout: 5000,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Shared dashboard → editor flow
 //
 // The dashboard (/) creates projects from templates and navigates to

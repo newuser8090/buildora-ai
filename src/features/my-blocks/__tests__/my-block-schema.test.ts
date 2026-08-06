@@ -13,15 +13,23 @@
 import { describe, it, expect } from "vitest";
 import {
   MyBlockRecordSchema,
+  MyBlockCollectionSchema,
   parseMyBlockRecord,
+  parseMyBlockCollection,
   isUsableMyBlockRecord,
   parseBuildoraBlockFile,
   sanitizeMyBlockName,
   sanitizeMyBlockDescription,
   sanitizeMyBlockTags,
+  sanitizeMyBlockCollectionName,
+  sanitizeMyBlockCollectionDescription,
+  sanitizeMyBlockCollectionIds,
   generateUniqueName,
+  generateUniqueCollectionName,
   MY_BLOCK_CURRENT_VERSION,
   MY_BLOCK_MAX_TAGS,
+  MY_BLOCK_MAX_COLLECTIONS,
+  MY_BLOCK_MAX_COLLECTION_NAME_LENGTH,
   MY_BLOCK_FILE_FORMAT_VERSION,
 } from "../schemas/my-block-schema";
 import { makeNode, makeRecord, makeTree } from "./helpers";
@@ -266,5 +274,159 @@ describe("generateUniqueName", () => {
     const existing = ["Pricing", "Pricing 2", "Pricing 3"];
     const next = generateUniqueName("Pricing", existing);
     expect(existing.map((n) => n.toLowerCase())).not.toContain(next.toLowerCase());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase P5 — backward compatibility with Phase P4 records
+// ---------------------------------------------------------------------------
+
+describe("Phase P4 record backward compatibility", () => {
+  it("a P4 record (no Phase P5 fields) remains valid", () => {
+    const p4 = makeRecord();
+    // Remove every optional Phase P5 field explicitly.
+    delete p4.favorite;
+    delete p4.collectionIds;
+    delete p4.thumbnail;
+    delete p4.contentRevision;
+    expect(parseMyBlockRecord(p4)).not.toBeNull();
+  });
+
+  it("records with Phase P5 optional fields parse and default absent fields away", () => {
+    const record = makeRecord({
+      favorite: true,
+      collectionIds: ["col-1"],
+      thumbnail: {
+        revision: 1,
+        generatedAt: "2026-08-01T00:00:00.000Z",
+        mimeType: "image/webp",
+        width: 480,
+        height: 300,
+        byteSize: 1024,
+        hash: "abc123",
+      },
+      contentRevision: 2,
+    });
+    const parsed = parseMyBlockRecord(record);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.favorite).toBe(true);
+    expect(parsed!.collectionIds).toEqual(["col-1"]);
+    expect(parsed!.contentRevision).toBe(2);
+    expect(parsed!.thumbnail?.byteSize).toBe(1024);
+  });
+
+  it("rejects a thumbnail with an unsupported mimeType or negative bytes", () => {
+    const bad = makeRecord({
+      thumbnail: {
+        revision: 1,
+        generatedAt: "2026-08-01T00:00:00.000Z",
+        mimeType: "image/gif" as never,
+        width: 480,
+        height: 300,
+        byteSize: 1024,
+        hash: "abc",
+      },
+    });
+    expect(parseMyBlockRecord(bad)).toBeNull();
+    const negative = makeRecord({
+      thumbnail: {
+        revision: 1,
+        generatedAt: "2026-08-01T00:00:00.000Z",
+        mimeType: "image/png",
+        width: 480,
+        height: 300,
+        byteSize: -5,
+        hash: "abc",
+      },
+    });
+    expect(parseMyBlockRecord(negative)).toBeNull();
+  });
+
+  it("rejects a non-positive contentRevision", () => {
+    expect(
+      parseMyBlockRecord(makeRecord({ contentRevision: 0 })),
+    ).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase P5 — collections schema
+// ---------------------------------------------------------------------------
+
+describe("MyBlockCollectionSchema", () => {
+  function makeCollection(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "col-1",
+      version: 1,
+      name: "Landing pages",
+      description: "Heroes and navigation",
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-01T00:00:00.000Z",
+      sortOrder: 0,
+      ...overrides,
+    };
+  }
+
+  it("accepts a valid collection", () => {
+    expect(MyBlockCollectionSchema.safeParse(makeCollection()).success).toBe(true);
+  });
+
+  it("rejects unknown extra keys (strict) and future versions", () => {
+    const extra = makeCollection({ blocks: [] });
+    expect(MyBlockCollectionSchema.safeParse(extra).success).toBe(false);
+    expect(MyBlockCollectionSchema.safeParse(makeCollection({ version: 2 })).success).toBe(false);
+  });
+
+  it("rejects empty names, over-long names, and negative sortOrder", () => {
+    expect(MyBlockCollectionSchema.safeParse(makeCollection({ name: "  " })).success).toBe(false);
+    expect(
+      MyBlockCollectionSchema.safeParse(makeCollection({ name: "x".repeat(61) })).success,
+    ).toBe(false);
+    expect(MyBlockCollectionSchema.safeParse(makeCollection({ sortOrder: -1 })).success).toBe(false);
+  });
+
+  it("parseMyBlockCollection returns null for corrupt input", () => {
+    expect(parseMyBlockCollection(null)).toBeNull();
+    expect(parseMyBlockCollection("string")).toBeNull();
+    expect(parseMyBlockCollection({ id: "x" })).toBeNull();
+  });
+
+  it("sanitizeMyBlockCollectionName trims + caps; empty → null", () => {
+    expect(sanitizeMyBlockCollectionName("  Landing  ")).toBe("Landing");
+    expect(sanitizeMyBlockCollectionName("x".repeat(200))!.length).toBe(MY_BLOCK_MAX_COLLECTION_NAME_LENGTH);
+    expect(sanitizeMyBlockCollectionName("   ")).toBeNull();
+    expect(sanitizeMyBlockCollectionName(42)).toBeNull();
+  });
+
+  it("sanitizeMyBlockCollectionDescription trims + caps; empty → undefined", () => {
+    expect(sanitizeMyBlockCollectionDescription("  A folder  ")).toBe("A folder");
+    expect(sanitizeMyBlockCollectionDescription("   ")).toBeUndefined();
+  });
+
+  it("sanitizeMyBlockCollectionIds dedupes, trims, and caps", () => {
+    const ids = sanitizeMyBlockCollectionIds([" col-1 ", "col-1", "col-2", "", 42, "col-3"]);
+    expect(ids).toEqual(["col-1", "col-2", "col-3"]);
+    const many = sanitizeMyBlockCollectionIds(Array.from({ length: MY_BLOCK_MAX_COLLECTIONS + 5 }, (_, i) => `c${i}`));
+    expect(many.length).toBe(MY_BLOCK_MAX_COLLECTIONS);
+  });
+});
+
+describe("generateUniqueCollectionName", () => {
+  it("keeps a free name and suffixes duplicates deterministically", () => {
+    expect(generateUniqueCollectionName("Landing", ["Nav"])).toBe("Landing");
+    expect(generateUniqueCollectionName("Landing", ["landing"])).toBe("Landing 2");
+    expect(generateUniqueCollectionName("Landing", ["Landing", "LANDING 2"])).toBe("Landing 3");
+  });
+
+  it("fits the suffix inside the collection name limit", () => {
+    const long = "x".repeat(MY_BLOCK_MAX_COLLECTION_NAME_LENGTH);
+    const next = generateUniqueCollectionName(long, [long]);
+    expect(next.length).toBeLessThanOrEqual(MY_BLOCK_MAX_COLLECTION_NAME_LENGTH);
+    expect(next).toMatch(/x+ 2$/);
+  });
+
+  it("falls back to a safe default for empty input", () => {
+    expect(generateUniqueCollectionName("   ", [])).toBe("Collection");
+    expect(generateUniqueCollectionName("   ", ["Collection"])).toBe("Collection 2");
   });
 });

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/utils/cn";
-import { Search, Star, X, Sparkles } from "lucide-react";
+import { GripVertical, Search, Star, X, Sparkles } from "lucide-react";
 import { blockRegistry } from "@/features/blocks/registry/block-registry";
 import { blockCategoryOf, type BlockType } from "../types";
 import { useBlockEditorStore } from "../store/block-editor-store";
@@ -14,7 +14,8 @@ import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
 import { useMyBlocksUiStore } from "@/features/my-blocks/store/my-blocks-ui-store";
 import { getMyBlocksAdapter } from "@/features/my-blocks/storage/my-blocks-singleton";
 import { insertMyBlock } from "@/features/my-blocks/services/insert-my-block";
-import { MyBlockPreview } from "@/features/my-blocks/components/MyBlockPreview";
+import { MyBlockThumb } from "@/features/my-blocks/components/MyBlockThumb";
+import { useDraggable } from "@dnd-kit/core";
 import { scrollSectionIntoView } from "@/features/editor/utils/scroll-section-into-view";
 import type { MyBlockRecord } from "@/features/my-blocks/types";
 
@@ -419,28 +420,13 @@ export function BlockBrowserDialog() {
             ) : (
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {filteredMyBlocks.map((block) => (
-                  <div
+                  <MyBlockBrowserCard
                     key={block.id}
-                    data-testid={`my-block-browser-card-${block.id}`}
-                    className="group relative flex flex-col rounded-xl border border-border bg-secondary p-2 transition-all duration-200 hover:border-accent/40 hover:bg-card"
-                  >
-                    <div className="mb-1.5">
-                      <MyBlockPreview tree={block.tree} height={72} maxNodes={20} />
-                    </div>
-                    <h4 className="truncate text-xs font-semibold text-text-primary">{block.name}</h4>
-                    <p className="mt-0.5 text-[10px] text-text-dim">
-                      {block.previewMetadata.blockCount} blocks
-                    </p>
-                    <button
-                      type="button"
-                      data-testid={`my-block-browser-add-${block.id}`}
-                      onClick={() => void insertMyBlockInto(block)}
-                      disabled={!!insertingMyBlockId}
-                      className="mt-2 flex-1 rounded-lg bg-accent/10 py-1 text-[11px] font-medium text-accent transition-colors hover:bg-accent/20 active:scale-95 disabled:opacity-50"
-                    >
-                      {insertingMyBlockId === block.id ? "Adding…" : "Insert"}
-                    </button>
-                  </div>
+                    block={block}
+                    inserting={insertingMyBlockId === block.id}
+                    insertingAny={!!insertingMyBlockId}
+                    onInsert={() => void insertMyBlockInto(block)}
+                  />
                 ))}
               </div>
             )}
@@ -519,6 +505,69 @@ export function BlockBrowserDialog() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MyBlockBrowserCard — saved-block card in the browser's My Blocks tab
+// (Phase P5: drag handle → root DndContext → canvas drop zones)
+// ---------------------------------------------------------------------------
+
+function MyBlockBrowserCard({
+  block,
+  inserting,
+  insertingAny,
+  onInsert,
+}: {
+  block: MyBlockRecord;
+  inserting: boolean;
+  insertingAny: boolean;
+  onInsert: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: `myblock-browser-drag-${block.id}`,
+    data: { blockId: block.id, source: "browser" as const },
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      data-testid={`my-block-browser-card-${block.id}`}
+      className={`group relative flex flex-col rounded-xl border border-border bg-secondary p-2 transition-all duration-200 hover:border-accent/40 hover:bg-card ${
+        isDragging ? "opacity-40" : ""
+      }`}
+    >
+      <div className="relative mb-1.5">
+        <MyBlockThumb block={block} height={72} />
+      </div>
+      <div className="flex items-start justify-between gap-1">
+        <h4 className="min-w-0 flex-1 truncate text-xs font-semibold text-text-primary" title={block.name}>
+          {block.name}
+        </h4>
+        <button
+          type="button"
+          {...attributes}
+          {...listeners}
+          aria-label={`Drag ${block.name} onto the page`}
+          data-testid={`my-block-browser-drag-${block.id}`}
+          className="flex h-6 w-6 flex-none cursor-grab touch-none items-center justify-center rounded-md text-text-dim/60 transition-colors hover:bg-card hover:text-text-primary active:cursor-grabbing"
+        >
+          <GripVertical className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <p className="mt-0.5 text-[10px] text-text-dim">
+        {block.previewMetadata.blockCount} blocks
+      </p>
+      <button
+        type="button"
+        data-testid={`my-block-browser-add-${block.id}`}
+        onClick={onInsert}
+        disabled={insertingAny}
+        className="mt-2 flex-1 rounded-lg bg-accent/10 py-1 text-[11px] font-medium text-accent transition-colors hover:bg-accent/20 active:scale-95 disabled:opacity-50"
+      >
+        {inserting ? "Adding…" : "Insert"}
+      </button>
     </div>
   );
 }

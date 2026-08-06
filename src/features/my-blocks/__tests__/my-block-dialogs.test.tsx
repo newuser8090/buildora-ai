@@ -178,7 +178,7 @@ describe("DeleteMyBlockDialog", () => {
 });
 
 describe("ImportMyBlockDialog", () => {
-  it("imports a valid .buildora-block.json file", async () => {
+  it("imports a valid .buildora-block.json file through the review flow", async () => {
     const filePayload = JSON.stringify(buildBlockFile(makeRecord({ name: "Pricing" })));
     const file = new File([filePayload], "pricing.buildora-block.json", { type: "application/json" });
     act(() => {
@@ -189,9 +189,16 @@ describe("ImportMyBlockDialog", () => {
       expect(screen.getByTestId("import-my-block-dialog")).toBeTruthy();
     });
     fireEvent.change(screen.getByTestId("import-my-block-file"), { target: { files: [file] } });
+    // Phase P5 review step: the item is listed and selected by default.
     await waitFor(() => {
-      expect(useMyBlocksUiStore.getState().toast).toContain("imported to My Blocks");
+      expect(screen.getByTestId("import-review-item-0")).toBeTruthy();
     });
+    fireEvent.click(screen.getByTestId("import-review-confirm"));
+    // Summary phase confirms the import with per-item counts.
+    await waitFor(() => {
+      expect(screen.getByTestId("import-summary")).toBeTruthy();
+    });
+    expect(screen.getByTestId("import-summary-imported").textContent).toBe("1");
     const list = await adapter.listMyBlocks();
     expect(list.ok && list.value).toHaveLength(1);
     if (list.ok) {
@@ -204,8 +211,47 @@ describe("ImportMyBlockDialog", () => {
     }
   });
 
+  it("imports a bulk .buildora-blocks.json file with renamed duplicates", async () => {
+    await adapter.createMyBlock({ name: "Pricing", category: "layout", tree: makeTree() });
+    const bulkPayload = JSON.stringify({
+      format: "buildora-blocks",
+      version: 1,
+      exportedAt: "2026-08-01T00:00:00.000Z",
+      blocks: [
+        buildBlockFile(makeRecord({ name: "Pricing" })).block,
+        buildBlockFile(makeRecord({ name: "Hero" })).block,
+      ],
+    });
+    const file = new File([bulkPayload], "my-blocks.buildora-blocks.json", { type: "application/json" });
+    act(() => {
+      useMyBlocksUiStore.getState().openImport();
+    });
+    render(<ImportMyBlockDialog />);
+    await waitFor(() => {
+      expect(screen.getByTestId("import-my-block-dialog")).toBeTruthy();
+    });
+    fireEvent.change(screen.getByTestId("import-my-block-file"), { target: { files: [file] } });
+    await waitFor(() => {
+      expect(screen.getByTestId("import-review-item-0")).toBeTruthy();
+    });
+    // The duplicate is flagged for renaming; Hero is not.
+    expect(screen.getByText(/will be renamed/)).toBeTruthy();
+    fireEvent.click(screen.getByTestId("import-review-confirm"));
+    await waitFor(() => {
+      expect(screen.getByTestId("import-summary")).toBeTruthy();
+    });
+    expect(screen.getByTestId("import-summary-imported").textContent).toBe("1");
+    expect(screen.getByTestId("import-summary-renamed").textContent).toBe("1");
+    const list = await adapter.listMyBlocks();
+    expect(list.ok && list.value).toHaveLength(3);
+    if (list.ok) {
+      expect(list.value.some((b) => b.name === "Pricing 2")).toBe(true);
+      expect(list.value.some((b) => b.name === "Hero")).toBe(true);
+    }
+  });
+
   it("rejects an oversized file with a user-safe message", async () => {
-    const big = new File(["x".repeat(3000000)], "big.buildora-block.json", { type: "application/json" });
+    const big = new File(["x".repeat(9000000)], "big.buildora-blocks.json", { type: "application/json" });
     act(() => {
       useMyBlocksUiStore.getState().openImport();
     });

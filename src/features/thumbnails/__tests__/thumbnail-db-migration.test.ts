@@ -1,12 +1,14 @@
 // ---------------------------------------------------------------------------
-// IndexedDB v1 → v2 migration tests
+// IndexedDB v1 → latest migration tests
 //
 // Simulates a real database created at version 1 (projects + metadata stores,
 // WITHOUT the projectThumbnails store) and verifies the non-destructive
-// upgrade to version 2:
+// upgrade to the current version (v4):
 //   - projects store preserved, records still readable
 //   - metadata store preserved (activeProjectId + dashboard pin metadata)
 //   - projectThumbnails store created
+//   - myBlocks store created (Phase P4)
+//   - myBlockThumbnails + myBlockCollections stores created (Phase P5)
 //   - no existing project rewritten, no metadata removed
 //   - thumbnail save/load works after upgrade
 //   - Blob bytes survive close/reopen
@@ -14,7 +16,7 @@
 //
 // A genuine v1 database is seeded directly with raw IndexedDB (ONLY the
 // projects + metadata stores are created), because the project adapter's
-// upgrade handler now creates the thumbnail store unconditionally — opening
+// upgrade handler now creates every store unconditionally — opening
 // through it would not produce a real v1 layout.
 // ---------------------------------------------------------------------------
 
@@ -28,7 +30,10 @@ import {
   STORE_METADATA,
   STORE_PROJECT_THUMBNAILS,
   STORE_MY_BLOCKS,
+  STORE_MY_BLOCK_THUMBNAILS,
+  STORE_MY_BLOCK_COLLECTIONS,
   METADATA_KEY_ACTIVE_PROJECT,
+  DATABASE_VERSION,
 } from "@/features/persistence/constants";
 import type { Project } from "@/types/project";
 import type { ProjectThumbnailRecord } from "../types";
@@ -217,9 +222,13 @@ async function seedVersionOneDatabase(dbName: string): Promise<void> {
   ]);
 }
 
-/** Trigger the v2 upgrade via the thumbnail adapter and close it. */
-async function upgradeToVersionTwo(dbName: string): Promise<void> {
-  const thumbAdapter = new IndexedDbThumbnailAdapter({ dbName, dbVersion: 2, hashFn: hashOf });
+/** Trigger the upgrade to the current version via the thumbnail adapter and close it. */
+async function upgradeToLatest(dbName: string): Promise<void> {
+  const thumbAdapter = new IndexedDbThumbnailAdapter({
+    dbName,
+    dbVersion: DATABASE_VERSION,
+    hashFn: hashOf,
+  });
   const list = await thumbAdapter.listThumbnailMetadata();
   expect(list.success).toBe(true);
   thumbAdapter.close();
@@ -229,7 +238,7 @@ async function upgradeToVersionTwo(dbName: string): Promise<void> {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("IndexedDB v1 → v2 migration", () => {
+describe("IndexedDB v1 → latest migration", () => {
   it("upgrade adds projectThumbnails without touching existing stores", async () => {
     const dbName = uniqueDbName();
     await seedVersionOneDatabase(dbName);
@@ -241,28 +250,31 @@ describe("IndexedDB v1 → v2 migration", () => {
     expect(before).not.toContain(STORE_PROJECT_THUMBNAILS);
     expect(before).toHaveLength(2);
 
-    // Open with the thumbnail adapter at v2 — triggers the upgrade.
-    await upgradeToVersionTwo(dbName);
+    // Open with the thumbnail adapter at the current version — triggers the upgrade.
+    await upgradeToLatest(dbName);
 
-    // After upgrade: all four known stores present, none removed. The Phase
-    // P4 myBlocks store is created by the same non-destructive upgrade handler
-    // (the thumbnail adapter is often the first connection to create the DB).
+    // After upgrade: all six known stores present, none removed. The Phase
+    // P4 myBlocks store and the Phase P5 myBlockThumbnails + myBlockCollections
+    // stores are created by the same non-destructive upgrade handler (the
+    // thumbnail adapter is often the first connection to create the DB).
     const after = await getDatabaseStoreNames(dbName);
     expect(after).toContain(STORE_PROJECTS);
     expect(after).toContain(STORE_METADATA);
     expect(after).toContain(STORE_PROJECT_THUMBNAILS);
     expect(after).toContain(STORE_MY_BLOCKS);
-    expect(after).toHaveLength(4);
+    expect(after).toContain(STORE_MY_BLOCK_THUMBNAILS);
+    expect(after).toContain(STORE_MY_BLOCK_COLLECTIONS);
+    expect(after).toHaveLength(6);
   });
 
   it("preserves existing project records and revision after upgrade", async () => {
     const dbName = uniqueDbName();
     await seedVersionOneDatabase(dbName);
 
-    await upgradeToVersionTwo(dbName);
+    await upgradeToLatest(dbName);
 
     // Project is still readable with its original revision and content.
-    const projectAdapter = new IndexedDbProjectAdapter({ dbName, dbVersion: 2 });
+    const projectAdapter = new IndexedDbProjectAdapter({ dbName, dbVersion: DATABASE_VERSION });
     const loaded = await projectAdapter.loadProject("legacy-proj");
     expect(loaded.success).toBe(true);
     if (loaded.success) {
@@ -278,9 +290,9 @@ describe("IndexedDB v1 → v2 migration", () => {
     const dbName = uniqueDbName();
     await seedVersionOneDatabase(dbName);
 
-    await upgradeToVersionTwo(dbName);
+    await upgradeToLatest(dbName);
 
-    const projectAdapter = new IndexedDbProjectAdapter({ dbName, dbVersion: 2 });
+    const projectAdapter = new IndexedDbProjectAdapter({ dbName, dbVersion: DATABASE_VERSION });
     const active = await projectAdapter.getActiveProjectId();
     expect(active.success).toBe(true);
     if (active.success) {
@@ -293,9 +305,9 @@ describe("IndexedDB v1 → v2 migration", () => {
     const dbName = uniqueDbName();
     await seedVersionOneDatabase(dbName);
 
-    await upgradeToVersionTwo(dbName);
+    await upgradeToLatest(dbName);
 
-    const projectAdapter = new IndexedDbProjectAdapter({ dbName, dbVersion: 2 });
+    const projectAdapter = new IndexedDbProjectAdapter({ dbName, dbVersion: DATABASE_VERSION });
     const meta = await projectAdapter.getDashboardMetadata("legacy-proj");
     expect(meta.success).toBe(true);
     if (meta.success) {
@@ -317,7 +329,7 @@ describe("IndexedDB v1 → v2 migration", () => {
     );
     expect(before).toBeDefined();
 
-    await upgradeToVersionTwo(dbName);
+    await upgradeToLatest(dbName);
 
     // Raw record after upgrade must be byte-identical (no rewrite).
     const after = await readRawRecord<{ id: string; revision: number; envelope: unknown }>(
@@ -354,7 +366,7 @@ describe("IndexedDB v1 → v2 migration", () => {
     const before = await countMetadataRecords();
     expect(before).toBe(2);
 
-    await upgradeToVersionTwo(dbName);
+    await upgradeToLatest(dbName);
 
     const after = await countMetadataRecords();
     expect(after).toBe(before);
@@ -364,7 +376,11 @@ describe("IndexedDB v1 → v2 migration", () => {
     const dbName = uniqueDbName();
     await seedVersionOneDatabase(dbName);
 
-    const thumbAdapter = new IndexedDbThumbnailAdapter({ dbName, dbVersion: 2, hashFn: hashOf });
+    const thumbAdapter = new IndexedDbThumbnailAdapter({
+      dbName,
+      dbVersion: DATABASE_VERSION,
+      hashFn: hashOf,
+    });
     // First call triggers the upgrade.
     const list = await thumbAdapter.listThumbnailMetadata();
     expect(list.success).toBe(true);
@@ -390,7 +406,11 @@ describe("IndexedDB v1 → v2 migration", () => {
     await seedVersionOneDatabase(dbName);
 
     const bytes = new Uint8Array([9, 8, 7, 6, 255, 0, 42]);
-    const thumbAdapter = new IndexedDbThumbnailAdapter({ dbName, dbVersion: 2, hashFn: hashOf });
+    const thumbAdapter = new IndexedDbThumbnailAdapter({
+      dbName,
+      dbVersion: DATABASE_VERSION,
+      hashFn: hashOf,
+    });
     await thumbAdapter.listThumbnailMetadata();
     await thumbAdapter.saveThumbnail(
       makeRecord({
@@ -400,7 +420,11 @@ describe("IndexedDB v1 → v2 migration", () => {
     );
     thumbAdapter.close();
 
-    const reopened = new IndexedDbThumbnailAdapter({ dbName, dbVersion: 2, hashFn: hashOf });
+    const reopened = new IndexedDbThumbnailAdapter({
+      dbName,
+      dbVersion: DATABASE_VERSION,
+      hashFn: hashOf,
+    });
     const load = await reopened.getThumbnail("legacy-proj");
     expect(load.success).toBe(true);
     if (load.success) {
@@ -415,7 +439,11 @@ describe("IndexedDB v1 → v2 migration", () => {
     const dbName = uniqueDbName();
     await seedVersionOneDatabase(dbName);
 
-    const thumbAdapter = new IndexedDbThumbnailAdapter({ dbName, dbVersion: 2, hashFn: hashOf });
+    const thumbAdapter = new IndexedDbThumbnailAdapter({
+      dbName,
+      dbVersion: DATABASE_VERSION,
+      hashFn: hashOf,
+    });
     await thumbAdapter.listThumbnailMetadata();
 
     // Simulate another connection requesting a newer version.
@@ -437,13 +465,17 @@ describe("IndexedDB v1 → v2 migration", () => {
     const dbName = uniqueDbName();
     await seedVersionOneDatabase(dbName);
 
-    const thumbAdapter = new IndexedDbThumbnailAdapter({ dbName, dbVersion: 2, hashFn: hashOf });
+    const thumbAdapter = new IndexedDbThumbnailAdapter({
+      dbName,
+      dbVersion: DATABASE_VERSION,
+      hashFn: hashOf,
+    });
     await thumbAdapter.listThumbnailMetadata();
     await thumbAdapter.saveThumbnail(makeRecord());
     thumbAdapter.close();
 
     // Project adapter still sees the project exactly as before.
-    const projectAdapter = new IndexedDbProjectAdapter({ dbName, dbVersion: 2 });
+    const projectAdapter = new IndexedDbProjectAdapter({ dbName, dbVersion: DATABASE_VERSION });
     const loaded = await projectAdapter.loadProject("legacy-proj");
     expect(loaded.success).toBe(true);
     if (loaded.success) {
@@ -453,7 +485,11 @@ describe("IndexedDB v1 → v2 migration", () => {
     projectAdapter.close();
 
     // Thumbnail adapter sees exactly one thumbnail for the legacy project.
-    const reopenedThumb = new IndexedDbThumbnailAdapter({ dbName, dbVersion: 2, hashFn: hashOf });
+    const reopenedThumb = new IndexedDbThumbnailAdapter({
+      dbName,
+      dbVersion: DATABASE_VERSION,
+      hashFn: hashOf,
+    });
     const meta = await reopenedThumb.listThumbnailMetadata();
     expect(meta.success).toBe(true);
     if (meta.success) {
@@ -467,7 +503,7 @@ describe("IndexedDB v1 → v2 migration", () => {
     const dbName = uniqueDbName();
     await seedVersionOneDatabase(dbName);
 
-    await upgradeToVersionTwo(dbName);
+    await upgradeToLatest(dbName);
 
     // The upgrade must NOT have created any unexpected stores.
     const names = await getDatabaseStoreNames(dbName);
@@ -477,15 +513,25 @@ describe("IndexedDB v1 → v2 migration", () => {
         STORE_METADATA,
         STORE_PROJECT_THUMBNAILS,
         STORE_MY_BLOCKS,
+        STORE_MY_BLOCK_THUMBNAILS,
+        STORE_MY_BLOCK_COLLECTIONS,
       ]),
     );
-    // Exactly the four known stores (the Phase P4 myBlocks store is created
-    // non-destructively) — no stray Blob or asset stores.
+    // Exactly the six known stores (Phase P4 myBlocks + Phase P5 thumbnail
+    // and collection stores are created non-destructively) — no stray stores.
     expect(
-      names.filter((n) =>
-        !["projects", "metadata", "projectThumbnails", "myBlocks"].includes(n),
+      names.filter(
+        (n) =>
+          ![
+            "projects",
+            "metadata",
+            "projectThumbnails",
+            "myBlocks",
+            "myBlockThumbnails",
+            "myBlockCollections",
+          ].includes(n),
       ),
     ).toHaveLength(0);
-    expect(names).toHaveLength(4);
+    expect(names).toHaveLength(6);
   });
 });

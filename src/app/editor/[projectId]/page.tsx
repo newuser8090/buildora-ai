@@ -23,6 +23,7 @@ import { CommandPalette } from "@/features/guided-builder/components/CommandPale
 import { TryGuidedBanner } from "@/features/guided-builder/components/TryGuidedBanner";
 import { CodeImportDialog } from "@/features/code-import/components/CodeImportDialog";
 import { MyBlocksRoot } from "@/features/my-blocks/components/MyBlocksRoot";
+import { MyBlockDndProvider } from "@/features/my-blocks/drag/MyBlockDndProvider";
 import { getProjectController } from "@/features/persistence/services/project-controller";
 import { ensureProjectController } from "@/features/persistence/hooks/useProjectController";
 import { useEditorStore } from "@/features/editor/store/editor-store";
@@ -264,7 +265,7 @@ function EditorShell() {
     project.pages.find((p) => p.id === selectedPageId) ?? project.pages[0];
 
   return (
-    <>
+    <MyBlockDndProvider>
       <TopNav />
       <PageTabs />
       <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -293,6 +294,6 @@ function EditorShell() {
 
       {/* Phase P4: My Blocks — shared library + save/rename/delete/import dialogs */}
       <MyBlocksRoot />
-    </>
+    </MyBlockDndProvider>
   );
 }

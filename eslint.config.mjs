@@ -25,6 +25,10 @@ const eslintConfig = defineConfig([
       // ProjectCard renders runtime object URLs (blob:) produced from
       // IndexedDB thumbnail Blobs — never optimized remote images.
       "src/features/projects/components/ProjectCard.tsx",
+      // My Blocks card + drag overlay render runtime object URLs (blob:)
+      // produced from the My Blocks thumbnail Blob store — same policy.
+      "src/features/my-blocks/components/MyBlockThumb.tsx",
+      "src/features/my-blocks/drag/MyBlockDndProvider.tsx",
     ],
     rules: {
       "@next/next/no-img-element": "off",

@@ -9,12 +9,14 @@ import {
   Save,
   Download,
   Package,
+  BookMarked,
   CircleUser,
   Loader2,
   ImageIcon,
   ArrowLeft,
 } from "lucide-react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
+import { useMyBlocksUiStore } from "@/features/my-blocks/store/my-blocks-ui-store";
 import { AssetManager } from "@/features/assets/components/AssetManager";
 import { saveNowViaController } from "@/features/persistence/services/project-controller";
 import { ProjectExportService } from "@/features/projects/services/project-export-service";
@@ -288,6 +290,17 @@ export function TopNav() {
         >
           <ImageIcon className="h-4 w-4" />
           <span className="hidden sm:inline text-xs">Assets</span>
+        </button>
+
+        <button
+          data-testid="topnav-my-blocks-button"
+          onClick={() => useMyBlocksUiStore.getState().openLibrary()}
+          className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-sm text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
+          title="My saved blocks"
+          type="button"
+        >
+          <BookMarked className="h-4 w-4" />
+          <span className="hidden sm:inline text-xs">My Blocks</span>
         </button>
 
         <button

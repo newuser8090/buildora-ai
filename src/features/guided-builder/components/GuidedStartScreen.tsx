@@ -10,11 +10,13 @@
 
 "use client";
 
-import { useMemo } from "react";
-import { Sparkles, LayoutGrid, ClipboardPaste, BookMarked } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Sparkles, LayoutGrid, ClipboardPaste, BookMarked, FolderPlus } from "lucide-react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
 import { useMyBlocksUiStore } from "@/features/my-blocks/store/my-blocks-ui-store";
+import { getMyBlocksAdapter } from "@/features/my-blocks/storage/my-blocks-singleton";
+import type { MyBlockRecord } from "@/features/my-blocks/types";
 import { useGuidedActions } from "../hooks/useGuidedActions";
 import {
   getGuidedSectionExample,
@@ -35,6 +37,117 @@ const START_BLOCKS: StartBlock[] = [
   { sectionType: "cta" },
   { sectionType: "footer" },
 ];
+
+// ---------------------------------------------------------------------------
+// RecentSavedPieces — deterministic "reuse it again" suggestions (Phase P5)
+//
+// Shows the three most recently updated saved blocks. Clicking one opens the
+// placement picker (canonical insertion). Never AI-inferred; purely the
+// library's own data. Loaded once on mount with unmount safety.
+// ---------------------------------------------------------------------------
+
+function RecentSavedPieces() {
+  const [blocks, setBlocks] = useState<MyBlockRecord[] | null>(null);
+  const openPlacementPicker = useMyBlocksUiStore((s) => s.openPlacementPicker);
+
+  useEffect(() => {
+    let cancelled = false;
+    getMyBlocksAdapter()
+      .listMyBlocks()
+      .then((result) => {
+        if (cancelled) return;
+        if (!result.ok) return;
+        const top = [...result.value]
+          .sort(
+            (a, b) =>
+              b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id),
+          )
+          .slice(0, 3);
+        setBlocks(top);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!blocks || blocks.length === 0) return null;
+
+  return (
+    <div className="mt-6 text-left" data-testid="guided-recent-pieces">
+      <p className="text-xs font-medium text-text-dim">
+        Use something you saved before
+      </p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {blocks.map((block) => (
+          <button
+            key={block.id}
+            type="button"
+            data-testid={`guided-recent-piece-${block.id}`}
+            onClick={() => openPlacementPicker(block)}
+            title="Drag this where you want it, or choose a spot."
+            className="flex h-9 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-xs font-medium text-text-primary transition-all duration-200 hover:border-accent/40 hover:bg-card active:scale-95"
+          >
+            <BookMarked className="h-3.5 w-3.5 text-accent" aria-hidden="true" />
+            <span className="max-w-[160px] truncate">{block.name}</span>
+            <span className="text-[10px] text-text-dim">
+              {block.previewMetadata.blockCount} blocks
+            </span>
+          </button>
+        ))}
+      </div>
+      <p className="mt-1.5 text-[10px] text-text-dim/70">
+        Use this again on another page, or drag it straight onto the canvas.
+      </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// CollectionSuggestion — deterministic hint after several saved blocks
+// ---------------------------------------------------------------------------
+
+function CollectionSuggestion() {
+  const [suggestion, setSuggestion] = useState<{
+    blocks: number;
+    collections: number;
+  } | null>(null);
+  const openCreateCollection = useMyBlocksUiStore((s) => s.openCreateCollection);
+
+  useEffect(() => {
+    let cancelled = false;
+    const adapter = getMyBlocksAdapter();
+    void Promise.all([adapter.listMyBlocks(), adapter.listMyBlockCollections()]).then(
+      ([blocks, collections]) => {
+        if (cancelled) return;
+        if (blocks.ok && collections.ok) {
+          setSuggestion({
+            blocks: blocks.value.length,
+            collections: collections.value.length,
+          });
+        }
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!suggestion || suggestion.blocks < 3 || suggestion.collections > 0) {
+    return null;
+  }
+
+  return (
+    <button
+      type="button"
+      data-testid="guided-collection-suggestion"
+      onClick={openCreateCollection}
+      className="mt-3 flex h-9 items-center gap-2 rounded-lg border border-dashed border-accent/30 bg-accent/5 px-4 text-xs font-medium text-accent transition-all duration-200 hover:border-accent/60 hover:bg-accent/10 active:scale-95"
+    >
+      <FolderPlus className="h-4 w-4" aria-hidden="true" />
+      You have {suggestion.blocks} saved pieces — group them with a collection
+    </button>
+  );
+}
 
 export function GuidedStartScreen({
   pageId,
@@ -132,6 +245,8 @@ export function GuidedStartScreen({
         Start with one piece — you can add or change anything later.
       </p>
 
+      <RecentSavedPieces />
+
       <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-2">
         {START_BLOCKS.map((block) => {
           const added = existingTypes.has(block.sectionType);
@@ -164,6 +279,8 @@ export function GuidedStartScreen({
           );
         })}
       </div>
+
+      <CollectionSuggestion />
 
       <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
         <button

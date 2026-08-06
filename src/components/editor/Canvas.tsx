@@ -11,6 +11,11 @@ import { InlineEditLayer } from "@/features/inline-editing/components/InlineEdit
 import { useInlineEditShortcuts } from "@/features/inline-editing/hooks/useInlineEditShortcuts";
 import { useGuidedBuilderStore } from "@/features/guided-builder/store/guided-builder-store";
 import { GuidedStartScreen } from "@/features/guided-builder/components/GuidedStartScreen";
+import { useMyBlockDragContext, onMyBlockDrop } from "@/features/my-blocks/drag/MyBlockDndProvider";
+import { validateDropZone } from "@/features/my-blocks/drag/drop-zone-utils";
+import { getMyBlocksAdapter } from "@/features/my-blocks/storage/my-blocks-singleton";
+import { insertMyBlock } from "@/features/my-blocks/services/insert-my-block";
+import { useMyBlocksUiStore } from "@/features/my-blocks/store/my-blocks-ui-store";
 
 
 // ---------------------------------------------------------------------------
@@ -191,6 +196,47 @@ export function Canvas() {
   // Inline editing (Phase M) — floating toolbar/popover layer + shortcuts.
   useInlineEditShortcuts();
 
+  // ---- My Block drag & drop (Phase P5) ----
+  // The canvas never mutates during hover. On drop, the canonical insertion
+  // service commits ONE history entry; any failure leaves the project
+  // untouched (insertMyBlock guarantees atomicity).
+  const myBlockDragActive = useMyBlockDragContext().dragActive;
+  const dropToast = useMyBlocksUiStore((s) => s.showToast);
+  useEffect(() => {
+    return onMyBlockDrop(async (blockId, zone) => {
+      const state = useEditorStore.getState();
+      const loaded = await getMyBlocksAdapter().getMyBlock(blockId);
+      if (!loaded.ok) {
+        dropToast(loaded.error.message);
+        return;
+      }
+      const validation = validateDropZone(zone, state.project, loaded.value.tree);
+      if (!validation.ok) {
+        dropToast(validation.reason);
+        return;
+      }
+      const result = await insertMyBlock({
+        projectId: state.project.id,
+        blockId,
+        placement: validation.placement,
+        adapter: getMyBlocksAdapter(),
+      });
+      if (!result.ok) {
+        dropToast(result.error.message);
+        return;
+      }
+      // Post-insert: select the inserted section, open the Blocks tab, scroll
+      // into view. One Undo removes the whole copy.
+      useEditorStore.getState().selectSection(result.sectionId);
+      useEditorUiStore.getState().setRightSidebarTab("blocks");
+      window.setTimeout(
+        () => scrollSectionIntoView(result.sectionId, { block: "center" }),
+        0,
+      );
+      dropToast(`"${loaded.value.name}" added to your page`);
+    });
+  }, [dropToast]);
+
   // Selection sync — when a section is selected from the STRUCTURE panel (or
   // programmatically via insert/duplicate), scroll the canvas element into
   // view. Canvas-initiated clicks are excluded via selectionSource so we never
@@ -323,6 +369,7 @@ export function Canvas() {
                 sections={activePage.sections}
                 pageId={activePage.id}
                 showInsertionPoints={guided && !isGenerating}
+                myBlockDragActive={myBlockDragActive && !isGenerating}
               />
             </>
           ) : (
