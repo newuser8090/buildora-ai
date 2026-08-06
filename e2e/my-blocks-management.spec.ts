@@ -115,8 +115,12 @@ test.describe("My Blocks — library management", () => {
       { timeout: 5000 },
     );
 
-    // 5. Export one .buildora-block.json file via the details dialog.
-    await page.locator('[data-testid^="my-block-preview-"]').first().click();
+    // 5. Export one .buildora-block.json file via the details dialog. In the
+    // Phase P5 card the Preview action lives in the More menu — open it first.
+    const exportCard = page.locator('[data-testid^="my-block-card-"]').first();
+    const exportCardId = (await exportCard.getAttribute("data-testid"))!.replace("my-block-card-", "");
+    await page.locator(`[data-testid="my-block-menu-${exportCardId}"]`).click();
+    await page.locator(`[data-testid="my-block-preview-${exportCardId}"]`).click();
     await expect(page.locator('[data-testid="my-block-details"]')).toBeVisible({ timeout: 5000 });
     const downloadPromise = page.waitForEvent("download", { timeout: 10000 });
     await page.locator('[data-testid="my-block-details-export"]').click();
@@ -140,13 +144,19 @@ test.describe("My Blocks — library management", () => {
       page.locator(CUSTOM_BLOCK_SECTION).getByText("Managed block", { exact: true }).first(),
     ).toBeVisible({ timeout: 5000 });
 
-    // 8. Import the exported block file back.
+    // 8. Import the exported block file back (Phase P5 review → import flow).
     await page.keyboard.press("Control+k");
     await page.locator('[data-testid="command-open-my-blocks"]').click();
     await expect(page.locator('[data-testid="my-blocks-library"]')).toBeVisible({ timeout: 5000 });
     await page.locator('[data-testid="my-blocks-import"]').click();
     await expect(page.locator('[data-testid="import-my-block-dialog"]')).toBeVisible({ timeout: 5000 });
     await page.locator('[data-testid="import-my-block-file"]').setInputFiles(exportPath!);
+    // The file parses into the review step — confirm the import.
+    await expect(page.locator('[data-testid="import-review-list"]')).toBeVisible({ timeout: 10000 });
+    await page.locator('[data-testid="import-review-confirm"]').click();
+    await expect(page.locator('[data-testid="import-summary"]')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="import-summary-imported"]')).toHaveText("1");
+    await page.locator('[data-testid="import-my-block-done"]').click();
     await expect(page.locator('[data-testid="my-blocks-toast"]')).toContainText("imported to My Blocks", {
       timeout: 10000,
     });

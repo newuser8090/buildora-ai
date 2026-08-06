@@ -10,17 +10,26 @@ import type { BlockNode, BlockTree } from "@/features/blocks/types";
 import type { Project } from "@/types/project";
 import type { BaseSection } from "@/types/section";
 import type {
+  CreateMyBlockCollectionInput,
   CreateMyBlockInput,
+  MyBlockCollection,
   MyBlockRecord,
   MyBlockResult,
   MyBlocksStorageAdapter,
+  UpdateMyBlockCollectionPatch,
   UpdateMyBlockPatch,
 } from "../types";
 import {
+  generateUniqueCollectionName,
+  parseMyBlockCollection,
   parseMyBlockRecord,
+  sanitizeMyBlockCollectionDescription,
+  sanitizeMyBlockCollectionIds,
+  sanitizeMyBlockCollectionName,
   sanitizeMyBlockDescription,
   sanitizeMyBlockName,
   sanitizeMyBlockTags,
+  MY_BLOCK_MAX_COLLECTIONS,
 } from "../schemas/my-block-schema";
 
 // ---------------------------------------------------------------------------
@@ -154,6 +163,7 @@ export function makeProject(overrides?: Partial<Project>): Project {
  */
 export class InMemoryMyBlocksAdapter implements MyBlocksStorageAdapter {
   private records = new Map<string, MyBlockRecord>();
+  private collections = new Map<string, MyBlockCollection>();
   private clock: () => Date;
   private idCounter = 0;
 
@@ -193,6 +203,7 @@ export class InMemoryMyBlocksAdapter implements MyBlocksStorageAdapter {
     const record: MyBlockRecord = {
       id: input.idFactory ? input.idFactory() : `mem-${Date.now().toString(36)}-${this.idCounter}`,
       version: 1,
+      contentRevision: 1,
       name: sanitizeMyBlockName(input.name) ?? "Saved block",
       ...(sanitizeMyBlockDescription(input.description) !== undefined
         ? { description: sanitizeMyBlockDescription(input.description) }
@@ -235,6 +246,12 @@ export class InMemoryMyBlocksAdapter implements MyBlocksStorageAdapter {
     };
     if (patch.lastUsedAt !== undefined) next.lastUsedAt = patch.lastUsedAt;
     if (patch.useCount !== undefined) next.useCount = patch.useCount;
+    if (patch.favorite !== undefined) next.favorite = patch.favorite;
+    if (patch.collectionIds !== undefined) {
+      next.collectionIds = sanitizeMyBlockCollectionIds(patch.collectionIds);
+    }
+    if (patch.thumbnail !== undefined) next.thumbnail = patch.thumbnail ?? undefined;
+    if (patch.contentRevision !== undefined) next.contentRevision = patch.contentRevision;
     const parsed = parseMyBlockRecord(next);
     if (!parsed) return { ok: false, error: { code: "INVALID_RECORD", message: "The updated saved block failed validation." } };
     this.records.set(parsed.id, parsed as MyBlockRecord);
@@ -260,6 +277,10 @@ export class InMemoryMyBlocksAdapter implements MyBlocksStorageAdapter {
       sourceMetadata: { source: "duplicated" },
       lastUsedAt: undefined,
       useCount: 0,
+      contentRevision: 1,
+      thumbnail: undefined,
+      favorite: undefined,
+      collectionIds: undefined,
     };
     const parsed = parseMyBlockRecord(record);
     if (!parsed) return { ok: false, error: { code: "INVALID_RECORD", message: "The duplicated saved block failed validation." } };
@@ -269,10 +290,115 @@ export class InMemoryMyBlocksAdapter implements MyBlocksStorageAdapter {
 
   async clearMyBlocksForTests(): Promise<void> {
     this.records.clear();
+    this.collections.clear();
   }
 
   /** Direct-access hook for corrupt-record isolation tests. */
   putRawForTests(record: unknown): void {
     this.records.set((record as { id: string }).id, record as MyBlockRecord);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Collections (Phase P5) — mirrors the real adapter's contract
+  // ---------------------------------------------------------------------------
+
+  async listMyBlockCollections(): Promise<MyBlockResult<MyBlockCollection[]>> {
+    const collections: MyBlockCollection[] = [];
+    for (const raw of this.collections.values()) {
+      const parsed = parseMyBlockCollection(raw);
+      if (!parsed) continue;
+      collections.push(parsed as MyBlockCollection);
+    }
+    collections.sort(
+      (a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
+    );
+    return { ok: true, value: collections };
+  }
+
+  async getMyBlockCollection(id: string): Promise<MyBlockResult<MyBlockCollection>> {
+    const raw = this.collections.get(id);
+    if (raw === undefined) {
+      return { ok: false, error: { code: "COLLECTION_NOT_FOUND", message: "That collection no longer exists." } };
+    }
+    const parsed = parseMyBlockCollection(raw);
+    if (!parsed) {
+      return { ok: false, error: { code: "INVALID_RECORD", message: "That collection is damaged and cannot be used." } };
+    }
+    return { ok: true, value: parsed as MyBlockCollection };
+  }
+
+  async createMyBlockCollection(input: CreateMyBlockCollectionInput): Promise<MyBlockResult<MyBlockCollection>> {
+    const siblings = await this.listMyBlockCollections();
+    if (!siblings.ok) return siblings;
+    if (siblings.value.length >= MY_BLOCK_MAX_COLLECTIONS) {
+      return { ok: false, error: { code: "QUOTA_EXCEEDED", message: "Too many collections." } };
+    }
+    const now = this.clock().toISOString();
+    this.idCounter += 1;
+    const maxOrder = siblings.value.reduce((max, c) => Math.max(max, c.sortOrder), -1);
+    const collection: MyBlockCollection = {
+      id: input.idFactory ? input.idFactory() : `mem-col-${Date.now().toString(36)}-${this.idCounter}`,
+      version: 1,
+      name: generateUniqueCollectionName(input.name, siblings.value.map((c) => c.name)),
+      ...(sanitizeMyBlockCollectionDescription(input.description) !== undefined
+        ? { description: sanitizeMyBlockCollectionDescription(input.description) }
+        : {}),
+      createdAt: now,
+      updatedAt: now,
+      sortOrder: maxOrder + 1,
+    };
+    const parsed = parseMyBlockCollection(collection);
+    if (!parsed) return { ok: false, error: { code: "INVALID_RECORD", message: "The collection failed validation." } };
+    this.collections.set(parsed.id, parsed as MyBlockCollection);
+    return { ok: true, value: parsed as MyBlockCollection };
+  }
+
+  async updateMyBlockCollection(id: string, patch: UpdateMyBlockCollectionPatch): Promise<MyBlockResult<MyBlockCollection>> {
+    const current = await this.getMyBlockCollection(id);
+    if (!current.ok) return current;
+    let name = current.value.name;
+    if (patch.name !== undefined) {
+      const sanitized = sanitizeMyBlockCollectionName(patch.name);
+      if (!sanitized) return { ok: false, error: { code: "INVALID_NAME", message: "Collection names cannot be empty." } };
+      const siblings = await this.listMyBlockCollections();
+      const others = siblings.ok
+        ? siblings.value.filter((c) => c.id !== id).map((c) => c.name)
+        : [];
+      name = generateUniqueCollectionName(sanitized, others);
+    }
+    const next: MyBlockCollection = {
+      ...current.value,
+      name,
+      description:
+        patch.description !== undefined
+          ? (sanitizeMyBlockCollectionDescription(patch.description) ?? undefined)
+          : current.value.description,
+      sortOrder:
+        patch.sortOrder !== undefined ? Math.max(0, Math.floor(patch.sortOrder)) : current.value.sortOrder,
+      updatedAt: this.clock().toISOString(),
+    };
+    const parsed = parseMyBlockCollection(next);
+    if (!parsed) return { ok: false, error: { code: "INVALID_RECORD", message: "The updated collection failed validation." } };
+    this.collections.set(parsed.id, parsed as MyBlockCollection);
+    return { ok: true, value: parsed as MyBlockCollection };
+  }
+
+  async deleteMyBlockCollection(id: string): Promise<MyBlockResult<{ id: string }>> {
+    this.collections.delete(id);
+    // Blocks are never deleted — only membership is cleaned.
+    for (const [bid, block] of this.records) {
+      if (block.collectionIds && block.collectionIds.includes(id)) {
+        this.records.set(bid, {
+          ...block,
+          collectionIds: block.collectionIds.filter((cid) => cid !== id),
+        });
+      }
+    }
+    return { ok: true, value: { id } };
+  }
+
+  /** Direct-access hook for corrupt-collection isolation tests. */
+  putRawCollectionForTests(record: unknown): void {
+    this.collections.set((record as { id: string }).id, record as MyBlockCollection);
   }
 }

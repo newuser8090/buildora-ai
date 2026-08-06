@@ -14,6 +14,10 @@ import { RenameMyBlockDialog } from "./RenameMyBlockDialog";
 import { DeleteMyBlockDialog } from "./DeleteMyBlockDialog";
 import { ImportMyBlockDialog } from "./ImportMyBlockDialog";
 import { MyBlocksToast } from "./MyBlocksToast";
+import { PlacementPickerDialog } from "./PlacementPickerDialog";
+import { CollectionDialog } from "./CollectionDialog";
+import { MoveToCollectionDialog } from "./MoveToCollectionDialog";
+import { BulkDeleteDialog } from "./BulkDeleteDialog";
 
 export function MyBlocksRoot() {
   return (
@@ -25,6 +29,11 @@ export function MyBlocksRoot() {
       <DeleteMyBlockDialog />
       <ImportMyBlockDialog />
       <MyBlocksToast />
+      {/* Phase P5: placement picker + collections + bulk actions */}
+      <PlacementPickerDialog />
+      <CollectionDialog />
+      <MoveToCollectionDialog />
+      <BulkDeleteDialog />
     </>
   );
 }

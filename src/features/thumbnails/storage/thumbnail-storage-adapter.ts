@@ -16,11 +16,9 @@
 import {
   DATABASE_NAME,
   DATABASE_VERSION,
-  STORE_PROJECTS,
-  STORE_METADATA,
   STORE_PROJECT_THUMBNAILS,
-  STORE_MY_BLOCKS,
 } from "@/features/persistence/constants";
+import { ensureDatabaseStores } from "@/features/persistence/services/db-schema";
 import { thumbnailErrors, toThumbnailError } from "../errors";
 import type {
   ProjectThumbnailRecord,
@@ -112,24 +110,10 @@ export class IndexedDbThumbnailAdapter implements ProjectThumbnailStorageAdapter
 
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result;
-        // Non-destructive: only create missing stores.
-        if (!db.objectStoreNames.contains(STORE_PROJECTS)) {
-          db.createObjectStore(STORE_PROJECTS, { keyPath: "id" });
-        }
-        if (!db.objectStoreNames.contains(STORE_METADATA)) {
-          db.createObjectStore(STORE_METADATA, { keyPath: "key" });
-        }
-        if (!db.objectStoreNames.contains(STORE_PROJECT_THUMBNAILS)) {
-          db.createObjectStore(STORE_PROJECT_THUMBNAILS, { keyPath: "projectId" });
-        }
-        // Phase P4: the thumbnail adapter is often the FIRST connection to
-        // create the database (thumbnails render right after project creation).
-        // If it created the v3 database without the myBlocks store, no later
-        // adapter's upgrade handler would ever run (version already 3) and the
-        // personal block library would be unusable. Create it here too.
-        if (!db.objectStoreNames.contains(STORE_MY_BLOCKS)) {
-          db.createObjectStore(STORE_MY_BLOCKS, { keyPath: "id" });
-        }
+        // Non-destructive: create missing stores only. Shared schema helper
+        // guarantees EVERY store exists regardless of which adapter triggers
+        // the version bump (first-connection safety).
+        ensureDatabaseStores(db);
       };
 
       request.onsuccess = (event) => {

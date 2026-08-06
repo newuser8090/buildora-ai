@@ -13,6 +13,11 @@ import { Search, CornerDownLeft } from "lucide-react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
 import { useMyBlocksUiStore } from "@/features/my-blocks/store/my-blocks-ui-store";
+import { getMyBlocksAdapter } from "@/features/my-blocks/storage/my-blocks-singleton";
+import {
+  loadLibraryPreferences,
+  saveLibraryPreferences,
+} from "@/features/my-blocks/services/library-preferences";
 import { useGuidedBuilderStore } from "../store/guided-builder-store";
 import { useGuidedActions } from "../hooks/useGuidedActions";
 import { EXPORT_SITE_EVENT } from "../constants";
@@ -37,6 +42,10 @@ function buildCommands(handlers: {
   importCode: () => void;
   saveSelectedAsBlock: () => void;
   exportSelectedAsBlock: () => void;
+  showFavorites: () => void;
+  moveToCollection: () => void;
+  toggleLibraryView: () => void;
+  insertRecentPiece: (placement: "below" | "end") => void;
 }): PaletteCommand[] {
   return [
     {
@@ -159,10 +168,52 @@ function buildCommands(handlers: {
     },
     {
       id: "export-saved-block",
-      label: "Export a saved block file",
+      label: "Export saved blocks",
       keywords: ["export block", "download block", "share block", "backup block"],
-      hint: "Download one saved block as a file",
+      hint: "Download saved blocks as files",
       run: () => handlers.exportSelectedAsBlock(),
+    },
+    {
+      id: "show-favorites",
+      label: "Show my favorite pieces",
+      keywords: ["favorite", "starred", "favourites", "favorites"],
+      hint: "Open your starred saved blocks",
+      run: () => handlers.showFavorites(),
+    },
+    {
+      id: "move-to-collection",
+      label: "Move pieces into a collection",
+      keywords: ["collection", "folder", "organize", "group", "move"],
+      hint: "Organize saved blocks into folders",
+      run: () => handlers.moveToCollection(),
+    },
+    {
+      id: "import-block-collection",
+      label: "Import a saved-blocks file",
+      keywords: ["import blocks", "blocks file", "buildora-blocks", "bulk import"],
+      hint: "Add a collection of saved blocks",
+      run: () => useMyBlocksUiStore.getState().openImport(),
+    },
+    {
+      id: "toggle-library-view",
+      label: "Switch My Blocks between grid and list",
+      keywords: ["view", "grid", "list", "layout", "switch"],
+      hint: "Change how saved blocks are shown",
+      run: () => handlers.toggleLibraryView(),
+    },
+    {
+      id: "insert-recent-below",
+      label: "Insert a recently used piece below",
+      keywords: ["insert piece", "reuse below", "add below", "recent piece"],
+      hint: "Add your most recently used saved block below",
+      run: () => handlers.insertRecentPiece("below"),
+    },
+    {
+      id: "insert-recent-end",
+      label: "Insert a recently used piece at the end",
+      keywords: ["insert piece", "reuse at end", "add at end", "recent piece"],
+      hint: "Add your most recently used saved block at the end of the page",
+      run: () => handlers.insertRecentPiece("end"),
     },
   ];
 }
@@ -324,8 +375,59 @@ export function CommandPalette() {
   const exportSelectedAsBlock = useCallback(() => {
     useMyBlocksUiStore.getState().openLibrary();
     useMyBlocksUiStore.getState().showToast(
-      "Open a saved block and choose Export.",
+      "Choose pieces, then select and Export.",
     );
+  }, []);
+
+  // Phase P5 — deterministic command-palette routing through canonical
+  // stores/services. No speculative behavior — each command does one thing.
+  const showFavorites = useCallback(() => {
+    const prefs = loadLibraryPreferences();
+    saveLibraryPreferences({ ...prefs, section: "favorites" });
+    useMyBlocksUiStore.getState().openLibrary();
+  }, []);
+
+  const moveToCollection = useCallback(() => {
+    const prefs = loadLibraryPreferences();
+    saveLibraryPreferences({ ...prefs, section: "collections" });
+    useMyBlocksUiStore.getState().openLibrary();
+    useMyBlocksUiStore.getState().showToast(
+      "Choose pieces, then select them and choose Move.",
+    );
+  }, []);
+
+  const toggleLibraryView = useCallback(() => {
+    const prefs = loadLibraryPreferences();
+    const next = prefs.view === "grid" ? "list" : "grid";
+    saveLibraryPreferences({ ...prefs, view: next });
+    useMyBlocksUiStore.getState().showToast(
+      `My Blocks view switched to ${next} view`,
+    );
+  }, []);
+
+  const insertRecentPiece = useCallback((placement: "below" | "end") => {
+    void (async () => {
+      const result = await getMyBlocksAdapter().listMyBlocks();
+      if (!result.ok || result.value.length === 0) {
+        useMyBlocksUiStore
+          .getState()
+          .showToast("Save a block first, then insert it.");
+        return;
+      }
+      // Most recently used first, then most recently saved (deterministic).
+      const block = [...result.value].sort(
+        (a, b) =>
+          (b.lastUsedAt ?? "").localeCompare(a.lastUsedAt ?? "") ||
+          b.updatedAt.localeCompare(a.updatedAt) ||
+          a.id.localeCompare(b.id),
+      )[0];
+      useMyBlocksUiStore.getState().openPlacementPicker(block);
+      useMyBlocksUiStore.getState().showToast(
+        placement === "below"
+          ? "Choose “Below selected part” to add it."
+          : "Choose “End of page” to add it.",
+      );
+    })();
   }, []);
 
   const commands = useMemo(
@@ -342,6 +444,10 @@ export function CommandPalette() {
         importCode,
         saveSelectedAsBlock,
         exportSelectedAsBlock,
+        showFavorites,
+        moveToCollection,
+        toggleLibraryView,
+        insertRecentPiece,
       }),
     [
       browseBlocks,
@@ -355,6 +461,10 @@ export function CommandPalette() {
       importCode,
       saveSelectedAsBlock,
       exportSelectedAsBlock,
+      showFavorites,
+      moveToCollection,
+      toggleLibraryView,
+      insertRecentPiece,
     ],
   );
 

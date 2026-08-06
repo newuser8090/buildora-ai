@@ -5,6 +5,14 @@
 // (no React, no DOM, no Zustand). The tree is a validated native BlockTree —
 // raw pasted source code is NEVER stored, and no executable values ever live
 // in a record.
+//
+// Phase P5 extensions (all optional → Phase P4 records stay valid):
+//   - favorite?            — starred by the user (local metadata only)
+//   - collectionIds?       — personal folders this block belongs to
+//   - thumbnail?           — metadata reference to a separately-stored Blob
+//   - contentRevision?     — increments only when the TREE changes; used to
+//                            detect stale thumbnails without regenerating on
+//                            rename/favorite/collection changes
 // ---------------------------------------------------------------------------
 
 import type { BlockTree, BlockType } from "@/features/blocks/types";
@@ -69,6 +77,28 @@ export interface MyBlockPreviewMetadata {
 }
 
 // ---------------------------------------------------------------------------
+// Thumbnail metadata — a REFERENCE only (the Blob lives in its own store)
+// ---------------------------------------------------------------------------
+
+/**
+ * Persisted thumbnail metadata stored on the record. The binary image data
+ * NEVER lives inside MyBlockRecord — it is stored in the dedicated
+ * myBlockThumbnails object store and referenced by blockId.
+ */
+export interface MyBlockThumbnailMetadata {
+  /** Content revision of the tree this image represents (stale check). */
+  revision: number;
+  /** ISO timestamp of generation. */
+  generatedAt: string;
+  mimeType: "image/webp" | "image/png";
+  width: number;
+  height: number;
+  byteSize: number;
+  /** Content hash of the encoded image (dedup / corruption detection). */
+  hash: string;
+}
+
+// ---------------------------------------------------------------------------
 // Record
 // ---------------------------------------------------------------------------
 
@@ -91,13 +121,43 @@ export interface MyBlockRecord {
   /** Optional lightweight usage metadata (UI only). */
   lastUsedAt?: string;
   useCount?: number;
+  /** Phase P5: starred by the user. Local metadata, never project history. */
+  favorite?: boolean;
+  /** Phase P5: personal collection/folder ids this block belongs to. */
+  collectionIds?: string[];
+  /** Phase P5: thumbnail metadata reference (Blob stored separately). */
+  thumbnail?: MyBlockThumbnailMetadata;
+  /** Phase P5: increments only when the TREE changes (thumbnail staleness). */
+  contentRevision?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Collections (Phase P5)
+// ---------------------------------------------------------------------------
+
+export interface MyBlockCollection {
+  id: string;
+  /** Schema/format version (currently 1). */
+  version: number;
+  name: string;
+  description?: string;
+  createdAt: string;
+  updatedAt: string;
+  /** Deterministic tiebreak for the collections list (0, 1, 2, …). */
+  sortOrder: number;
 }
 
 // ---------------------------------------------------------------------------
 // Sort options (deterministic)
 // ---------------------------------------------------------------------------
 
-export type MyBlockSortOption = "recent" | "oldest" | "name";
+export type MyBlockSortOption =
+  | "recent"        // recently updated
+  | "recently-used" // recently inserted (lastUsedAt)
+  | "oldest"        // oldest first (createdAt)
+  | "name-asc"      // name A–Z
+  | "name-desc"     // name Z–A
+  | "most-used";    // useCount desc
 
 // ---------------------------------------------------------------------------
 // Storage / service result shapes
@@ -114,7 +174,11 @@ export type MyBlockErrorCode =
   | "UNKNOWN_ERROR"
   | "INVALID_NAME"
   | "INVALID_TARGET"
-  | "EMPTY_LIBRARY";
+  | "EMPTY_LIBRARY"
+  | "COLLECTION_NOT_FOUND"
+  | "DUPLICATE_COLLECTION_NAME"
+  | "THUMBNAIL_NOT_FOUND"
+  | "THUMBNAIL_GENERATION_FAILED";
 
 export interface MyBlockError {
   code: MyBlockErrorCode;
@@ -138,6 +202,22 @@ export interface MyBlocksStorageAdapter {
   deleteMyBlock(id: string): Promise<MyBlockResult<{ id: string }>>;
   duplicateMyBlock(id: string): Promise<MyBlockResult<MyBlockRecord>>;
   clearMyBlocksForTests(): Promise<void>;
+
+  // ---- Collections (Phase P5) ----
+  listMyBlockCollections(): Promise<MyBlockResult<MyBlockCollection[]>>;
+  getMyBlockCollection(id: string): Promise<MyBlockResult<MyBlockCollection>>;
+  createMyBlockCollection(
+    input: CreateMyBlockCollectionInput,
+  ): Promise<MyBlockResult<MyBlockCollection>>;
+  updateMyBlockCollection(
+    id: string,
+    patch: UpdateMyBlockCollectionPatch,
+  ): Promise<MyBlockResult<MyBlockCollection>>;
+  /**
+   * Delete a collection. Blocks are NEVER deleted — each block's
+   * collectionIds is cleaned of the removed id.
+   */
+  deleteMyBlockCollection(id: string): Promise<MyBlockResult<{ id: string }>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -165,4 +245,27 @@ export interface UpdateMyBlockPatch {
   /** Usage metadata updates (library metadata only, never project history). */
   lastUsedAt?: string;
   useCount?: number;
+  /** Phase P5: star toggle. */
+  favorite?: boolean;
+  /** Phase P5: replace the block's collection membership. */
+  collectionIds?: string[];
+  /** Phase P5: thumbnail metadata reference (Blob lives in its own store). */
+  thumbnail?: MyBlockThumbnailMetadata | null;
+  /** Phase P5: tree content epoch (thumbnail staleness). */
+  contentRevision?: number;
+}
+
+export interface CreateMyBlockCollectionInput {
+  name: string;
+  description?: string;
+  /** Injectable id factory (deterministic tests). */
+  idFactory?: () => string;
+  /** Injectable clock (deterministic tests). */
+  clock?: () => Date;
+}
+
+export interface UpdateMyBlockCollectionPatch {
+  name?: string;
+  description?: string;
+  sortOrder?: number;
 }

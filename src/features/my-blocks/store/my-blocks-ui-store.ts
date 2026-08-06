@@ -10,7 +10,11 @@
 import { create } from "zustand";
 import type { BaseSection } from "@/types/section";
 import type { BlockTree } from "@/features/blocks/types";
-import type { MyBlockSourceMetadata } from "../types";
+import type {
+  MyBlockCollection,
+  MyBlockRecord,
+  MyBlockSourceMetadata,
+} from "../types";
 
 // ---------------------------------------------------------------------------
 // Save dialog source
@@ -19,6 +23,11 @@ import type { MyBlockSourceMetadata } from "../types";
 export type SaveMyBlockSource =
   | { kind: "tree"; tree: BlockTree; suggestedName: string; sourceMetadata?: MyBlockSourceMetadata }
   | { kind: "section"; section: BaseSection };
+
+export type CollectionDialogState =
+  | { mode: "create" }
+  | { mode: "rename"; collection: MyBlockCollection }
+  | null;
 
 export interface MyBlocksUiState {
   // ---- Library dialog ----
@@ -51,6 +60,27 @@ export interface MyBlocksUiState {
   openImport: () => void;
   closeImport: () => void;
 
+  // ---- Placement picker (Phase P5) ----
+  placementBlock: MyBlockRecord | null;
+  openPlacementPicker: (block: MyBlockRecord) => void;
+  closePlacementPicker: () => void;
+
+  // ---- Collection dialog (Phase P5) ----
+  collectionDialog: CollectionDialogState;
+  openCreateCollection: () => void;
+  openRenameCollection: (collection: MyBlockCollection) => void;
+  closeCollectionDialog: () => void;
+
+  // ---- Move-to-collection (Phase P5) ----
+  moveBlockIds: string[] | null;
+  openMoveToCollection: (blockIds: string[]) => void;
+  closeMoveToCollection: () => void;
+
+  // ---- Bulk delete confirmation (Phase P5) ----
+  bulkDeleteBlockIds: string[] | null;
+  openBulkDelete: (blockIds: string[]) => void;
+  closeBulkDelete: () => void;
+
   // ---- Toast (status announcements) ----
   toast: string | null;
   showToast: (message: string) => void;
@@ -64,7 +94,16 @@ export interface MyBlocksUiState {
 export const useMyBlocksUiStore = create<MyBlocksUiState>()((set) => ({
   libraryOpen: false,
   openLibrary: () => set({ libraryOpen: true }),
-  closeLibrary: () => set({ libraryOpen: false, detailsBlockId: null, renameBlockId: null, deleteBlockId: null }),
+  closeLibrary: () =>
+    set({
+      libraryOpen: false,
+      detailsBlockId: null,
+      renameBlockId: null,
+      deleteBlockId: null,
+      placementBlock: null,
+      moveBlockIds: null,
+      bulkDeleteBlockIds: null,
+    }),
 
   saveSource: null,
   openSaveDialog: (source) => set({ saveSource: source }),
@@ -85,6 +124,24 @@ export const useMyBlocksUiStore = create<MyBlocksUiState>()((set) => ({
   importOpen: false,
   openImport: () => set({ importOpen: true }),
   closeImport: () => set({ importOpen: false }),
+
+  placementBlock: null,
+  openPlacementPicker: (block) => set({ placementBlock: block }),
+  closePlacementPicker: () => set({ placementBlock: null }),
+
+  collectionDialog: null,
+  openCreateCollection: () => set({ collectionDialog: { mode: "create" } }),
+  openRenameCollection: (collection) =>
+    set({ collectionDialog: { mode: "rename", collection } }),
+  closeCollectionDialog: () => set({ collectionDialog: null }),
+
+  moveBlockIds: null,
+  openMoveToCollection: (blockIds) => set({ moveBlockIds: blockIds }),
+  closeMoveToCollection: () => set({ moveBlockIds: null }),
+
+  bulkDeleteBlockIds: null,
+  openBulkDelete: (blockIds) => set({ bulkDeleteBlockIds: blockIds }),
+  closeBulkDelete: () => set({ bulkDeleteBlockIds: null }),
 
   toast: null,
   showToast: (message) => set({ toast: message }),

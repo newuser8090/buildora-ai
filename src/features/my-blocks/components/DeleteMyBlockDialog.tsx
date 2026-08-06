@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { getMyBlocksAdapter } from "../storage/my-blocks-singleton";
+import { getMyBlockThumbnailStorage } from "../thumbnails/my-block-thumbnail-singleton";
 import { useMyBlocksUiStore } from "../store/my-blocks-ui-store";
 import type { MyBlockRecord } from "../types";
 
@@ -69,6 +70,8 @@ export function DeleteMyBlockDialog() {
     const result = await getMyBlocksAdapter().deleteMyBlock(blockId);
     setDeleting(false);
     if (result.ok) {
+      // Phase P5: the thumbnail Blob dies with its library record.
+      void getMyBlockThumbnailStorage().removeThumbnail(blockId);
       bumpRefresh();
       showToast(block ? `"${block.name}" deleted` : "Saved block deleted");
       close();

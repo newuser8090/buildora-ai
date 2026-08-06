@@ -5,6 +5,8 @@ import { ErrorBoundary } from "@/features/editor/components/ErrorBoundary";
 import { validateSectionSafe } from "@/features/editor/schemas/section-schemas";
 import { InlineEditPageProvider } from "@/features/inline-editing/context/InlineEditPageContext";
 import { InsertionPoint } from "@/features/guided-builder/components/InsertionPoint";
+import { MyBlockDropZone } from "@/features/my-blocks/drag/MyBlockDropZone";
+import { CUSTOM_BLOCK_SECTION_TYPE } from "@/features/code-import/schemas/custom-block-schema";
 import type { BaseSection } from "@/types/section";
 import type { ReactNode } from "react";
 
@@ -21,6 +23,13 @@ export interface SectionRendererProps {
    * affordances between sections. Never enabled for thumbnails/exports.
    */
   showInsertionPoints?: boolean;
+  /**
+   * Phase P5: when a My Block drag is active, renders visible drop zones
+   * before/after each section, inside compatible custom-block sections, and
+   * at the end of the page. Purely visual — the canvas never mutates during
+   * hover; insertion happens once on drop.
+   */
+  myBlockDragActive?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -92,6 +101,7 @@ export function SectionRenderer({
   sections,
   pageId,
   showInsertionPoints = false,
+  myBlockDragActive = false,
 }: SectionRendererProps) {
   const visible = sections
     .filter((s) => s.visible)
@@ -115,12 +125,70 @@ export function SectionRenderer({
   }
 
   const content: ReactNode[] = [];
-  for (const section of visible) {
+  for (let index = 0; index < visible.length; index += 1) {
+    const section = visible[index];
+    const isLast = index === visible.length - 1;
+
+    if (myBlockDragActive && pageId) {
+      content.push(
+        <MyBlockDropZone
+          key={`drop-before-${section.id}`}
+          zone={{
+            kind: "before-section",
+            pageId,
+            sectionId: section.id,
+            label: "Add here",
+          }}
+        />,
+      );
+      if (section.type === CUSTOM_BLOCK_SECTION_TYPE) {
+        content.push(
+          <MyBlockDropZone
+            key={`drop-inside-${section.id}`}
+            zone={{
+              kind: "inside-custom-block",
+              pageId,
+              sectionId: section.id,
+              parentBlockId: section.id,
+              label: "Place inside this group",
+            }}
+          />,
+        );
+      }
+    }
+
     content.push(
       <SelectableSection key={section.id} section={section}>
         <ValidatedSectionRenderer section={section} />
       </SelectableSection>,
     );
+
+    if (myBlockDragActive && pageId) {
+      content.push(
+        <MyBlockDropZone
+          key={`drop-after-${section.id}`}
+          zone={{
+            kind: "after-section",
+            pageId,
+            sectionId: section.id,
+            label: "Add below this section",
+          }}
+        />,
+      );
+      if (isLast) {
+        content.push(
+          <MyBlockDropZone
+            key="drop-end"
+            zone={{
+              kind: "end-of-page",
+              pageId,
+              label: "Add at end of page",
+            }}
+          />,
+        );
+      }
+    }
+
     if (showInsertionPoints) {
       content.push(
         <InsertionPoint key={`insert-${section.id}`} afterSectionId={section.id} />,

@@ -21,16 +21,21 @@ import { STORE_MY_BLOCKS } from "@/features/persistence/constants";
 import {
   DATABASE_NAME,
   DATABASE_VERSION,
-  STORE_PROJECTS,
-  STORE_METADATA,
-  STORE_PROJECT_THUMBNAILS,
+  STORE_MY_BLOCK_COLLECTIONS,
 } from "@/features/persistence/constants";
+import { ensureDatabaseStores } from "@/features/persistence/services/db-schema";
 import {
+  generateUniqueCollectionName,
   generateUniqueName,
+  parseMyBlockCollection,
   parseMyBlockRecord,
+  sanitizeMyBlockCollectionDescription,
+  sanitizeMyBlockCollectionIds,
+  sanitizeMyBlockCollectionName,
   sanitizeMyBlockDescription,
   sanitizeMyBlockName,
   sanitizeMyBlockTags,
+  MY_BLOCK_MAX_COLLECTIONS,
 } from "../schemas/my-block-schema";
 import {
   MY_BLOCK_CURRENT_VERSION,
@@ -45,10 +50,13 @@ import {
   toMyBlockError,
 } from "../errors";
 import type {
+  CreateMyBlockCollectionInput,
   CreateMyBlockInput,
+  MyBlockCollection,
   MyBlockRecord,
   MyBlockResult,
   MyBlocksStorageAdapter,
+  UpdateMyBlockCollectionPatch,
   UpdateMyBlockPatch,
 } from "../types";
 
@@ -149,22 +157,10 @@ export class MyBlocksIndexedDbAdapter implements MyBlocksStorageAdapter {
 
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result;
-        // Non-destructive: create missing stores only. This handler may be
-        // the one that triggers the 2 → 3 version bump, so it also creates
-        // the stores added in earlier versions when they are absent (e.g. a
-        // fresh browser profile).
-        if (!db.objectStoreNames.contains(STORE_PROJECTS)) {
-          db.createObjectStore(STORE_PROJECTS, { keyPath: "id" });
-        }
-        if (!db.objectStoreNames.contains(STORE_METADATA)) {
-          db.createObjectStore(STORE_METADATA, { keyPath: "key" });
-        }
-        if (!db.objectStoreNames.contains(STORE_PROJECT_THUMBNAILS)) {
-          db.createObjectStore(STORE_PROJECT_THUMBNAILS, { keyPath: "projectId" });
-        }
-        if (!db.objectStoreNames.contains(STORE_MY_BLOCKS)) {
-          db.createObjectStore(STORE_MY_BLOCKS, { keyPath: "id" });
-        }
+        // Non-destructive: create missing stores only. Shared schema helper
+        // guarantees EVERY store exists regardless of which adapter triggers
+        // the version bump (first-connection safety).
+        ensureDatabaseStores(db);
       };
 
       request.onsuccess = (event) => {
@@ -271,6 +267,11 @@ export class MyBlocksIndexedDbAdapter implements MyBlocksStorageAdapter {
       const record: MyBlockRecord = {
         id: input.idFactory ? input.idFactory() : createMyBlockId(),
         version: MY_BLOCK_CURRENT_VERSION,
+        // Phase P5: tree content epoch — starts at 1 and only ever changes
+        // when the TREE changes (create/duplicate/import). Metadata-only
+        // updates (rename, favorite, collections, usage) keep it identical so
+        // cached thumbnails stay valid.
+        contentRevision: 1,
         name: sanitizeMyBlockName(input.name) ?? "Saved block",
         ...(sanitizeMyBlockDescription(input.description) !== undefined
           ? { description: sanitizeMyBlockDescription(input.description) }
@@ -349,6 +350,16 @@ export class MyBlocksIndexedDbAdapter implements MyBlocksStorageAdapter {
       };
       if (patch.lastUsedAt !== undefined) next.lastUsedAt = patch.lastUsedAt;
       if (patch.useCount !== undefined) next.useCount = patch.useCount;
+      // Phase P5: star / collections / thumbnail metadata / content revision.
+      // None of these touch the tree or project history.
+      if (patch.favorite !== undefined) next.favorite = patch.favorite;
+      if (patch.collectionIds !== undefined) {
+        next.collectionIds = sanitizeMyBlockCollectionIds(patch.collectionIds);
+      }
+      if (patch.thumbnail !== undefined) {
+        next.thumbnail = patch.thumbnail ?? undefined;
+      }
+      if (patch.contentRevision !== undefined) next.contentRevision = patch.contentRevision;
 
       const parsed = parseMyBlockRecord(next);
       if (!parsed) {
@@ -424,6 +435,14 @@ export class MyBlocksIndexedDbAdapter implements MyBlocksStorageAdapter {
         },
         lastUsedAt: undefined,
         useCount: 0,
+        // Phase P5: a duplicate is a NEW tree — fresh content epoch, and the
+        // old thumbnail (keyed by the old blockId) does not apply.
+        contentRevision: 1,
+        thumbnail: undefined,
+        // Star + collection membership are NOT copied (kept intentionally
+        // simple and predictable for beginners).
+        favorite: undefined,
+        collectionIds: undefined,
       };
 
       const parsed = parseMyBlockRecord(record);
@@ -465,6 +484,203 @@ export class MyBlocksIndexedDbAdapter implements MyBlocksStorageAdapter {
       });
     } catch (err) {
       throw toMyBlockError(err);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Collections (Phase P5)
+  //
+  // Personal folders stored in their own store. Policy:
+  //   - deleting a collection NEVER deletes blocks — each block's
+  //     collectionIds is cleaned of the removed id
+  //   - duplicate-safe names (case-insensitive)
+  //   - corrupt collection records are skipped in lists (isolated, never
+  //     fatal), like corrupt block records
+  //   - collection metadata is library-only — never project history
+  // -------------------------------------------------------------------------
+
+  async listMyBlockCollections(): Promise<MyBlockResult<MyBlockCollection[]>> {
+    try {
+      const db = await this.ensureOpen();
+      const raw = await this.getAllRecords<unknown>(db, STORE_MY_BLOCK_COLLECTIONS);
+      const collections: MyBlockCollection[] = [];
+      for (const entry of raw) {
+        const parsed = parseMyBlockCollection(entry);
+        if (!parsed) continue;
+        collections.push(parsed as MyBlockCollection);
+      }
+      // Deterministic ordering: sortOrder first, then name (stable tiebreak).
+      collections.sort(
+        (a, b) =>
+          a.sortOrder - b.sortOrder ||
+          a.name.localeCompare(b.name) ||
+          a.id.localeCompare(b.id),
+      );
+      return { ok: true, value: collections };
+    } catch (err) {
+      return { ok: false, error: toMyBlockError(err) };
+    }
+  }
+
+  async getMyBlockCollection(id: string): Promise<MyBlockResult<MyBlockCollection>> {
+    try {
+      const db = await this.ensureOpen();
+      const raw = await this.getRecord<unknown>(db, STORE_MY_BLOCK_COLLECTIONS, id);
+      if (raw === undefined) {
+        return {
+          ok: false,
+          error: makeMyBlockError("COLLECTION_NOT_FOUND", "That collection no longer exists."),
+        };
+      }
+      const parsed = parseMyBlockCollection(raw);
+      if (!parsed) {
+        return {
+          ok: false,
+          error: makeMyBlockError("INVALID_RECORD", "That collection is damaged and cannot be used."),
+        };
+      }
+      return { ok: true, value: parsed as MyBlockCollection };
+    } catch (err) {
+      return { ok: false, error: toMyBlockError(err) };
+    }
+  }
+
+  async createMyBlockCollection(
+    input: CreateMyBlockCollectionInput,
+  ): Promise<MyBlockResult<MyBlockCollection>> {
+    try {
+      const siblings = await this.listMyBlockCollections();
+      if (!siblings.ok) return siblings;
+      if (siblings.value.length >= MY_BLOCK_MAX_COLLECTIONS) {
+        return {
+          ok: false,
+          error: makeMyBlockError(
+            "QUOTA_EXCEEDED",
+            `You can have at most ${MY_BLOCK_MAX_COLLECTIONS} collections. Delete one to create another.`,
+          ),
+        };
+      }
+
+      const now = (this.clock() ?? new Date()).toISOString();
+      const maxOrder = siblings.value.reduce((max, c) => Math.max(max, c.sortOrder), -1);
+      const collection: MyBlockCollection = {
+        id: input.idFactory ? input.idFactory() : `collection-${createMyBlockId()}`,
+        version: 1,
+        name: generateUniqueCollectionName(
+          input.name,
+          siblings.value.map((c) => c.name),
+        ),
+        ...(sanitizeMyBlockCollectionDescription(input.description) !== undefined
+          ? { description: sanitizeMyBlockCollectionDescription(input.description) }
+          : {}),
+        createdAt: now,
+        updatedAt: now,
+        sortOrder: maxOrder + 1,
+      };
+
+      const parsed = parseMyBlockCollection(collection);
+      if (!parsed) {
+        return {
+          ok: false,
+          error: makeMyBlockError("INVALID_RECORD", "The collection failed validation."),
+        };
+      }
+      const db = await this.ensureOpen();
+      await this.putRecord(db, STORE_MY_BLOCK_COLLECTIONS, parsed as MyBlockCollection);
+      return { ok: true, value: parsed as MyBlockCollection };
+    } catch (err) {
+      return { ok: false, error: mapMyBlockError(err) };
+    }
+  }
+
+  async updateMyBlockCollection(
+    id: string,
+    patch: UpdateMyBlockCollectionPatch,
+  ): Promise<MyBlockResult<MyBlockCollection>> {
+    try {
+      const current = await this.getMyBlockCollection(id);
+      if (!current.ok) return current;
+
+      const existing = current.value;
+      let name = existing.name;
+      if (patch.name !== undefined) {
+        const sanitized = sanitizeMyBlockCollectionName(patch.name);
+        if (!sanitized) {
+          return {
+            ok: false,
+            error: makeMyBlockError("INVALID_NAME", "Collection names cannot be empty."),
+          };
+        }
+        // Duplicate-safe rename (case-insensitive; itself excluded).
+        const siblings = await this.listMyBlockCollections();
+        const others = siblings.ok
+          ? siblings.value.filter((c) => c.id !== id).map((c) => c.name)
+          : [];
+        name = generateUniqueCollectionName(sanitized, others);
+      }
+
+      const next: MyBlockCollection = {
+        ...existing,
+        name,
+        description:
+          patch.description !== undefined
+            ? (sanitizeMyBlockCollectionDescription(patch.description) ?? undefined)
+            : existing.description,
+        sortOrder:
+          patch.sortOrder !== undefined
+            ? Math.max(0, Math.floor(patch.sortOrder))
+            : existing.sortOrder,
+        updatedAt: (this.clock() ?? new Date()).toISOString(),
+      };
+
+      const parsed = parseMyBlockCollection(next);
+      if (!parsed) {
+        return {
+          ok: false,
+          error: makeMyBlockError("INVALID_RECORD", "The updated collection failed validation."),
+        };
+      }
+      const db = await this.ensureOpen();
+      await this.putRecord(db, STORE_MY_BLOCK_COLLECTIONS, parsed as MyBlockCollection);
+      return { ok: true, value: parsed as MyBlockCollection };
+    } catch (err) {
+      return { ok: false, error: mapMyBlockError(err) };
+    }
+  }
+
+  async deleteMyBlockCollection(id: string): Promise<MyBlockResult<{ id: string }>> {
+    try {
+      const db = await this.ensureOpen();
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction([STORE_MY_BLOCK_COLLECTIONS, STORE_MY_BLOCKS], "readwrite");
+        const collectionStore = tx.objectStore(STORE_MY_BLOCK_COLLECTIONS);
+        const blockStore = tx.objectStore(STORE_MY_BLOCKS);
+
+        // Delete the collection record (idempotent).
+        collectionStore.delete(id);
+
+        // Clean the removed id from every block's collectionIds. Blocks are
+        // NEVER deleted — only their membership is updated.
+        const getAll = blockStore.getAll();
+        getAll.onsuccess = () => {
+          const blocks = getAll.result as MyBlockRecord[];
+          for (const block of blocks) {
+            if (block.collectionIds && block.collectionIds.includes(id)) {
+              const cleaned: MyBlockRecord = {
+                ...block,
+                collectionIds: block.collectionIds.filter((cid) => cid !== id),
+              };
+              blockStore.put(cleaned);
+            }
+          }
+        };
+
+        tx.oncomplete = () => resolve();
+        tx.onerror = (event) => reject((event.target as IDBTransaction).error);
+      });
+      return { ok: true, value: { id } };
+    } catch (err) {
+      return { ok: false, error: mapMyBlockError(err) };
     }
   }
 
