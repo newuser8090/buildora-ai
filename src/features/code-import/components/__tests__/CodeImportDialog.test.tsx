@@ -17,6 +17,7 @@ import { useEditorStore } from "@/features/editor/store/editor-store";
 import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
 import { registerDefaultBlocks, isDefaultBlocksRegistered } from "@/features/blocks/registry/block-registry";
 import { useCodeImportStore } from "@/features/code-import/store/code-import-store";
+import { useMyBlocksUiStore } from "@/features/my-blocks/store/my-blocks-ui-store";
 import { CodeImportDialog } from "../CodeImportDialog";
 import { CodePasteStep } from "../CodePasteStep";
 import { CodeImportSuccess } from "../CodeImportSuccess";
@@ -396,9 +397,25 @@ describe("CodeImportSuccess — actions", () => {
     expect(useCodeImportStore.getState().open).toBe(false);
   });
 
-  it("Save as My Block is labelled Coming next", () => {
-    useCodeImportStore.getState().completeInsert();
-    render(<CodeImportSuccess />);
-    expect(screen.getByTestId("success-save-block").textContent).toContain("Coming next");
+  it("Save as My Block is wired to the shared save dialog (Phase P4)", () => {
+    openDialog();
+    renderDialog();
+    // Drive the real happy path so the conversion tree is populated.
+    analyseExample();
+    fireEvent.click(screen.getByTestId("analysis-continue"));
+    fireEvent.click(screen.getByTestId("review-continue"));
+    fireEvent.click(screen.getByTestId("insert-button"));
+    // The dialog now shows the success step with the save action.
+    const button = screen.getByTestId("success-save-block");
+    expect(button.textContent).toContain("Save as My Block");
+    fireEvent.click(button);
+
+    // The canonical Save dialog source is fed from the conversion tree.
+    const source = useMyBlocksUiStore.getState().saveSource;
+    expect(source?.kind).toBe("tree");
+    if (source?.kind === "tree") {
+      expect(source.tree.rootIds.length).toBeGreaterThan(0);
+      expect(source.sourceMetadata?.source).toBe("imported");
+    }
   });
 });

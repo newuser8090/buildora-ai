@@ -27,6 +27,8 @@ import {
 } from "@/features/blocks/adapters/section-block-adapter";
 import { rootIdOf } from "../engine/tree-traversal";
 import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
+import { useMyBlocksUiStore } from "@/features/my-blocks/store/my-blocks-ui-store";
+import { BookmarkPlus } from "lucide-react";
 import type { BlockNode, BlockTree } from "../types";
 import { getGuidedSectionLabel } from "@/features/guided-builder/registry/guided-section-language";
 import type { BlockOperations } from "../hooks/useBlockOperations";
@@ -264,6 +266,12 @@ export function BuildTreePanel() {
   const selectSection = useEditorStore((s) => s.selectSection);
   const project = useEditorStore((s) => s.project);
 
+  // Phase P4 — the selected section may be a saved-able custom block.
+  const selectedSection = project.pages
+    .flatMap((p) => p.sections)
+    .find((s) => s.id === selectedSectionId) ?? null;
+  const canSaveToMyBlocks = selectedSection?.type === "custom-block";
+
   const forest = useBlockForest(selectedPageId);
   const ops = useBlockOperations(selectedPageId);
   const selectedBlockId = useBlockEditorStore((s) => s.selectedBlockId);
@@ -373,6 +381,23 @@ export function BuildTreePanel() {
             <Code2 className="h-3 w-3" />
             Import code
           </button>
+          {canSaveToMyBlocks && selectedSection && (
+            <button
+              type="button"
+              data-testid="build-tree-save-to-my-blocks"
+              title="Save this design to My Blocks"
+              onClick={() => {
+                useMyBlocksUiStore.getState().openSaveDialog({
+                  kind: "section",
+                  section: selectedSection,
+                });
+              }}
+              className="flex items-center gap-1 rounded-lg border border-accent/30 bg-accent/5 px-2 py-1 text-[11px] font-medium text-accent transition-colors hover:bg-accent/10 active:scale-95"
+            >
+              <BookmarkPlus className="h-3 w-3" />
+              Save to My Blocks
+            </button>
+          )}
           <button
             type="button"
             data-testid="open-block-browser"

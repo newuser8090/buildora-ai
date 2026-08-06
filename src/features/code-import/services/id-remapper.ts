@@ -26,6 +26,16 @@ export interface RemapResult {
   oldToNew: Map<string, string>;
 }
 
+/**
+ * Shared default factory so sequential default remaps never reuse ids.
+ *
+ * Without this, every remap call built its own factory starting at counter 0
+ * ("conv-1", "conv-2", …) — inserting the SAME saved block twice produced
+ * two project copies whose child ids collided. Injected factories remain
+ * per-call (deterministic tests keep their independent counters).
+ */
+const defaultIdFactory = createConversionIdFactory();
+
 /** Wrap an id factory so it never collides with the avoid set. */
 function collisionSafeFactory(
   base: ConversionIdFactory,
@@ -60,7 +70,7 @@ export function remapBlockTreeIds(
         : Array.from(options.avoid)
       : []) as string[],
   );
-  const baseFactory = options.idFactory ?? createConversionIdFactory();
+  const baseFactory = options.idFactory ?? defaultIdFactory;
   const factory = collisionSafeFactory(baseFactory, avoid);
 
   const ids = Object.keys(input.nodes);

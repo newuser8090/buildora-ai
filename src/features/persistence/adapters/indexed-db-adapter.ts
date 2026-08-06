@@ -21,6 +21,7 @@ import {
   STORE_PROJECTS,
   STORE_METADATA,
   STORE_PROJECT_THUMBNAILS,
+  STORE_MY_BLOCKS,
   METADATA_KEY_ACTIVE_PROJECT,
 } from "../constants";
 import { serializeProject } from "../services/project-serializer";
@@ -127,6 +128,12 @@ export class IndexedDbProjectAdapter implements ProjectPersistenceAdapter {
         }
         if (!db.objectStoreNames.contains(STORE_PROJECT_THUMBNAILS)) {
           db.createObjectStore(STORE_PROJECT_THUMBNAILS, { keyPath: "projectId" });
+        }
+        // Phase P4: personal block library — non-destructive addition. The
+        // myBlocks store is also created by the MyBlocks adapter's own upgrade
+        // handler, so either connection may trigger the version bump.
+        if (!db.objectStoreNames.contains(STORE_MY_BLOCKS)) {
+          db.createObjectStore(STORE_MY_BLOCKS, { keyPath: "id" });
         }
       };
 

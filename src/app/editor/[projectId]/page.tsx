@@ -22,6 +22,7 @@ import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
 import { CommandPalette } from "@/features/guided-builder/components/CommandPalette";
 import { TryGuidedBanner } from "@/features/guided-builder/components/TryGuidedBanner";
 import { CodeImportDialog } from "@/features/code-import/components/CodeImportDialog";
+import { MyBlocksRoot } from "@/features/my-blocks/components/MyBlocksRoot";
 import { getProjectController } from "@/features/persistence/services/project-controller";
 import { ensureProjectController } from "@/features/persistence/hooks/useProjectController";
 import { useEditorStore } from "@/features/editor/store/editor-store";
@@ -289,6 +290,9 @@ function EditorShell() {
 
       {/* Phase P3: Import Studio — one canonical dialog for every entry point */}
       <CodeImportDialog />
+
+      {/* Phase P4: My Blocks — shared library + save/rename/delete/import dialogs */}
+      <MyBlocksRoot />
     </>
   );
 }

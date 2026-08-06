@@ -27,6 +27,7 @@ import {
   STORE_PROJECTS,
   STORE_METADATA,
   STORE_PROJECT_THUMBNAILS,
+  STORE_MY_BLOCKS,
   METADATA_KEY_ACTIVE_PROJECT,
 } from "@/features/persistence/constants";
 import type { Project } from "@/types/project";
@@ -243,12 +244,15 @@ describe("IndexedDB v1 → v2 migration", () => {
     // Open with the thumbnail adapter at v2 — triggers the upgrade.
     await upgradeToVersionTwo(dbName);
 
-    // After upgrade: all three stores present, none removed.
+    // After upgrade: all four known stores present, none removed. The Phase
+    // P4 myBlocks store is created by the same non-destructive upgrade handler
+    // (the thumbnail adapter is often the first connection to create the DB).
     const after = await getDatabaseStoreNames(dbName);
     expect(after).toContain(STORE_PROJECTS);
     expect(after).toContain(STORE_METADATA);
     expect(after).toContain(STORE_PROJECT_THUMBNAILS);
-    expect(after).toHaveLength(3);
+    expect(after).toContain(STORE_MY_BLOCKS);
+    expect(after).toHaveLength(4);
   });
 
   it("preserves existing project records and revision after upgrade", async () => {
@@ -468,10 +472,20 @@ describe("IndexedDB v1 → v2 migration", () => {
     // The upgrade must NOT have created any unexpected stores.
     const names = await getDatabaseStoreNames(dbName);
     expect(names).toEqual(
-      expect.arrayContaining([STORE_PROJECTS, STORE_METADATA, STORE_PROJECT_THUMBNAILS]),
+      expect.arrayContaining([
+        STORE_PROJECTS,
+        STORE_METADATA,
+        STORE_PROJECT_THUMBNAILS,
+        STORE_MY_BLOCKS,
+      ]),
     );
-    // Exactly the three known stores — no stray Blob or asset stores.
-    expect(names.filter((n) => !["projects", "metadata", "projectThumbnails"].includes(n))).toHaveLength(0);
-    expect(names).toHaveLength(3);
+    // Exactly the four known stores (the Phase P4 myBlocks store is created
+    // non-destructively) — no stray Blob or asset stores.
+    expect(
+      names.filter((n) =>
+        !["projects", "metadata", "projectThumbnails", "myBlocks"].includes(n),
+      ),
+    ).toHaveLength(0);
+    expect(names).toHaveLength(4);
   });
 });

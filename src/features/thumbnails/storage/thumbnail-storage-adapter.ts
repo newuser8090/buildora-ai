@@ -19,6 +19,7 @@ import {
   STORE_PROJECTS,
   STORE_METADATA,
   STORE_PROJECT_THUMBNAILS,
+  STORE_MY_BLOCKS,
 } from "@/features/persistence/constants";
 import { thumbnailErrors, toThumbnailError } from "../errors";
 import type {
@@ -120,6 +121,14 @@ export class IndexedDbThumbnailAdapter implements ProjectThumbnailStorageAdapter
         }
         if (!db.objectStoreNames.contains(STORE_PROJECT_THUMBNAILS)) {
           db.createObjectStore(STORE_PROJECT_THUMBNAILS, { keyPath: "projectId" });
+        }
+        // Phase P4: the thumbnail adapter is often the FIRST connection to
+        // create the database (thumbnails render right after project creation).
+        // If it created the v3 database without the myBlocks store, no later
+        // adapter's upgrade handler would ever run (version already 3) and the
+        // personal block library would be unusable. Create it here too.
+        if (!db.objectStoreNames.contains(STORE_MY_BLOCKS)) {
+          db.createObjectStore(STORE_MY_BLOCKS, { keyPath: "id" });
         }
       };
 

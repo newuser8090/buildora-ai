@@ -10,13 +10,31 @@ import { CheckCircle2, Pencil, Layers, Copy, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
-import { useCodeImport } from "../hooks/useCodeImport";
+import { useMyBlocksUiStore } from "@/features/my-blocks/store/my-blocks-ui-store";
+import { importDisplayName, useCodeImport } from "../hooks/useCodeImport";
+import { useCodeImportStore } from "../store/code-import-store";
 
 export function CodeImportSuccess() {
   const { cancel } = useCodeImport();
   const duplicateSection = useEditorStore((s) => s.duplicateSection);
   const setRightSidebarTab = useEditorUiStore((s) => s.setRightSidebarTab);
   const selectedSectionId = useEditorStore((s) => s.selectedSectionId);
+
+  const handleSaveAsBlock = () => {
+    // Phase P4 — save the just-inserted design to the personal library.
+    // The conversion tree is transient Import Studio state; saving reads it
+    // once and passes a snapshot to the shared save dialog.
+    const conversion = useCodeImportStore.getState().conversion;
+    if (!conversion) return;
+    const tree = conversion.tree;
+    useMyBlocksUiStore.getState().openSaveDialog({
+      kind: "tree",
+      tree,
+      suggestedName: importDisplayName(tree),
+      sourceMetadata: { source: "imported", converterVersion: 1 },
+    });
+    cancel();
+  };
 
   const handleEditNow = () => {
     setRightSidebarTab("blocks");
@@ -81,15 +99,11 @@ export function CodeImportSuccess() {
           type="button"
           variant="outline"
           size="md"
-          disabled
-          title="Coming next"
+          onClick={handleSaveAsBlock}
           data-testid="success-save-block"
         >
           <Sparkles className="h-4 w-4" />
           Save as My Block
-          <span className="ml-1 rounded bg-card px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-text-dim">
-            Coming next
-          </span>
         </Button>
       </div>
 
