@@ -192,9 +192,12 @@ describe("first-connection through the thumbnail adapter creates every store", (
         "myBlocks",
         "myBlockThumbnails",
         "myBlockCollections",
+        "cloudSyncQueue",
+        "cloudSyncMarkers",
+        "cloudSyncConflicts",
       ]),
     );
-    expect(names).toHaveLength(6);
+    expect(names).toHaveLength(9);
   });
 });
 

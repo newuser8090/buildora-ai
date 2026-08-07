@@ -91,6 +91,24 @@ export function createMyBlockId(): string {
 }
 
 // ---------------------------------------------------------------------------
+// Local mutation listener (Phase P6)
+//
+// The storage adapter remains the CANONICAL write path. After any successful
+// local-user mutation it notifies listeners (the cloud-sync change listener)
+// so the sync queue is enqueued — there is NO parallel write path. Remote
+// sync applies go through a separate raw path that never emits these events
+// (no echo loop).
+// ---------------------------------------------------------------------------
+
+export interface MyBlockLocalMutationEvent {
+  entityType: "myBlock" | "collection";
+  entityId: string;
+  operation: "upsert" | "delete";
+  /** Collection ids referenced by the record (membership re-sync). */
+  collectionIds?: string[];
+}
+
+// ---------------------------------------------------------------------------
 // Adapter
 // ---------------------------------------------------------------------------
 
@@ -101,6 +119,7 @@ export class MyBlocksIndexedDbAdapter implements MyBlocksStorageAdapter {
   private openPromise: Promise<IDBDatabase> | null = null;
   private clock: () => Date;
   private idbFactory: IDBFactory;
+  private mutationListener: ((event: MyBlockLocalMutationEvent) => void) | null = null;
 
   constructor(options?: {
     dbName?: string;
@@ -109,10 +128,13 @@ export class MyBlocksIndexedDbAdapter implements MyBlocksStorageAdapter {
     clock?: () => Date;
     /** IDBFactory implementation. Defaults to global indexedDB. */
     indexedDb?: IDBFactory;
+    /** Initial local mutation listener (Phase P6 cloud sync). */
+    mutationListener?: ((event: MyBlockLocalMutationEvent) => void) | null;
   }) {
     this.dbName = options?.dbName ?? DATABASE_NAME;
     this.dbVersion = options?.dbVersion ?? DATABASE_VERSION;
     this.clock = options?.clock ?? (() => new Date());
+    this.mutationListener = options?.mutationListener ?? null;
     const explicitFactory = options?.indexedDb;
     if (explicitFactory !== undefined) {
       this.idbFactory = explicitFactory;
@@ -187,6 +209,20 @@ export class MyBlocksIndexedDbAdapter implements MyBlocksStorageAdapter {
         );
       };
     });
+  }
+
+  /**
+   * Register a local mutation listener (Phase P6 cloud sync). Replaces any
+   * previous listener. Returns an unsubscribe function.
+   */
+  setLocalMutationListener(
+    listener: ((event: MyBlockLocalMutationEvent) => void) | null,
+  ): void {
+    this.mutationListener = listener;
+  }
+
+  private emitMutation(event: MyBlockLocalMutationEvent): void {
+    this.mutationListener?.(event);
   }
 
   close(): void {
@@ -318,6 +354,12 @@ export class MyBlocksIndexedDbAdapter implements MyBlocksStorageAdapter {
 
       const db = await this.ensureOpen();
       await this.putRecord(db, STORE_MY_BLOCKS, record);
+      this.emitMutation({
+        entityType: "myBlock",
+        entityId: record.id,
+        operation: "upsert",
+        ...(record.collectionIds?.length ? { collectionIds: record.collectionIds } : {}),
+      });
       return { ok: true, value: record };
     } catch (err) {
       return { ok: false, error: mapMyBlockError(err) };
@@ -379,6 +421,14 @@ export class MyBlocksIndexedDbAdapter implements MyBlocksStorageAdapter {
 
       const db = await this.ensureOpen();
       await this.putRecord(db, STORE_MY_BLOCKS, parsed as MyBlockRecord);
+      this.emitMutation({
+        entityType: "myBlock",
+        entityId: id,
+        operation: "upsert",
+        ...((parsed as MyBlockRecord).collectionIds?.length
+          ? { collectionIds: (parsed as MyBlockRecord).collectionIds }
+          : {}),
+      });
       return { ok: true, value: parsed as MyBlockRecord };
     } catch (err) {
       return { ok: false, error: mapMyBlockError(err) };
@@ -392,12 +442,24 @@ export class MyBlocksIndexedDbAdapter implements MyBlocksStorageAdapter {
   async deleteMyBlock(id: string): Promise<MyBlockResult<{ id: string }>> {
     try {
       const db = await this.ensureOpen();
+      // Capture membership BEFORE the delete so the sync layer can re-sync
+      // the affected collections.
+      let collectionIds: string[] | undefined;
+      const existing = await this.getMyBlock(id);
+      if (existing.ok) collectionIds = existing.value.collectionIds;
+
       await new Promise<void>((resolve, reject) => {
         const tx = db.transaction(STORE_MY_BLOCKS, "readwrite");
         const store = tx.objectStore(STORE_MY_BLOCKS);
         store.delete(id);
         tx.oncomplete = () => resolve();
         tx.onerror = (event) => reject((event.target as IDBTransaction).error);
+      });
+      this.emitMutation({
+        entityType: "myBlock",
+        entityId: id,
+        operation: "delete",
+        ...(collectionIds?.length ? { collectionIds } : {}),
       });
       return { ok: true, value: { id } };
     } catch (err) {
@@ -462,6 +524,11 @@ export class MyBlocksIndexedDbAdapter implements MyBlocksStorageAdapter {
 
       const db = await this.ensureOpen();
       await this.putRecord(db, STORE_MY_BLOCKS, parsed as MyBlockRecord);
+      this.emitMutation({
+        entityType: "myBlock",
+        entityId: parsed.id,
+        operation: "upsert",
+      });
       return { ok: true, value: parsed as MyBlockRecord };
     } catch (err) {
       return { ok: false, error: mapMyBlockError(err) };
@@ -587,6 +654,7 @@ export class MyBlocksIndexedDbAdapter implements MyBlocksStorageAdapter {
       }
       const db = await this.ensureOpen();
       await this.putRecord(db, STORE_MY_BLOCK_COLLECTIONS, parsed as MyBlockCollection);
+      this.emitMutation({ entityType: "collection", entityId: parsed.id, operation: "upsert" });
       return { ok: true, value: parsed as MyBlockCollection };
     } catch (err) {
       return { ok: false, error: mapMyBlockError(err) };
@@ -642,6 +710,7 @@ export class MyBlocksIndexedDbAdapter implements MyBlocksStorageAdapter {
       }
       const db = await this.ensureOpen();
       await this.putRecord(db, STORE_MY_BLOCK_COLLECTIONS, parsed as MyBlockCollection);
+      this.emitMutation({ entityType: "collection", entityId: id, operation: "upsert" });
       return { ok: true, value: parsed as MyBlockCollection };
     } catch (err) {
       return { ok: false, error: mapMyBlockError(err) };
@@ -678,6 +747,7 @@ export class MyBlocksIndexedDbAdapter implements MyBlocksStorageAdapter {
         tx.oncomplete = () => resolve();
         tx.onerror = (event) => reject((event.target as IDBTransaction).error);
       });
+      this.emitMutation({ entityType: "collection", entityId: id, operation: "delete" });
       return { ok: true, value: { id } };
     } catch (err) {
       return { ok: false, error: mapMyBlockError(err) };

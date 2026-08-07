@@ -81,8 +81,11 @@ export const DATABASE_NAME = "buildora";
  *   3 — added myBlocks store (Phase P4 personal block library).
  *   4 — added myBlockThumbnails + myBlockCollections stores (Phase P5 visual
  *       library: persistent block thumbnails and personal collections).
+ *   5 — added cloudSyncQueue + cloudSyncMarkers + cloudSyncConflicts stores
+ *       (Phase P6 cloud sync: durable offline queue, sync markers, and
+ *       durable conflict records).
  */
-export const DATABASE_VERSION = 4;
+export const DATABASE_VERSION = 5;
 
 /** Object store for project records. */
 export const STORE_PROJECTS = "projects";
@@ -102,8 +105,41 @@ export const STORE_MY_BLOCK_THUMBNAILS = "myBlockThumbnails";
 /** Object store for personal collections/folders (database version 4, Phase P5). */
 export const STORE_MY_BLOCK_COLLECTIONS = "myBlockCollections";
 
+/**
+ * Durable offline sync queue (database version 5, Phase P6). Entries describe
+ * the INTENT to sync an entity (never raw pasted source — payloads are read
+ * fresh from the canonical local adapter at sync time).
+ */
+export const STORE_CLOUD_SYNC_QUEUE = "cloudSyncQueue";
+
+/**
+ * Per-record sync markers (database version 5, Phase P6). Map local entity
+ * ids to cloud ids and record the last-synced revision so conflicts can be
+ * detected without relying on wall-clock timestamps alone.
+ */
+export const STORE_CLOUD_SYNC_MARKERS = "cloudSyncMarkers";
+
+/**
+ * Durable conflict records (database version 5, Phase P6). Decisions must
+ * survive reloads and be retry-safe, so open/resolved conflicts live in
+ * IndexedDB rather than memory.
+ */
+export const STORE_CLOUD_SYNC_CONFLICTS = "cloudSyncConflicts";
+
 /** Key for the active project ID in the metadata store. */
 export const METADATA_KEY_ACTIVE_PROJECT = "activeProjectId";
+
+/** Key for the stable, non-identifying device id in the metadata store. */
+export const METADATA_KEY_DEVICE_ID = "deviceId";
+
+/**
+ * Prefix for per-user sync cursors in the metadata store.
+ * Full key: `${METADATA_KEY_SYNC_CURSOR_PREFIX}${userId}`.
+ */
+export const METADATA_KEY_SYNC_CURSOR_PREFIX = "cloudSyncCursor:";
+
+/** Key for the per-user initial-merge decision in the metadata store. */
+export const METADATA_KEY_INITIAL_MERGE_PREFIX = "cloudInitialMerge:";
 
 // ---------------------------------------------------------------------------
 // Autosave defaults

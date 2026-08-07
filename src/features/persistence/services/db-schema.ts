@@ -22,6 +22,9 @@ import {
   STORE_MY_BLOCKS,
   STORE_MY_BLOCK_THUMBNAILS,
   STORE_MY_BLOCK_COLLECTIONS,
+  STORE_CLOUD_SYNC_QUEUE,
+  STORE_CLOUD_SYNC_MARKERS,
+  STORE_CLOUD_SYNC_CONFLICTS,
 } from "../constants";
 
 /**
@@ -46,5 +49,17 @@ export function ensureDatabaseStores(db: IDBDatabase): void {
   }
   if (!db.objectStoreNames.contains(STORE_MY_BLOCK_COLLECTIONS)) {
     db.createObjectStore(STORE_MY_BLOCK_COLLECTIONS, { keyPath: "id" });
+  }
+  // Phase P6 (database version 5): durable cloud-sync stores.
+  if (!db.objectStoreNames.contains(STORE_CLOUD_SYNC_QUEUE)) {
+    // Keyed by queue entry id; entries are queried by userId via index.
+    db.createObjectStore(STORE_CLOUD_SYNC_QUEUE, { keyPath: "id" });
+  }
+  if (!db.objectStoreNames.contains(STORE_CLOUD_SYNC_MARKERS)) {
+    // Keyed by `${userId}:${entityType}:${localEntityId}` for isolated lookups.
+    db.createObjectStore(STORE_CLOUD_SYNC_MARKERS, { keyPath: "key" });
+  }
+  if (!db.objectStoreNames.contains(STORE_CLOUD_SYNC_CONFLICTS)) {
+    db.createObjectStore(STORE_CLOUD_SYNC_CONFLICTS, { keyPath: "id" });
   }
 }

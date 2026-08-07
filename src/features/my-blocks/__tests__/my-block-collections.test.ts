@@ -222,7 +222,7 @@ describe("first-connection through the My Blocks adapter creates every store", (
     expect(block.ok && collection.ok).toBe(true);
     adapter.close();
 
-    // A raw v4 connection sees all six stores.
+    // A raw connection sees all nine stores (Phase P6 added the cloud sync stores).
     const db = await openRawDb(dbName);
     const names = Array.from(db.objectStoreNames);
     db.close();
@@ -234,9 +234,12 @@ describe("first-connection through the My Blocks adapter creates every store", (
         "myBlocks",
         "myBlockThumbnails",
         "myBlockCollections",
+        "cloudSyncQueue",
+        "cloudSyncMarkers",
+        "cloudSyncConflicts",
       ]),
     );
-    expect(names).toHaveLength(6);
+    expect(names).toHaveLength(9);
   });
 });
 

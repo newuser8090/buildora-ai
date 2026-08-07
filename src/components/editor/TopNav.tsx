@@ -10,7 +10,6 @@ import {
   Download,
   Package,
   BookMarked,
-  CircleUser,
   Loader2,
   ImageIcon,
   ArrowLeft,
@@ -26,6 +25,8 @@ import { mapProjectTransferErrorToMessage } from "@/features/projects/types/proj
 import { cn } from "@/utils/cn";
 import { ExperienceModeSwitcher } from "@/features/guided-builder/components/ExperienceModeSwitcher";
 import { EXPORT_SITE_EVENT } from "@/features/guided-builder/constants";
+import { CloudSyncStatusControl } from "@/features/cloud-sync/components/CloudSyncStatusControl";
+import { AccountMenu } from "@/features/auth/components/AccountMenu";
 
 const iconButton =
   "flex h-8 w-8 items-center justify-center rounded-lg text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95";
@@ -356,6 +357,12 @@ export function TopNav() {
             {exporting ? "Exporting..." : "Export"}
           </span>
         </button>
+
+        <div className="mx-1.5 h-4 w-px bg-border" />
+
+        {/* Phase P6: cloud sync status + account menu */}
+        <CloudSyncStatusControl />
+        <AccountMenu />
       </div>
 
       {/* ---- Export site error toast ---- */}
@@ -458,16 +465,6 @@ export function TopNav() {
         </div>
       )}
 
-      {/* ---- Avatar ---- */}
-      <div>
-        <button
-          className="flex h-7 w-7 items-center justify-center rounded-full bg-card text-text-dim transition-all duration-200 hover:bg-accent/15 hover:text-accent active:scale-95"
-          aria-label="User menu"
-          type="button"
-        >
-          <CircleUser className="h-4 w-4" />
-        </button>
-      </div>
     </header>
   );
 }
