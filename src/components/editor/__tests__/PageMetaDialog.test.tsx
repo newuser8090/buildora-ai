@@ -105,9 +105,13 @@ describe("PageMetaDialog saving", () => {
     fireEvent.click(screen.getByTestId("page-meta-save"));
 
     const stored = useEditorStore.getState().project.pages[0].meta;
+    // Phase P7: the Google title/description map to both the legacy title and
+    // the dedicated search fields.
     expect(stored).toEqual({
       title: "New SEO Title",
       description: "New description",
+      seoTitle: "New SEO Title",
+      seoDescription: "New description",
     });
     expect(closed).toBe(true);
   });
@@ -121,6 +125,7 @@ describe("PageMetaDialog saving", () => {
     fireEvent.click(screen.getByTestId("page-meta-save"));
     expect(useEditorStore.getState().project.pages[0].meta).toEqual({
       title: "Only Title",
+      seoTitle: "Only Title",
     });
   });
 

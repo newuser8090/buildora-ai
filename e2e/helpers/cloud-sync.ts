@@ -251,15 +251,18 @@ export async function editLocalBlockTree(
   newText: string,
 ): Promise<{ ok: boolean; reason?: string }> {
   return page.evaluate(async ({ name, newText }) => {
-    const open = (dbName: string, version: number) =>
+    const open = (dbName: string) =>
       new Promise<IDBDatabase>((resolve, reject) => {
-        const req = indexedDB.open(dbName, version);
+        // No explicit version: always opens the database at its CURRENT
+        // version. (Pinning a version here would throw VersionError once the
+        // app upgrades the schema — e.g. Phase P7 bumped it to 6.)
+        const req = indexedDB.open(dbName);
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
       });
 
     try {
-      const db = await open("buildora", 5);
+      const db = await open("buildora");
       const tx = db.transaction("myBlocks", "readwrite");
       const store = tx.objectStore("myBlocks");
       const records = await new Promise<Record<string, unknown>[]>((resolve) => {

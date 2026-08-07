@@ -40,7 +40,9 @@ describe("building journey", () => {
           s("footer", { text: "©" }),
         ],
         hasPreviewedMobile: true,
+        hasPreviewedSite: true,
         hasExported: true,
+        hasPublished: true,
       }),
     );
     const byId = Object.fromEntries(journey.steps.map((st) => [st.id, st.complete]));

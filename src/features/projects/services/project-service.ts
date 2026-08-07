@@ -224,6 +224,22 @@ export class ProjectService {
       // A stale metadata record must never make a deleted project reappear.
     }
 
+    // Phase P7: deployment history belongs to the project — remove it too.
+    // Non-blocking: history cleanup failure must never fail the delete.
+    try {
+      const { DeploymentService } = await import(
+        "@/features/publishing/services/deployment-service"
+      );
+      const { getDeploymentAdapter } = await import(
+        "@/features/publishing/storage/deployment-adapter"
+      );
+      await new DeploymentService(getDeploymentAdapter()).removeDeploymentsForProject(
+        projectId,
+      );
+    } catch {
+      // Never break the delete flow over deployment cleanup.
+    }
+
     return { success: true };
   }
 

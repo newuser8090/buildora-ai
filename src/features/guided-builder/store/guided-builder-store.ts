@@ -53,6 +53,10 @@ export interface GuidedBuilderState {
   commandPaletteOpen: boolean;
   hasPreviewedMobile: boolean;
   hasExported: boolean;
+  /** Phase P7 — session flag: opened the visitor preview. */
+  hasPreviewedSite: boolean;
+  /** Phase P7 — session flag: opened the Launch Center / published. */
+  hasPublished: boolean;
   /** Bumped each time the AI composer should be focused. */
   aiComposerRequestToken: number;
   /** Session token for the coach card currently expanded (0 = none). */
@@ -77,6 +81,8 @@ export interface GuidedBuilderState {
   setCommandPaletteOpen: (open: boolean) => void;
   setHasPreviewedMobile: (value: boolean) => void;
   setHasExported: (value: boolean) => void;
+  setHasPreviewedSite: (value: boolean) => void;
+  setHasPublished: (value: boolean) => void;
   requestAiComposerFocus: () => void;
   setActiveCoachId: (id: string | null) => void;
   /** Test/reset helper — restores defaults and reloads persisted prefs. */
@@ -108,6 +114,8 @@ export const useGuidedBuilderStore = create<GuidedBuilderState>()((set) => ({
   commandPaletteOpen: false,
   hasPreviewedMobile: false,
   hasExported: false,
+  hasPreviewedSite: false,
+  hasPublished: false,
   aiComposerRequestToken: 0,
   activeCoachId: null,
 
@@ -214,6 +222,10 @@ export const useGuidedBuilderStore = create<GuidedBuilderState>()((set) => ({
 
   setHasExported: (value) => set({ hasExported: value }),
 
+  setHasPreviewedSite: (value) => set({ hasPreviewedSite: value }),
+
+  setHasPublished: (value) => set({ hasPublished: value }),
+
   requestAiComposerFocus: () =>
     set((state) => ({ aiComposerRequestToken: state.aiComposerRequestToken + 1 })),
 
@@ -233,6 +245,8 @@ export const useGuidedBuilderStore = create<GuidedBuilderState>()((set) => ({
       commandPaletteOpen: false,
       hasPreviewedMobile: false,
       hasExported: false,
+      hasPreviewedSite: false,
+      hasPublished: false,
       aiComposerRequestToken: 0,
       activeCoachId: null,
     });

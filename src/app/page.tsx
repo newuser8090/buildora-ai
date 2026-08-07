@@ -35,6 +35,7 @@ import type {
   OnboardingProjectCategory,
   OnboardingSelections,
 } from "@/features/guided-builder/types";
+import { useDashboardPublishStatuses } from "@/features/publishing/hooks/useDashboardPublishStatuses";
 
 // Default project name for the onboarding category.
 const ONBOARDING_DEFAULT_NAMES: Record<OnboardingProjectCategory, string> = {
@@ -160,6 +161,11 @@ export default function DashboardPage() {
   // initializes it via EditorProvider; the dashboard needs it for the
   // template-creation flow and first-run empty state).
   useProjectController();
+
+  // Phase P7: derived publish status per project card.
+  const publishStatuses = useDashboardPublishStatuses(
+    projects.map((p) => ({ id: p.id, revision: p.revision })),
+  );
 
   // ---- Open project with failed-flush handling ----
   const handleOpen = useCallback(
@@ -578,6 +584,7 @@ export default function DashboardPage() {
                   onExport={handleExport}
                   onRegeneratePreview={handleRegeneratePreview}
                   isRegeneratingPreview={regeneratingId === project.id}
+                  publishStatus={publishStatuses[project.id]}
                 />
               ))}
             </div>

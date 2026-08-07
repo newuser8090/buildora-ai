@@ -109,14 +109,72 @@ function componentNameForRoute(route: PageRoute): string {
   return `${name || "Page"}Page`;
 }
 
-function pageMetadataLines(page: Page): string {
-  const title = page.meta?.title?.trim() || page.title;
-  const description = page.meta?.description?.trim();
+// ---------------------------------------------------------------------------
+// Per-page metadata — Phase P7 extended SEO / social metadata
+//
+// Fallback policy (deterministic):
+//   Google title  = seoTitle || title || page.title
+//   description   = seoDescription || description
+//   social title  = socialTitle || seoTitle || title || page.title
+//   social desc   = socialDescription || description
+//   social image  = socialImage asset (via manifest) if set
+//   canonical     = canonicalUrl override (only when set)
+//   robots        = index:false emitted only when page.meta.index === false
+// ---------------------------------------------------------------------------
+
+function pageMetadataLines(
+  page: Page,
+  manifest?: ExportAssetManifest,
+): string {
+  const meta = page.meta ?? {};
+  const title = meta.seoTitle?.trim() || meta.title?.trim() || page.title;
+  const description = meta.seoDescription?.trim() || meta.description?.trim();
+  const socialTitle = meta.socialTitle?.trim() || title;
+  const socialDescription = meta.socialDescription?.trim() || description || "";
+
   const lines = [`  title: "${escapeJsxStringLiteral(title)}",`];
   if (description) {
     lines.push(`  description: "${escapeJsxStringLiteral(description)}",`);
   }
+
+  // Canonical URL override
+  if (meta.canonicalUrl?.trim()) {
+    lines.push(`  alternates: { canonical: "${escapeJsxStringLiteral(meta.canonicalUrl.trim())}" },`);
+  }
+
+  // Robots — emit only when the page is explicitly hidden (default index).
+  if (meta.index === false) {
+    lines.push(`  robots: { index: false },`);
+  }
+
+  // Social share card (OpenGraph).
+  const socialImagePath = resolveSocialImagePath(page, manifest);
+  const ogLines: string[] = [
+    `    title: "${escapeJsxStringLiteral(socialTitle)}",`,
+    socialDescription
+      ? `    description: "${escapeJsxStringLiteral(socialDescription)}",`
+      : null,
+    meta.canonicalUrl?.trim()
+      ? `    url: "${escapeJsxStringLiteral(meta.canonicalUrl.trim())}",`
+      : null,
+    socialImagePath
+      ? `    images: ["${escapeJsxStringLiteral(socialImagePath)}"],`
+      : null,
+  ].filter((l): l is string => l !== null);
+  lines.push(`  openGraph: {\n${ogLines.join("\n")}\n  },`);
+
   return lines.join("\n");
+}
+
+/** Resolve the page's social image public path via the export manifest. */
+function resolveSocialImagePath(
+  page: Page,
+  manifest?: ExportAssetManifest,
+): string | undefined {
+  const ref = page.meta?.socialImage;
+  if (!ref?.assetId || !manifest) return undefined;
+  const entry = manifest.byAssetId.get(ref.assetId);
+  return entry?.publicPath;
 }
 
 // ---------------------------------------------------------------------------
@@ -163,7 +221,7 @@ export function generatePageFile(
   }
 
   const componentName = componentNameForRoute(route);
-  const metadata = pageMetadataLines(page);
+  const metadata = pageMetadataLines(page, manifest);
 
   const content = `import type { Metadata } from "next";
 ${imports.join("\n")}

@@ -39,6 +39,8 @@ export interface ProjectCardProps {
   onRegeneratePreview?: (projectId: string) => void;
   /** True while this project's thumbnail is being regenerated. */
   isRegeneratingPreview?: boolean;
+  /** Phase P7 — derived publish status (Draft / Ready / Published / Changes). */
+  publishStatus?: "never-published" | "published" | "changes-unpublished" | "unknown";
 }
 
 // ---------------------------------------------------------------------------
@@ -81,6 +83,7 @@ export function ProjectCard({
   onExport,
   onRegeneratePreview,
   isRegeneratingPreview,
+  publishStatus,
 }: ProjectCardProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
@@ -358,6 +361,28 @@ export function ProjectCard({
             )}
           </div>
         </div>
+
+        {/* Phase P7 — publish status (derived, never stored in the project) */}
+        {publishStatus && publishStatus !== "unknown" && (
+          <div className="mb-2 flex items-center gap-1.5">
+            <span
+              className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                publishStatus === "published"
+                  ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                  : publishStatus === "changes-unpublished"
+                    ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                    : "bg-card text-text-dim"
+              }`}
+              data-testid="project-publish-status"
+            >
+              {publishStatus === "published"
+                ? "Published"
+                : publishStatus === "changes-unpublished"
+                  ? "Changes unpublished"
+                  : "Not published yet"}
+            </span>
+          </div>
+        )}
 
         {/* Metadata */}
         <div className="flex items-center gap-2 text-[11px] text-text-dim/70">

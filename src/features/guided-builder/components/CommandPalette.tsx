@@ -21,6 +21,10 @@ import {
 import { useGuidedBuilderStore } from "../store/guided-builder-store";
 import { useGuidedActions } from "../hooks/useGuidedActions";
 import { EXPORT_SITE_EVENT } from "../constants";
+import { usePreviewStore } from "@/features/preview/store/preview-store";
+import { useLaunchCenterStore } from "@/features/launch-readiness/store/launch-center-store";
+import { useSiteSettingsUiStore } from "@/features/site-settings/store/site-settings-ui-store";
+import { usePublishingStore } from "@/features/publishing/store/publishing-store";
 
 interface PaletteCommand {
   id: string;
@@ -131,9 +135,9 @@ function buildCommands(handlers: {
     {
       id: "check-website",
       label: "Check my website",
-      keywords: ["check", "score", "ready", "review", "readiness", "progress"],
-      hint: "Open your progress and score",
-      run: () => handlers.setRightSidebarTab("structure"),
+      keywords: ["check", "score", "ready", "review", "readiness", "progress", "is my website ready"],
+      hint: "Open the Launch Center and your readiness score",
+      run: () => useLaunchCenterStore.getState().openLaunchCenter(),
     },
     {
       id: "export-website",
@@ -144,6 +148,48 @@ function buildCommands(handlers: {
         handlers.setHasExported(true);
         window.dispatchEvent(new CustomEvent(EXPORT_SITE_EVENT));
       },
+    },
+    {
+      id: "preview-website",
+      label: "Preview my website",
+      keywords: ["preview", "see", "visitor", "look", "website"],
+      hint: "See your site the way visitors do",
+      run: () => usePreviewStore.getState().openPreview("/"),
+    },
+    {
+      id: "launch-center",
+      label: "Open Launch Center",
+      keywords: ["launch", "ready", "check", "publish", "finish", "go live", "is my website ready"],
+      hint: "Everything you need before going live",
+      run: () => useLaunchCenterStore.getState().openLaunchCenter(),
+    },
+    {
+      id: "site-settings",
+      label: "Open site settings",
+      keywords: ["settings", "site name", "name", "description", "setup"],
+      hint: "Site name, description, and language",
+      run: () => useSiteSettingsUiStore.getState().openDialog("basics"),
+    },
+    {
+      id: "seo-settings",
+      label: "Search and sharing settings",
+      keywords: ["seo", "google", "search", "social", "share", "meta", "preview"],
+      hint: "Google title, description, and share card",
+      run: () => useSiteSettingsUiStore.getState().openDialog("search"),
+    },
+    {
+      id: "publish-website",
+      label: "Publish my website",
+      keywords: ["publish", "go live", "launch", "deploy", "live"],
+      hint: "Choose where your site goes",
+      run: () => usePublishingStore.getState().openPublishDialog(),
+    },
+    {
+      id: "deployment-history",
+      label: "View publish history",
+      keywords: ["history", "deployments", "versions", "previous publish", "rollback"],
+      hint: "See every version you've published",
+      run: () => usePublishingStore.getState().openHistory(),
     },
     {
       id: "open-my-blocks",

@@ -29,6 +29,8 @@ export function useGuidedBuilder() {
   );
   const hasPreviewedMobile = useGuidedBuilderStore((s) => s.hasPreviewedMobile);
   const hasExported = useGuidedBuilderStore((s) => s.hasExported);
+  const hasPreviewedSite = useGuidedBuilderStore((s) => s.hasPreviewedSite);
+  const hasPublished = useGuidedBuilderStore((s) => s.hasPublished);
 
   const activePage =
     project.pages.find((p) => p.id === selectedPageId) ?? project.pages[0];
@@ -73,6 +75,8 @@ export function useGuidedBuilder() {
       sections: sections.map((s) => ({ type: s.type, props: s.props })),
       hasPreviewedMobile,
       hasExported,
+      hasPreviewedSite,
+      hasPublished,
     });
 
     return {
@@ -94,5 +98,7 @@ export function useGuidedBuilder() {
     coachEnabled,
     hasPreviewedMobile,
     hasExported,
+    hasPreviewedSite,
+    hasPublished,
   ]);
 }

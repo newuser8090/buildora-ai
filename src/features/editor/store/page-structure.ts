@@ -139,24 +139,59 @@ export function validatePageTitle(title: unknown): PageTitleValidation {
 export interface PageMetaInput {
   title?: unknown;
   description?: unknown;
+  seoTitle?: unknown;
+  seoDescription?: unknown;
+  socialTitle?: unknown;
+  socialDescription?: unknown;
+  socialImage?: unknown;
+  index?: unknown;
+  canonicalUrl?: unknown;
 }
 
 /**
  * Sanitize page metadata for storage: trim, enforce length caps, and drop
  * empty values (empty strings become undefined so stale keys are removed).
+ *
+ * Phase P7: extends the Phase J fields with dedicated search/social fields.
  */
 export function sanitizePageMeta(input: PageMetaInput | undefined): PageMeta {
   const result: PageMeta = {};
-  if (input && typeof input.title === "string" && input.title.trim().length > 0) {
-    result.title = input.title.trim().slice(0, 200);
+  const str = (v: unknown): string | undefined =>
+    typeof v === "string" && v.trim().length > 0 ? v.trim() : undefined;
+
+  const title = str(input?.title);
+  if (title) result.title = title.slice(0, 200);
+  const description = str(input?.description);
+  if (description) result.description = description.slice(0, 500);
+  const seoTitle = str(input?.seoTitle);
+  if (seoTitle) result.seoTitle = seoTitle.slice(0, 200);
+  const seoDescription = str(input?.seoDescription);
+  if (seoDescription) result.seoDescription = seoDescription.slice(0, 500);
+  const socialTitle = str(input?.socialTitle);
+  if (socialTitle) result.socialTitle = socialTitle.slice(0, 200);
+  const socialDescription = str(input?.socialDescription);
+  if (socialDescription) {
+    result.socialDescription = socialDescription.slice(0, 500);
   }
+  const socialImage = input?.socialImage;
   if (
-    input &&
-    typeof input.description === "string" &&
-    input.description.trim().length > 0
+    socialImage &&
+    typeof socialImage === "object" &&
+    typeof (socialImage as { assetId?: unknown }).assetId === "string" &&
+    (socialImage as { assetId: string }).assetId.trim().length > 0
   ) {
-    result.description = input.description.trim().slice(0, 500);
+    result.socialImage = {
+      assetId: (socialImage as { assetId: string }).assetId.trim(),
+      ...(typeof (socialImage as { altText?: unknown }).altText === "string"
+        ? { altText: (socialImage as { altText: string }).altText.trim() }
+        : {}),
+    };
   }
+  // Only store the non-default value (index defaults to true) so existing
+  // project files stay minimal and backward compatible.
+  if (input?.index === false) result.index = false;
+  const canonicalUrl = str(input?.canonicalUrl);
+  if (canonicalUrl) result.canonicalUrl = canonicalUrl.slice(0, 500);
   return result;
 }
 

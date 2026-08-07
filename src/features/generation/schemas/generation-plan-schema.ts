@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { AssetRefSchema } from "@/features/assets/schemas/asset-schema";
+import { SiteSettingsSchema } from "@/features/site-settings/schema";
 
 // ---------------------------------------------------------------------------
 // Planned section schema
@@ -118,6 +120,13 @@ const BaseSectionSchema = z.object({
 const PageMetaSchema = z.object({
   title: z.string().max(200).optional(),
   description: z.string().max(500).optional(),
+  seoTitle: z.string().max(200).optional(),
+  seoDescription: z.string().max(500).optional(),
+  socialTitle: z.string().max(200).optional(),
+  socialDescription: z.string().max(500).optional(),
+  socialImage: AssetRefSchema.optional(),
+  index: z.boolean().optional(),
+  canonicalUrl: z.string().max(500).optional(),
 });
 
 const PageSchema = z.object({
@@ -136,4 +145,5 @@ export const ProjectSchema = z.object({
   assets: z.array(AssetSchema).default([]),
   createdAt: z.string(),
   updatedAt: z.string(),
+  siteSettings: SiteSettingsSchema.optional(),
 });

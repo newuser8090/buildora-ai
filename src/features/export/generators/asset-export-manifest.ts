@@ -80,8 +80,30 @@ export function buildExportAssetManifest(project: Project): ExportAssetManifest 
   const errors: string[] = [];
   const warnings: string[] = [];
 
-  // 1. Collect referenced asset IDs (visible sections only)
-  const referencedIds = collectReferencedAssetIds(project, { visibleOnly: true });
+  // 1. Collect referenced asset IDs (visible sections only) + Phase P7
+  //    site-level references (favicon, site social image).
+  const referencedIds = new Set(
+    collectReferencedAssetIds(project, { visibleOnly: true }),
+  );
+  const faviconId = project.siteSettings?.favicon?.assetId;
+  if (faviconId) referencedIds.add(faviconId);
+  const siteSocialImageId = project.siteSettings?.social?.image?.assetId;
+  if (siteSocialImageId) referencedIds.add(siteSocialImageId);
+  // Site-level refs missing from project.assets are non-blocking warnings:
+  // the exported site still builds without a favicon/social image.
+  const siteLevelRefs = new Set<string>();
+  if (faviconId) siteLevelRefs.add(faviconId);
+  if (siteSocialImageId) siteLevelRefs.add(siteSocialImageId);
+
+  // Phase P7 page-level refs (page.meta.socialImage) — same non-blocking
+  // policy: a missing share image is cosmetic, never a build breaker.
+  for (const page of project.pages ?? []) {
+    const ref = page.meta?.socialImage?.assetId;
+    if (ref) {
+      referencedIds.add(ref);
+      siteLevelRefs.add(ref);
+    }
+  }
 
   // Pre-scan for Hero sections that have a legacy `image` fallback
   const heroContentFallbackIds = findRecoverableHeroRefs(project);
@@ -91,12 +113,17 @@ export function buildExportAssetManifest(project: Project): ExportAssetManifest 
 
   for (const assetId of referencedIds) {
     const asset = project.assets?.find((a) => a.id === assetId);
-    if (!asset) {
-      // Missing referenced asset
-      if (heroContentFallbackIds.has(assetId)) {
+    if (!asset) {    // Missing referenced asset
+    if (heroContentFallbackIds.has(assetId)) {
         // Recoverable: Hero content image with legacy URL fallback
         warnings.push(
           `Hero content image "${assetId}" not found. Falling back to legacy image URL.`,
+        );
+      } else if (siteLevelRefs.has(assetId)) {
+        // Recoverable: site-level / page-level metadata ref missing
+        // (favicon, social image, page share image).
+        warnings.push(
+          `Site-level asset "${assetId}" not found in project.assets — its metadata reference will be omitted.`,
         );
       } else {
         // Blocking: no fallback available

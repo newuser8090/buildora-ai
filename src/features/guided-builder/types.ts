@@ -135,7 +135,8 @@ export type JourneyStepId =
   | "contact"
   | "preview-mobile"
   | "preview-site"
-  | "export";
+  | "export"
+  | "publish";
 
 export interface JourneyStep {
   id: JourneyStepId;

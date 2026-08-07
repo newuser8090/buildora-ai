@@ -24,6 +24,10 @@ export interface JourneyContext {
   /** Session flags — set when the user previews mobile / exports. */
   hasPreviewedMobile: boolean;
   hasExported: boolean;
+  /** Phase P7 — opened the visitor preview. */
+  hasPreviewedSite?: boolean;
+  /** Phase P7 — published at least once (or visited Launch Center). */
+  hasPublished?: boolean;
 }
 
 function asString(value: unknown): string {
@@ -108,10 +112,22 @@ export function getBuildingJourney(ctx: JourneyContext): BuildingJourney {
       complete: ctx.hasPreviewedMobile,
     },
     {
+      id: "preview-site",
+      label: "Preview the whole site",
+      helper: "See your site the way a visitor would, page by page.",
+      complete: !!ctx.hasPreviewedSite,
+    },
+    {
       id: "export",
       label: "Export your site",
       helper: "Download your website as files you can host anywhere.",
       complete: ctx.hasExported,
+    },
+    {
+      id: "publish",
+      label: "Publish your site",
+      helper: "Go live with the Launch Center.",
+      complete: !!ctx.hasPublished,
     },
   ];
 
