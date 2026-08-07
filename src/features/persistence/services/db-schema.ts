@@ -25,6 +25,7 @@ import {
   STORE_CLOUD_SYNC_QUEUE,
   STORE_CLOUD_SYNC_MARKERS,
   STORE_CLOUD_SYNC_CONFLICTS,
+  STORE_DEPLOYMENTS,
 } from "../constants";
 
 /**
@@ -61,5 +62,9 @@ export function ensureDatabaseStores(db: IDBDatabase): void {
   }
   if (!db.objectStoreNames.contains(STORE_CLOUD_SYNC_CONFLICTS)) {
     db.createObjectStore(STORE_CLOUD_SYNC_CONFLICTS, { keyPath: "id" });
+  }
+  // Phase P7 (database version 6): deployment history.
+  if (!db.objectStoreNames.contains(STORE_DEPLOYMENTS)) {
+    db.createObjectStore(STORE_DEPLOYMENTS, { keyPath: "id" });
   }
 }

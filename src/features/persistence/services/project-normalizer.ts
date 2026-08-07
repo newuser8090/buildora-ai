@@ -65,6 +65,16 @@ export function normalizeProject(input: unknown): ProjectNormalizationResult {
       project.assets = [];
     }
 
+    // Phase P7: siteSettings is optional content — preserved as-is when
+    // present (schema validation downstream strips invalid shapes).
+    if (
+      project.siteSettings &&
+      (typeof project.siteSettings !== "object" ||
+        Array.isArray(project.siteSettings))
+    ) {
+      delete project.siteSettings;
+    }
+
     // Ensure theme is at least a minimal object
     if (!project.theme || typeof project.theme !== "object") {
       project.theme = createMinimalTheme();
@@ -105,6 +115,7 @@ export function normalizeProject(input: unknown): ProjectNormalizationResult {
     // Remove transient/undefined fields that are not part of Project
     const allowedKeys = [
       "id", "name", "theme", "pages", "assets", "createdAt", "updatedAt",
+      "siteSettings",
     ];
     for (const key of Object.keys(project)) {
       if (!allowedKeys.includes(key)) {

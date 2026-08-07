@@ -84,8 +84,10 @@ export const DATABASE_NAME = "buildora";
  *   5 — added cloudSyncQueue + cloudSyncMarkers + cloudSyncConflicts stores
  *       (Phase P6 cloud sync: durable offline queue, sync markers, and
  *       durable conflict records).
+ *   6 — added deployments store (Phase P7 publishing: deployment history
+ *       lives OUTSIDE ProjectSchema).
  */
-export const DATABASE_VERSION = 5;
+export const DATABASE_VERSION = 6;
 
 /** Object store for project records. */
 export const STORE_PROJECTS = "projects";
@@ -125,6 +127,13 @@ export const STORE_CLOUD_SYNC_MARKERS = "cloudSyncMarkers";
  * IndexedDB rather than memory.
  */
 export const STORE_CLOUD_SYNC_CONFLICTS = "cloudSyncConflicts";
+
+/**
+ * Deployment history (database version 6, Phase P7). Deployment records are
+ * operational history and stay OUTSIDE ProjectSchema. No tokens or provider
+ * secrets are ever stored here.
+ */
+export const STORE_DEPLOYMENTS = "deployments";
 
 /** Key for the active project ID in the metadata store. */
 export const METADATA_KEY_ACTIVE_PROJECT = "activeProjectId";

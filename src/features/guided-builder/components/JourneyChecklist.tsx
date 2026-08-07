@@ -49,6 +49,12 @@ export function JourneyChecklist() {
       if (stepId === "preview-mobile") {
         setViewport("mobile");
         setHasPreviewedMobile(true);
+      } else if (stepId === "preview-site") {
+        useGuidedBuilderStore.getState().setHasPreviewedSite(true);
+        window.dispatchEvent(new CustomEvent("buildora:preview-site"));
+      } else if (stepId === "publish") {
+        useGuidedBuilderStore.getState().setHasPublished(true);
+        window.dispatchEvent(new CustomEvent("buildora:open-launch-center"));
       } else if (stepId === "export") {
         setHasExported(true);
         window.dispatchEvent(new CustomEvent("buildora:export-site"));

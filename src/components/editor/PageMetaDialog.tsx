@@ -1,5 +1,9 @@
 // ---------------------------------------------------------------------------
-// PageMetaDialog — edit per-page SEO metadata (title + description)
+// PageMetaDialog — edit per-page SEO metadata (Phase J + Phase P7)
+//
+// Phase P7 adds beginner-labeled fields: "Google title", "Google description",
+// "Social preview" (title/description/image), "Show this page in search
+// engines", and an optional canonical override (advanced).
 //
 // Values are stored on Page.meta via the editor store (one history entry).
 // Empty fields are dropped on save. Escape closes the dialog.
@@ -12,6 +16,7 @@
 
 import { useEffect, useState } from "react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
+import { AssetPickerDialog } from "@/features/site-settings/components/AssetPickerDialog";
 import type { Page } from "@/types/project";
 
 export interface PageMetaDialogProps {
@@ -27,8 +32,22 @@ export function PageMetaDialog({ page, onClose }: PageMetaDialogProps) {
 function PageMetaForm({ page, onClose }: { page: Page; onClose: () => void }) {
   const updatePageMeta = useEditorStore((s) => s.updatePageMeta);
 
-  const [title, setTitle] = useState(page.meta?.title ?? "");
-  const [description, setDescription] = useState(page.meta?.description ?? "");
+  const [title, setTitle] = useState(page.meta?.seoTitle ?? page.meta?.title ?? "");
+  const [description, setDescription] = useState(
+    page.meta?.seoDescription ?? page.meta?.description ?? "",
+  );
+  const [socialTitle, setSocialTitle] = useState(page.meta?.socialTitle ?? "");
+  const [socialDescription, setSocialDescription] = useState(
+    page.meta?.socialDescription ?? "",
+  );
+  const [socialImageId, setSocialImageId] = useState(
+    page.meta?.socialImage?.assetId ?? "",
+  );
+  const [index, setIndex] = useState(page.meta?.index !== false);
+  const [canonicalUrl, setCanonicalUrl] = useState(
+    page.meta?.canonicalUrl ?? "",
+  );
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Escape closes the dialog
   useEffect(() => {
@@ -39,10 +58,26 @@ function PageMetaForm({ page, onClose }: { page: Page; onClose: () => void }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
+  const canonicalInvalid =
+    canonicalUrl.trim().length > 0 && !/^https?:\/\//i.test(canonicalUrl.trim());
+
   const handleSave = () => {
-    updatePageMeta(page.id, { title, description });
+    updatePageMeta(page.id, {
+      title,
+      description,
+      seoTitle: title,
+      seoDescription: description,
+      socialTitle,
+      socialDescription,
+      socialImage: socialImageId ? { assetId: socialImageId } : undefined,
+      index,
+      canonicalUrl,
+    });
     onClose();
   };
+
+  const inputClass =
+    "w-full rounded-lg border border-border bg-base px-3 py-2 text-sm text-text-primary placeholder:text-text-dim/50 transition-colors focus:border-accent/40 focus:outline-none focus:ring-2 focus:ring-accent/10";
 
   return (
     <div
@@ -51,7 +86,7 @@ function PageMetaForm({ page, onClose }: { page: Page; onClose: () => void }) {
       aria-modal="true"
       aria-labelledby="page-meta-title"
     >
-      <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-elevated">
+      <div className="max-h-[86vh] w-full max-w-lg overflow-y-auto rounded-xl border border-border bg-card p-6 shadow-elevated">
         <h3
           id="page-meta-title"
           className="text-lg font-semibold text-text-primary"
@@ -59,8 +94,8 @@ function PageMetaForm({ page, onClose }: { page: Page; onClose: () => void }) {
           Page settings
         </h3>
         <p className="mt-1 text-xs text-text-dim">
-          SEO metadata for &ldquo;{page.title}&rdquo;. Used when exporting the
-          site.
+          Search and sharing info for &ldquo;{page.title}&rdquo;. Used when
+          exporting the site.
         </p>
 
         <div className="mt-5 flex flex-col gap-4">
@@ -69,7 +104,7 @@ function PageMetaForm({ page, onClose }: { page: Page; onClose: () => void }) {
               htmlFor="page-meta-title-input"
               className="mb-1.5 block text-xs font-medium text-text-muted"
             >
-              Meta title
+              Google title
             </label>
             <input
               id="page-meta-title-input"
@@ -79,8 +114,12 @@ function PageMetaForm({ page, onClose }: { page: Page; onClose: () => void }) {
               maxLength={200}
               placeholder={page.title}
               autoFocus
-              className="w-full rounded-lg border border-border bg-base px-3 py-2 text-sm text-text-primary placeholder:text-text-dim/50 transition-colors focus:border-accent/40 focus:outline-none focus:ring-2 focus:ring-accent/10"
+              className={inputClass}
             />
+            <p className="mt-1 text-[11px] text-text-dim">
+              The title of this page in search results. Leave blank to use the
+              page name.
+            </p>
           </div>
 
           <div>
@@ -88,7 +127,7 @@ function PageMetaForm({ page, onClose }: { page: Page; onClose: () => void }) {
               htmlFor="page-meta-description-input"
               className="mb-1.5 block text-xs font-medium text-text-muted"
             >
-              Meta description
+              Google description
             </label>
             <textarea
               id="page-meta-description-input"
@@ -98,9 +137,113 @@ function PageMetaForm({ page, onClose }: { page: Page; onClose: () => void }) {
               maxLength={500}
               rows={3}
               placeholder="A short summary shown in search results."
-              className="w-full resize-none rounded-lg border border-border bg-base px-3 py-2 text-sm text-text-primary placeholder:text-text-dim/50 transition-colors focus:border-accent/40 focus:outline-none focus:ring-2 focus:ring-accent/10"
+              className={`${inputClass} resize-none`}
             />
           </div>
+
+          <div className="rounded-lg border border-border/60 bg-base/50 p-3">
+            <label className="mb-1.5 block text-xs font-medium text-text-muted">
+              Show this page in search engines
+            </label>
+            <div className="flex items-center gap-4">
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-text-primary">
+                <input
+                  type="radio"
+                  name={`page-index-${page.id}`}
+                  checked={index}
+                  onChange={() => setIndex(true)}
+                  data-testid="page-meta-index-yes"
+                  className="h-4 w-4 accent-[var(--accent,#7c5cfc)]"
+                />
+                Yes
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-text-primary">
+                <input
+                  type="radio"
+                  name={`page-index-${page.id}`}
+                  checked={!index}
+                  onChange={() => setIndex(false)}
+                  data-testid="page-meta-index-no"
+                  className="h-4 w-4 accent-[var(--accent,#7c5cfc)]"
+                />
+                No — keep it hidden
+              </label>
+            </div>
+            {!index && (
+              <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
+                This page is currently hidden from search engines.
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-xs font-medium text-text-muted">
+              Social preview
+            </label>
+            <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-base/50 p-3">
+              <input
+                data-testid="page-meta-social-title"
+                value={socialTitle}
+                onChange={(e) => setSocialTitle(e.target.value)}
+                maxLength={200}
+                placeholder="Share title (optional)"
+                className={inputClass}
+              />
+              <textarea
+                data-testid="page-meta-social-description"
+                value={socialDescription}
+                onChange={(e) => setSocialDescription(e.target.value)}
+                maxLength={500}
+                rows={2}
+                placeholder="Share description (optional)"
+                className={`${inputClass} resize-none`}
+              />
+              <AssetPickerDialog
+                assetId={socialImageId || undefined}
+                title="Choose a share image"
+                onSelect={(id) => setSocialImageId(id)}
+                onClear={() => setSocialImageId("")}
+              />
+            </div>
+          </div>
+
+          <button
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            className="text-left text-[11px] font-medium text-text-dim underline hover:no-underline"
+            type="button"
+            aria-expanded={showAdvanced}
+          >
+            {showAdvanced ? "Hide" : "Show"} advanced settings
+          </button>
+
+          {showAdvanced && (
+            <div className="flex flex-col gap-4 rounded-lg border border-border/60 bg-base/50 p-3">
+              <div>
+                <label
+                  htmlFor="page-meta-canonical"
+                  className="mb-1.5 block text-xs font-medium text-text-muted"
+                >
+                  Main address of this page
+                </label>
+                <input
+                  id="page-meta-canonical"
+                  data-testid="page-meta-canonical"
+                  value={canonicalUrl}
+                  onChange={(e) => setCanonicalUrl(e.target.value)}
+                  maxLength={500}
+                  placeholder="https://www.yoursite.com/this-page"
+                  className={`${inputClass} ${
+                    canonicalInvalid ? "!border-red-500/50" : ""
+                  }`}
+                />
+                {canonicalInvalid && (
+                  <p className="mt-1 text-[11px] text-red-400">
+                    That address needs to start with https:// or http://
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="mt-6 flex items-center justify-end gap-3">

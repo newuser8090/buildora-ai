@@ -24,6 +24,10 @@ import { TryGuidedBanner } from "@/features/guided-builder/components/TryGuidedB
 import { CodeImportDialog } from "@/features/code-import/components/CodeImportDialog";
 import { MyBlocksRoot } from "@/features/my-blocks/components/MyBlocksRoot";
 import { MyBlockDndProvider } from "@/features/my-blocks/drag/MyBlockDndProvider";
+import { PreviewShell } from "@/features/preview/components/PreviewShell";
+import { SiteSettingsDialog } from "@/features/site-settings/components/SiteSettingsDialog";
+import { LaunchCenter } from "@/features/launch-readiness/components/LaunchCenter";
+import { PublishDialog } from "@/features/publishing/components/PublishDialog";
 import { getProjectController } from "@/features/persistence/services/project-controller";
 import { ensureProjectController } from "@/features/persistence/hooks/useProjectController";
 import { useEditorStore } from "@/features/editor/store/editor-store";
@@ -294,6 +298,12 @@ function EditorShell() {
 
       {/* Phase P4: My Blocks — shared library + save/rename/delete/import dialogs */}
       <MyBlocksRoot />
+
+      {/* Phase P7: visitor preview, site settings, launch center, publishing */}
+      <PreviewShell />
+      <SiteSettingsDialog />
+      <LaunchCenter />
+      <PublishDialog />
     </MyBlockDndProvider>
   );
 }

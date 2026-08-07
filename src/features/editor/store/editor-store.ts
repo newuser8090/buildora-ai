@@ -2,6 +2,8 @@ import { create } from "zustand";
 import type { Page, Project, Viewport } from "@/types/project";
 import type { BaseSection } from "@/types/section";
 import type { Asset } from "@/features/assets/types";
+import type { SiteSettings } from "@/features/site-settings/types";
+import { sanitizeSiteSettings } from "@/features/site-settings/schema";
 import type { PersistenceError } from "@/features/persistence/types";
 import { clearAssetReferences } from "@/features/assets/services/reference-cleanup";
 import { getCanonicalExtension } from "@/features/assets/services/file-validator";
@@ -134,6 +136,9 @@ export interface EditorState {
   deletePage: (pageId: string) => EditorMutationResult;
   movePage: (pageId: string, targetIndex: number) => EditorMutationResult;
   updatePageMeta: (pageId: string, meta: PageMetaInput) => EditorMutationResult;
+
+  // Phase P7 — site-wide settings (name, SEO, social, favicon)
+  updateSiteSettings: (patch: Partial<SiteSettings>) => EditorMutationResult;
 
   // Viewport & zoom
   setViewport: (viewport: Viewport) => void;
@@ -483,10 +488,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
 
     const sanitized = sanitizePageMeta(meta);
     const current = page.meta ?? {};
-    if (
-      current.title === sanitized.title &&
-      current.description === sanitized.description
-    ) {
+    if (JSON.stringify(current) === JSON.stringify(sanitized)) {
       return { ok: true, changed: false };
     }
 
@@ -495,6 +497,38 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
         const target = project.pages.find((p) => p.id === pageId);
         if (!target) return;
         target.meta = sanitized;
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
+    return { ok: true, changed: true };
+  },
+
+  updateSiteSettings: (patch) => {
+    const state = get();
+    const current = state.project.siteSettings;
+
+    // Merge the patch over the current settings, then sanitize (trim,
+    // drop empties). If the sanitized result differs from what is stored,
+    // the change is committed as one history entry (clearing a field IS a
+    // change); identical results are a no-op so re-saving without edits
+    // never pollutes undo history.
+    const next = sanitizeSiteSettings({
+      ...(current ?? {}),
+      ...patch,
+    } as Record<string, unknown>);
+
+    if (JSON.stringify(current ?? {}) === JSON.stringify(next)) {
+      return { ok: true, changed: false };
+    }
+
+    set(
+      withHistory(state, (project) => {
+        const merged = next as unknown as SiteSettings;
+        if (Object.keys(next).length === 0) {
+          delete project.siteSettings;
+        } else {
+          project.siteSettings = merged;
+        }
         project.updatedAt = new Date().toISOString();
       }),
     );

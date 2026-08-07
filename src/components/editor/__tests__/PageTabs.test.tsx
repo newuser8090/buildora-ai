@@ -337,7 +337,8 @@ describe("PageTabs menu behavior", () => {
     const page = useEditorStore
       .getState()
       .project.pages.find((p) => p.id === "page-2")!;
-    expect(page.meta).toEqual({ title: "About SEO" });
+    // Phase P7: the Google title maps to both title and the search field.
+    expect(page.meta).toEqual({ title: "About SEO", seoTitle: "About SEO" });
     expect(
       screen.queryByRole("dialog", { name: "Page settings" }),
     ).toBeNull();

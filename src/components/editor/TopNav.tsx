@@ -13,6 +13,9 @@ import {
   Loader2,
   ImageIcon,
   ArrowLeft,
+  Eye,
+  Rocket,
+  Settings2,
 } from "lucide-react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { useMyBlocksUiStore } from "@/features/my-blocks/store/my-blocks-ui-store";
@@ -27,6 +30,9 @@ import { ExperienceModeSwitcher } from "@/features/guided-builder/components/Exp
 import { EXPORT_SITE_EVENT } from "@/features/guided-builder/constants";
 import { CloudSyncStatusControl } from "@/features/cloud-sync/components/CloudSyncStatusControl";
 import { AccountMenu } from "@/features/auth/components/AccountMenu";
+import { usePreviewStore } from "@/features/preview/store/preview-store";
+import { useLaunchCenterStore } from "@/features/launch-readiness/store/launch-center-store";
+import { useSiteSettingsUiStore } from "@/features/site-settings/store/site-settings-ui-store";
 
 const iconButton =
   "flex h-8 w-8 items-center justify-center rounded-lg text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95";
@@ -356,6 +362,40 @@ export function TopNav() {
           <span className="hidden sm:inline text-xs">
             {exporting ? "Exporting..." : "Export"}
           </span>
+        </button>
+
+        {/* Phase P7: Preview + Publish — the primary finishing actions */}
+        <button
+          data-testid="topnav-preview-button"
+          onClick={() => usePreviewStore.getState().openPreview("/")}
+          className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-sm text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
+          title="Preview your website"
+          type="button"
+        >
+          <Eye className="h-4 w-4" />
+          <span className="hidden sm:inline text-xs">Preview</span>
+        </button>
+
+        <button
+          data-testid="topnav-publish-button"
+          onClick={() => useLaunchCenterStore.getState().openLaunchCenter()}
+          className="flex h-8 items-center gap-2 rounded-lg bg-accent px-3 text-sm font-medium text-white transition-all duration-200 hover:bg-accent-hover active:scale-95"
+          title="Check and publish your website"
+          type="button"
+        >
+          <Rocket className="h-4 w-4" />
+          <span className="hidden sm:inline text-xs">Publish</span>
+        </button>
+
+        <button
+          data-testid="topnav-site-settings-button"
+          onClick={() => useSiteSettingsUiStore.getState().openDialog("basics")}
+          className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-sm text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
+          title="Site settings"
+          type="button"
+        >
+          <Settings2 className="h-4 w-4" />
+          <span className="hidden xl:inline text-xs">Settings</span>
         </button>
 
         <div className="mx-1.5 h-4 w-px bg-border" />

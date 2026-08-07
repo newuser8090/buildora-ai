@@ -195,9 +195,10 @@ describe("first-connection through the thumbnail adapter creates every store", (
         "cloudSyncQueue",
         "cloudSyncMarkers",
         "cloudSyncConflicts",
+        "deployments",
       ]),
     );
-    expect(names).toHaveLength(9);
+    expect(names).toHaveLength(10);
   });
 });
 

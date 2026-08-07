@@ -37,6 +37,13 @@ export function generateExportProject(project: Project): GeneratedProject {
   // Build asset manifest for referenced assets (if any)
   const assetManifest = buildExportAssetManifest(project);
 
+  // Phase P7: resolve the favicon public path (via the manifest) and pass
+  // normalized site settings into the layout generator.
+  const faviconPublicPath = project.siteSettings?.favicon?.assetId
+    ? assetManifest.byAssetId.get(project.siteSettings.favicon.assetId)?.publicPath
+    : undefined;
+  const s = project.siteSettings;
+
   const files: OutputFile[] = [
     // Static boilerplate
     generatePackageJson(project.name),
@@ -46,7 +53,23 @@ export function generateExportProject(project: Project): GeneratedProject {
 
     // App layout and styling
     generateGlobalsCss(project.theme),
-    generateLayout({ projectName: project.name }),
+    generateLayout({
+      projectName: project.name,
+      projectDescription: s?.siteDescription,
+      siteSettings: s
+        ? {
+            siteName: s.siteName,
+            siteDescription: s.siteDescription,
+            language: s.language,
+            faviconPublicPath,
+            themeColor: s.appearance?.themeColor,
+            seoTitle: s.seo?.title,
+            seoDescription: s.seo?.description,
+            robotsIndex: s.seo?.robotsIndex,
+            robotsFollow: s.seo?.robotsFollow,
+          }
+        : null,
+    }),
 
     // Section components — reusable templates
     ...generateAllSectionComponents(),
