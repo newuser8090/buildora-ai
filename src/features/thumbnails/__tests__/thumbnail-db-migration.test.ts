@@ -32,6 +32,9 @@ import {
   STORE_MY_BLOCKS,
   STORE_MY_BLOCK_THUMBNAILS,
   STORE_MY_BLOCK_COLLECTIONS,
+  STORE_CLOUD_SYNC_QUEUE,
+  STORE_CLOUD_SYNC_MARKERS,
+  STORE_CLOUD_SYNC_CONFLICTS,
   METADATA_KEY_ACTIVE_PROJECT,
   DATABASE_VERSION,
 } from "@/features/persistence/constants";
@@ -253,10 +256,11 @@ describe("IndexedDB v1 → latest migration", () => {
     // Open with the thumbnail adapter at the current version — triggers the upgrade.
     await upgradeToLatest(dbName);
 
-    // After upgrade: all six known stores present, none removed. The Phase
-    // P4 myBlocks store and the Phase P5 myBlockThumbnails + myBlockCollections
-    // stores are created by the same non-destructive upgrade handler (the
-    // thumbnail adapter is often the first connection to create the DB).
+    // After upgrade: all nine known stores present, none removed. The Phase
+    // P4 myBlocks store, the Phase P5 myBlockThumbnails + myBlockCollections
+    // stores, and the Phase P6 cloudSync* stores are created by the same
+    // non-destructive upgrade handler (the thumbnail adapter is often the
+    // first connection to create the DB).
     const after = await getDatabaseStoreNames(dbName);
     expect(after).toContain(STORE_PROJECTS);
     expect(after).toContain(STORE_METADATA);
@@ -264,7 +268,10 @@ describe("IndexedDB v1 → latest migration", () => {
     expect(after).toContain(STORE_MY_BLOCKS);
     expect(after).toContain(STORE_MY_BLOCK_THUMBNAILS);
     expect(after).toContain(STORE_MY_BLOCK_COLLECTIONS);
-    expect(after).toHaveLength(6);
+    expect(after).toContain(STORE_CLOUD_SYNC_QUEUE);
+    expect(after).toContain(STORE_CLOUD_SYNC_MARKERS);
+    expect(after).toContain(STORE_CLOUD_SYNC_CONFLICTS);
+    expect(after).toHaveLength(9);
   });
 
   it("preserves existing project records and revision after upgrade", async () => {
@@ -515,10 +522,14 @@ describe("IndexedDB v1 → latest migration", () => {
         STORE_MY_BLOCKS,
         STORE_MY_BLOCK_THUMBNAILS,
         STORE_MY_BLOCK_COLLECTIONS,
+        STORE_CLOUD_SYNC_QUEUE,
+        STORE_CLOUD_SYNC_MARKERS,
+        STORE_CLOUD_SYNC_CONFLICTS,
       ]),
     );
-    // Exactly the six known stores (Phase P4 myBlocks + Phase P5 thumbnail
-    // and collection stores are created non-destructively) — no stray stores.
+    // Exactly the nine known stores (Phase P4 myBlocks + Phase P5 thumbnail
+    // and collection stores + Phase P6 cloud sync stores are created
+    // non-destructively) — no stray stores.
     expect(
       names.filter(
         (n) =>
@@ -529,9 +540,12 @@ describe("IndexedDB v1 → latest migration", () => {
             "myBlocks",
             "myBlockThumbnails",
             "myBlockCollections",
+            "cloudSyncQueue",
+            "cloudSyncMarkers",
+            "cloudSyncConflicts",
           ].includes(n),
       ),
     ).toHaveLength(0);
-    expect(names).toHaveLength(6);
+    expect(names).toHaveLength(9);
   });
 });

@@ -53,7 +53,11 @@ export function isMyBlockCategory(value: unknown): value is MyBlockCategory {
 // Source metadata — provenance, never content
 // ---------------------------------------------------------------------------
 
-export type MyBlockSource = "imported" | "created" | "duplicated";
+export type MyBlockSource =
+  | "imported"
+  | "created"
+  | "duplicated"
+  | "shared"; // Phase P6: copied from a private shared library
 
 export interface MyBlockSourceMetadata {
   source: MyBlockSource;

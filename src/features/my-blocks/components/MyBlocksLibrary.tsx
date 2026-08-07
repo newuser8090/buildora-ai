@@ -57,6 +57,7 @@ import {
   type MyBlockLibrarySection,
 } from "../services/library-preferences";
 import { MyBlockCard } from "./MyBlockCard";
+import { CloudSyncPrompt } from "@/features/auth/components/CloudSyncPrompt";
 
 const CATEGORY_FILTERS = [
   { id: "all", label: "All" },
@@ -613,6 +614,12 @@ export function MyBlocksLibrary() {
             >
               <AlertTriangle className="h-3.5 w-3.5 flex-none" aria-hidden="true" />
               {loadError}
+            </div>
+          )}
+
+          {!loading && blocks.length > 0 && (
+            <div className="mb-3">
+              <CloudSyncPrompt blockCount={blocks.length} />
             </div>
           )}
 

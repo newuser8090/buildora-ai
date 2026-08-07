@@ -29,6 +29,8 @@ import { cn } from "@/utils/cn";
 import { useGuidedBuilderStore } from "@/features/guided-builder/store/guided-builder-store";
 import { useGuidedBuilderInit } from "@/features/guided-builder/hooks/useGuidedBuilderInit";
 import { OnboardingDialog } from "@/features/guided-builder/components/OnboardingDialog";
+import { CloudSyncStatusControl } from "@/features/cloud-sync/components/CloudSyncStatusControl";
+import { AccountMenu } from "@/features/auth/components/AccountMenu";
 import type {
   OnboardingProjectCategory,
   OnboardingSelections,
@@ -303,6 +305,12 @@ export default function DashboardPage() {
             <Plus className="h-4 w-4" />
             New Project
           </button>
+
+          <div className="mx-1 h-4 w-px bg-border" />
+
+          {/* Phase P6: cloud sync status + account menu */}
+          <CloudSyncStatusControl />
+          <AccountMenu />
         </div>
       </header>
 

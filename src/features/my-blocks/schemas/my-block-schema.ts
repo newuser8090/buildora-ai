@@ -82,7 +82,7 @@ const categorySchema = z.custom<MyBlockCategory>((value) => isMyBlockCategory(va
   message: "Unknown block category.",
 });
 
-const sourceSchema = z.enum(["imported", "created", "duplicated"]);
+const sourceSchema = z.enum(["imported", "created", "duplicated", "shared"]);
 
 // ---------------------------------------------------------------------------
 // Metadata schemas

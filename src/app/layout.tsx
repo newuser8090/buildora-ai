@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Layout } from "@/components/layout/Layout";
+import { AuthProvider } from "@/features/auth/auth-provider";
+import { CloudSyncProvider } from "@/features/cloud-sync/cloud-sync-provider";
 import { geistSans, geistMono } from "@/lib/fonts";
 import { APP_NAME, APP_DESCRIPTION } from "@/constants";
 import "./globals.css";
@@ -23,7 +25,11 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable}`}
     >
       <body>
-        <Layout>{children}</Layout>
+        <AuthProvider>
+          <CloudSyncProvider>
+            <Layout>{children}</Layout>
+          </CloudSyncProvider>
+        </AuthProvider>
       </body>
     </html>
   );
