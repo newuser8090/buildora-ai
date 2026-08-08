@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { saveNowViaController } from "@/features/persistence/services/project-controller";
 import { notifyActionFeedback } from "@/features/feedback/action-feedback";
+import { openCopilotPanel } from "@/features/ai-copilot/store/copilot-store";
 
 // ---------------------------------------------------------------------------
 // Elements where keyboard shortcuts should be suppressed
@@ -84,6 +85,13 @@ export function useKeyboardShortcuts() {
           actionLabel: "Undo",
           onAction: () => useEditorStore.getState().undo(),
         });
+        return;
+      }
+
+      // Ctrl+Shift+A → Open the AI Copilot (Phase P10)
+      if (ctrl && event.shiftKey && event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        openCopilotPanel();
         return;
       }
 

@@ -8,6 +8,7 @@ import {
   AiEditPlanSchema,
   AiEditScopeSchema,
   PLAN_LIMITS,
+  scanPayloadForSecurityIssues,
 } from "../plan-schemas";
 import { MOCK_PROJECT } from "@/features/editor/mock/mock-project";
 import type { AiEditOperation, AiEditPlan } from "../../plan-types";
@@ -424,7 +425,51 @@ describe("AiEditPlanSchema", () => {
     }
   });
 
-  it("rejects dangerous prototype-pollution keys in props", () => {
+  it("rejects dangerous prototype-pollution keys in props (Phase P10)", () => {
+    // "__proto__" must be a real OWN enumerable key — object-literal syntax
+    // would set the prototype instead, so use defineProperty.
+    const nextProps: Record<string, unknown> = {
+      headline: "Safe",
+      subheadline: "Safe sub",
+      primaryCta: { text: "Go", href: "#" },
+      constructor: "bad",
+    };
+    Object.defineProperty(nextProps, "__proto__", {
+      value: { polluted: true },
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+    const plan = validPlan([
+      op({
+        type: "update-section-props",
+        pageId: "page-1",
+        sectionId: "s-hero",
+        sectionType: "hero",
+        nextProps,
+      }),
+    ]);
+
+    // Raw boundary (Phase P10): the scan catches an own "__proto__" key that
+    // zod's record normalization would otherwise rebuild away. This is the
+    // layer the providers scan before any parsing.
+    const rawIssues = scanPayloadForSecurityIssues(plan);
+    const rawMessages = rawIssues.map((i) => i.message).join("; ");
+    expect(rawMessages).toContain("__proto__");
+    expect(rawMessages).toContain("constructor");
+
+    // Schema boundary: "constructor" survives zod parsing as an own key and
+    // is rejected outright (never silently stripped).
+    const result = AiEditPlanSchema.safeParse(plan);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map((i) => i.message).join("; ")).toContain(
+        "constructor",
+      );
+    }
+  });
+
+  it("rejects javascript: URLs in href-bearing props (Phase P10)", () => {
     const plan = validPlan([
       op({
         type: "update-section-props",
@@ -434,15 +479,33 @@ describe("AiEditPlanSchema", () => {
         nextProps: {
           headline: "Safe",
           subheadline: "Safe sub",
-          primaryCta: { text: "Go", href: "#" },
-          "__proto__": { polluted: true },
-          "constructor": "bad",
+          primaryCta: { text: "Go", href: "javascript:alert(1)" },
         },
       }),
     ]);
     const result = AiEditPlanSchema.safeParse(plan);
-    // Unknown extra keys are stripped by zod (no prototype pollution).
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map((i) => i.message).join("; ")).toContain("Unsafe URL");
+    }
+  });
+
+  it("rejects data:text/html values in props (Phase P10)", () => {
+    const plan = validPlan([
+      op({
+        type: "update-section-props",
+        pageId: "page-1",
+        sectionId: "s-hero",
+        sectionType: "hero",
+        nextProps: {
+          headline: "Safe",
+          subheadline: "data:text/html,<script>alert(1)</script>",
+          primaryCta: { text: "Go", href: "#" },
+        },
+      }),
+    ]);
+    const result = AiEditPlanSchema.safeParse(plan);
+    expect(result.success).toBe(false);
   });
 });
 

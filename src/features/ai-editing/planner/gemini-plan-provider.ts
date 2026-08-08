@@ -26,7 +26,11 @@ import type {
   AiEditScope,
 } from "../plan-types";
 import { z } from "zod";
-import { AiEditOperationSchema, AiEditWarningSchema } from "../schemas/plan-schemas";
+import {
+  AiEditOperationSchema,
+  AiEditWarningSchema,
+  scanPayloadForSecurityIssues,
+} from "../schemas/plan-schemas";
 import { formatZodIssues } from "../schemas/plan-schemas";
 
 // ---------------------------------------------------------------------------
@@ -139,6 +143,25 @@ export class GeminiPlanProvider implements AiEditPlanner {
       parsed = await callGemini(sanitized, model, apiKey, PLAN_SYSTEM_INSTRUCTION);
     } catch (err) {
       throw classifyPlanError(err);
+    }
+
+    // Security gate (Phase P10) — raw model output is untrusted. Scan BEFORE
+    // any zod normalization: z.record rebuilds records and would silently
+    // drop an own "__proto__" key, so the raw payload is the only layer where
+    // prototype-pollution keys are still visible.
+    const securityIssues = scanPayloadForSecurityIssues(parsed);
+    if (securityIssues.length > 0) {
+      logger.warn("GeminiPlanProvider", "Raw plan rejected by security scan", {
+        issues: securityIssues.map((i) => i.message),
+      });
+      return {
+        ok: false,
+        error: {
+          code: "PLAN_VALIDATION_FAILED",
+          message: "The AI returned a plan that failed safety checks.",
+        },
+        warnings: ["The AI returned a plan that failed safety checks."],
+      };
     }
 
     const warnings: AiEditPlan["warnings"] = [];
