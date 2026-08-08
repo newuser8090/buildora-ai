@@ -29,7 +29,12 @@ import { runPlanEdit, PlanEditClientError } from "@/features/ai-editing/services
 import { scanPayloadForSecurityIssues } from "@/features/ai-editing/schemas/plan-schemas";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { markPerf } from "@/features/perf/perf-instrumentation";
-import { COPILOT_PERF, beginnerMessageFor } from "../constants";
+import {
+  COPILOT_LIMITS,
+  COPILOT_MEMORY_LIMITS,
+  COPILOT_PERF,
+  beginnerMessageFor,
+} from "../constants";
 import { buildCopilotContext, contextByteLength } from "../context/context-builder";
 import { resolveFollowUpTarget, sanitizeInstruction } from "../conversation/conversation";
 import { classifyCopilotIntent } from "./intent-classifier";
@@ -77,6 +82,8 @@ export interface HandleMessageInput {
   readiness: LaunchReadinessReport | null;
   device: Viewport;
   messages: CopilotMessage[];
+  /** Phase P11 — explicit on-device style notes honored for EDIT requests. */
+  styleNotes?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +190,39 @@ export function toCopilotError(error: AiEditPlanError): CopilotError {
         retryable: true,
       };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Style notes → EDIT instruction suffix (Phase P11)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a bounded, user-authored style suffix for an EDIT instruction.
+ * Returns "" when there are no notes. The suffix is capped in characters and
+ * note count so the instruction always stays within the existing limits.
+ */
+export function buildStyleSuffix(styleNotes: string[] | undefined): string {
+  const notes = (styleNotes ?? [])
+    .map((n) => n.trim())
+    .filter(Boolean)
+    .slice(0, COPILOT_MEMORY_LIMITS.maxStyleNotesInInstruction);
+  if (notes.length === 0) return "";
+  const joined = notes.join("; ");
+  const capped = joined.slice(0, COPILOT_MEMORY_LIMITS.maxStyleSuffixLength);
+  return capped ? ` Style preferences: ${capped}.` : "";
+}
+
+/** Append the style suffix to an instruction, keeping it within limits. */
+export function applyStyleNotesToInstruction(
+  instruction: string,
+  styleNotes: string[] | undefined,
+): string {
+  const suffix = buildStyleSuffix(styleNotes);
+  if (!suffix) return instruction;
+  const budget = Math.max(0, COPILOT_LIMITS.maxInstructionLength - instruction.length);
+  const trimmedSuffix =
+    budget >= suffix.length ? suffix : suffix.slice(0, Math.max(0, budget));
+  return trimmedSuffix ? `${instruction}${trimmedSuffix}` : instruction;
 }
 
 // ---------------------------------------------------------------------------
@@ -316,10 +356,16 @@ export async function requestElementSuggestion(
     field: EditableFieldDescriptor;
     project: Project;
     revision: number;
+    /** Phase P11 — style notes honored for single-field rewrites too. */
+    styleNotes?: string[];
   },
   deps: CopilotServiceDeps = {},
 ): Promise<ElementSuggestionResult> {
   const request = deps.requestElementSuggestion ?? runInlineSuggestion;
+  const instruction = applyStyleNotesToInstruction(
+    input.instruction,
+    input.styleNotes,
+  );
 
   // Bounded surrounding context (same shape the inline feature uses).
   const page = input.project.pages.find((p) => p.id === input.field.pageId);
@@ -330,7 +376,7 @@ export async function requestElementSuggestion(
 
   try {
     const result = await request({
-      instruction: input.instruction,
+      instruction,
       projectId: input.project.id,
       baseRevision: input.revision,
       pageId: input.field.pageId,
@@ -500,6 +546,7 @@ export async function handleCopilotMessage(
     device: input.device,
     messages: input.messages,
     instruction,
+    styleNotes: input.styleNotes,
   });
   markPerf(COPILOT_PERF.contextBuild, { count: contextByteLength(context) });
 
@@ -514,10 +561,16 @@ export async function handleCopilotMessage(
     return { kind: "readiness-review", answer: buildReadinessReview(context).answer };
   }
 
-  // Plan-edit.
+  // Plan-edit. Style notes are appended to the user's own instruction as a
+  // bounded suffix so the provider can honor them (EDIT only — ASK never
+  // mutates and never sends provider requests).
+  const styledInstruction = applyStyleNotesToInstruction(
+    instruction,
+    input.styleNotes,
+  );
   const planResult = await requestCopilotPlan(
     {
-      instruction,
+      instruction: styledInstruction,
       scope,
       project: input.project,
       revision: input.revision,
@@ -529,6 +582,9 @@ export async function handleCopilotMessage(
 
   if (!planResult.ok) return { kind: "error", error: planResult.error };
 
+  // lastRequest keeps the RAW instruction (no style suffix): Regenerate
+  // re-sends it through handleCopilotMessage, which re-applies the suffix,
+  // so the suffix must never be baked into the stored request.
   return {
     kind: "plan-ready",
     planState: planResult.planState,

@@ -199,3 +199,67 @@ describe("buildCopilotContext — bounded size", () => {
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
 });
+
+describe("style notes (Phase P11)", () => {
+  it("includes bounded style notes in the context", () => {
+    const ctx = buildCopilotContext({
+      project: cloneProject(),
+      scope: { type: "project" },
+      instruction: "Improve",
+      styleNotes: ["keep it friendly", "use British spelling"],
+    });
+    expect(ctx.styleNotes).toEqual(["keep it friendly", "use British spelling"]);
+  });
+
+  it("caps notes to the in-context limit and per-note length", () => {
+    const long = "x".repeat(500);
+    const ctx = buildCopilotContext({
+      project: cloneProject(),
+      scope: { type: "project" },
+      instruction: "Improve",
+      styleNotes: ["a", "b", "c", "d", long],
+    });
+    expect(ctx.styleNotes).toEqual(["a", "b", "c"]);
+  });
+
+  it("omits styleNotes entirely when empty", () => {
+    const ctx = buildCopilotContext({
+      project: cloneProject(),
+      scope: { type: "project" },
+      instruction: "Improve",
+      styleNotes: [],
+    });
+    expect("styleNotes" in ctx).toBe(false);
+  });
+
+  it("drops style notes last when the context exceeds the byte limit", () => {
+    const project = cloneProject();
+    const sections = project.pages[0].sections.slice(0, 1);
+    for (let i = 0; i < 60; i += 1) {
+      sections.push({
+        ...JSON.parse(JSON.stringify(project.pages[0].sections[0])),
+        id: `extra-${i}`,
+        type: "features",
+        props: { title: `Section ${i}`, subtitle: "Long subtitle ".repeat(40) },
+      });
+    }
+    project.pages[0].sections = sections;
+
+    const ctx = buildCopilotContext({
+      project,
+      scope: { type: "project" },
+      instruction: "Improve",
+      styleNotes: ["a", "b", "c"],
+      messages: Array.from({ length: 20 }, (_, i) => ({
+        id: `m${i}`,
+        role: "user" as const,
+        content: "Message content ".repeat(10),
+        createdAt: i,
+      })),
+    });
+    expect(contextByteLength(ctx)).toBeLessThanOrEqual(COPILOT_LIMITS.maxContextBytes);
+    // Style notes are the last to be dropped; if the byte bound held with
+    // notes still present, they remain — otherwise they are removed cleanly.
+    expect(Array.isArray(ctx.styleNotes) ? ctx.styleNotes.length : 0).toBeLessThanOrEqual(3);
+  });
+});

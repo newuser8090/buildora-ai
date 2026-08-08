@@ -44,6 +44,8 @@ function resetStores() {
     appliedSummary: null,
     lastRequest: null,
     requestSeq: 0,
+    styleNotes: [],
+    memoryRestored: false,
   });
   useInlineEditingStore.setState({ selectedField: null } as never);
   hydrateEditor();
@@ -369,5 +371,50 @@ describe("element quick actions", () => {
       expect(screen.getByTestId("copilot-plan-review")).toBeTruthy();
     });
     expect(vi.mocked(handleCopilotMessage)).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("project memory (Phase P11)", () => {
+  it("shows the restored-conversation hint when memory was hydrated", () => {
+    useCopilotStore.setState({
+      memoryRestored: true,
+      messages: [
+        { id: "m1", role: "user", content: "Make it friendlier", createdAt: 1 },
+        { id: "m2", role: "assistant", content: "Done.", createdAt: 2 },
+      ],
+      styleNotes: ["keep it friendly"],
+    });
+    renderOpen();
+    expect(screen.getByTestId("copilot-memory-restored")).toBeTruthy();
+    // The restored conversation is visible.
+    expect(screen.getByText("Make it friendlier")).toBeTruthy();
+  });
+
+  it("does not show the hint on a fresh conversation", () => {
+    renderOpen();
+    expect(screen.queryByTestId("copilot-memory-restored")).toBeNull();
+  });
+
+  it("adds a style note from the panel and renders it as a chip", () => {
+    renderOpen();
+    const input = screen.getByTestId("style-note-input");
+    fireEvent.change(input, { target: { value: "keep it friendly" } });
+    fireEvent.click(screen.getByTestId("style-note-add"));
+    expect(useCopilotStore.getState().styleNotes).toEqual(["keep it friendly"]);
+    expect(screen.getByText("keep it friendly")).toBeTruthy();
+  });
+
+  it("removes a style note via the chip button", () => {
+    useCopilotStore.setState({ styleNotes: ["keep it friendly", "short paragraphs"] });
+    renderOpen();
+    fireEvent.click(screen.getAllByTestId("style-note-remove")[0]);
+    expect(useCopilotStore.getState().styleNotes).toEqual(["short paragraphs"]);
+  });
+
+  it("forgets all style notes", () => {
+    useCopilotStore.setState({ styleNotes: ["a", "b"] });
+    renderOpen();
+    fireEvent.click(screen.getByTestId("style-note-clear-all"));
+    expect(useCopilotStore.getState().styleNotes).toEqual([]);
   });
 });

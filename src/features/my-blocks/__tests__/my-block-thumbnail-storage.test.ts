@@ -199,9 +199,10 @@ describe("first-connection through the thumbnail adapter creates every store", (
         "deploymentDomains",
         "personalTemplates",
         "recoverySnapshots",
+        "copilotMemory",
       ]),
     );
-    expect(names).toHaveLength(13);
+    expect(names).toHaveLength(14);
   });
 });
 

@@ -7,6 +7,7 @@ import { useLaunchReadiness } from "@/features/launch-readiness/hooks/useLaunchR
 import { getLaunchReadinessReport } from "@/features/launch-readiness/engine/launch-readiness";
 import { useGuidedBuilderStore } from "@/features/guided-builder/store/guided-builder-store";
 import { useCopilotStore, openCopilotPanel } from "../store/copilot-store";
+import { getCopilotMemoryService } from "../memory/services/copilot-memory-service";
 import {
   applyCopilotPlan,
   applyElementSuggestion,
@@ -61,6 +62,8 @@ export function useCopilot() {
   const error = useCopilotStore((s) => s.error);
   const appliedSummary = useCopilotStore((s) => s.appliedSummary);
   const lastRequest = useCopilotStore((s) => s.lastRequest);
+  const styleNotes = useCopilotStore((s) => s.styleNotes);
+  const memoryRestored = useCopilotStore((s) => s.memoryRestored);
 
   // Inline field selection (read live via the global store).
   const selectedField = useInlineEditingStore((s) => s.selectedField);
@@ -145,6 +148,7 @@ export function useCopilot() {
         readiness: report,
         device: editor.viewport,
         messages: store.messages,
+        styleNotes: useCopilotStore.getState().styleNotes,
       },
       {},
     );
@@ -275,6 +279,7 @@ export function useCopilot() {
           field,
           project: editor.project,
           revision: editor.revision,
+          styleNotes: useCopilotStore.getState().styleNotes,
         },
         {},
       );
@@ -366,7 +371,15 @@ export function useCopilot() {
   // -------------------------------------------------------------------------
 
   const clearConversation = useCallback(() => {
+    // Clear the in-memory conversation AND the persisted per-project memory
+    // (messages + style notes). Explicit, never silent.
+    const projectId = useEditorStore.getState().project.id;
     useCopilotStore.getState().clearConversation();
+    if (projectId) {
+      void getCopilotMemoryService().clear(projectId).catch(() => {
+        // Best-effort — a failed delete never breaks the UI.
+      });
+    }
   }, []);
 
   // -------------------------------------------------------------------------
@@ -392,6 +405,8 @@ export function useCopilot() {
     error,
     appliedSummary,
     lastRequest,
+    styleNotes,
+    memoryRestored,
     selectedField,
     readiness,
     openPanel,

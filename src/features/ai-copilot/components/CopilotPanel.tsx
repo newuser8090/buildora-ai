@@ -11,6 +11,7 @@ import { ElementSuggestionCard } from "./ElementSuggestionCard";
 import { ChangeSummaryCard } from "./ChangeSummaryCard";
 import { QuickActions } from "./QuickActions";
 import { StarterPrompts } from "./StarterPrompts";
+import { StyleNotesSection } from "./StyleNotesSection";
 import type { AiEditOperation } from "@/features/ai-editing/plan-types";
 import { cn } from "@/utils/cn";
 
@@ -30,6 +31,8 @@ export function CopilotPanel() {
     error,
     appliedSummary,
     lastRequest,
+    styleNotes,
+    memoryRestored,
     selectedField,
     readiness,
     closePanel,
@@ -45,6 +48,17 @@ export function CopilotPanel() {
     clearConversation,
     canUndo,
   } = copilot;
+
+  // Phase P11 — style note actions (bounded, local-first).
+  const addStyleNote = useCallback((note: string) => {
+    useCopilotStore.getState().addStyleNote(note);
+  }, []);
+  const removeStyleNote = useCallback((note: string) => {
+    useCopilotStore.getState().removeStyleNote(note);
+  }, []);
+  const clearStyleNotes = useCallback(() => {
+    useCopilotStore.getState().clearStyleNotes();
+  }, []);
 
   const [draft, setDraft] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -216,6 +230,14 @@ export function CopilotPanel() {
 
       {/* ---- Scrollable content ---- */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4" style={{ minHeight: 0 }}>
+        {memoryRestored && hasConversation && (
+          <div
+            data-testid="copilot-memory-restored"
+            className="mb-3 rounded-xl border border-border bg-card/60 px-3 py-2 text-[11px] leading-relaxed text-text-dim"
+          >
+            Restored your saved conversation from this project.
+          </div>
+        )}
         {!hasConversation && !planState && !elementSuggestion && (
           <div className="mb-4">
             <p className="mb-3 text-[13px] leading-relaxed text-text-muted">
@@ -379,6 +401,14 @@ export function CopilotPanel() {
           Changes are suggested first and applied only after you approve them.
         </p>
       </div>
+
+      {/* ---- Phase P11: style memory ---- */}
+      <StyleNotesSection
+        notes={styleNotes}
+        onAdd={addStyleNote}
+        onRemove={removeStyleNote}
+        onClearAll={clearStyleNotes}
+      />
 
       {/* ---- Status announcements for screen readers ---- */}
       <div aria-live="polite" className="sr-only" data-testid="copilot-aria-live">

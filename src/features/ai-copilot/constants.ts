@@ -20,6 +20,29 @@ export const COPILOT_LIMITS = {
 } as const;
 
 // ---------------------------------------------------------------------------
+// Project memory limits (Phase P11 — bounded per-project persistence)
+// ---------------------------------------------------------------------------
+
+export const COPILOT_MEMORY_LIMITS = {
+  /** Max explicit style notes remembered per project. */
+  maxStyleNotes: 6,
+  /** Max length of one style note. */
+  maxStyleNoteLength: 120,
+  /** Max style notes surfaced in the bounded AI context. */
+  maxStyleNotesInContext: 3,
+  /** Max style-notes suffix appended to an EDIT instruction (chars). */
+  maxStyleSuffixLength: 240,
+  /** Max notes appended to an EDIT instruction. */
+  maxStyleNotesInInstruction: 2,
+  /** Max content length of a persisted message (defensive cap). */
+  maxPersistedMessageContent: 5000,
+  /** Debounce for persisted memory writes (ms). */
+  debounceMs: 800,
+  /** Schema version of the persisted record (bump = migration). */
+  recordVersion: 1,
+} as const;
+
+// ---------------------------------------------------------------------------
 // Starter prompts (spec §2 — beginner-first)
 // ---------------------------------------------------------------------------
 

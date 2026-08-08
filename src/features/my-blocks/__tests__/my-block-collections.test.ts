@@ -241,9 +241,10 @@ describe("first-connection through the My Blocks adapter creates every store", (
         "deploymentDomains",
         "personalTemplates",
         "recoverySnapshots",
+        "copilotMemory",
       ]),
     );
-    expect(names).toHaveLength(13);
+    expect(names).toHaveLength(14);
   });
 });
 

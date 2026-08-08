@@ -39,6 +39,7 @@ import { getRecoveryService } from "@/features/recovery/services/recovery-servic
 import { useRecoveryUiStore } from "@/features/recovery/store/recovery-ui-store";
 import dynamic from "next/dynamic";
 import { KeyboardShortcutsDialog } from "@/features/help/components/KeyboardShortcutsDialog";
+import { useCopilotMemory } from "@/features/ai-copilot/hooks/useCopilotMemory";
 
 // Phase P10 — AI Copilot panel. Lazy-loaded: normal editor interactions have
 // zero dependency on AI (opening/editing/saving work with the provider down).
@@ -334,6 +335,11 @@ export default function EditorPage() {
 // ---------------------------------------------------------------------------
 
 function EditorShell() {
+  // Phase P11 — bounded per-project Copilot memory: loads on project
+  // hydration, debounced-saves conversation/style changes, never touches
+  // project state. Mounted once so it survives the panel closing.
+  useCopilotMemory();
+
   const project = useEditorStore((s) => s.project);
   const selectedPageId = useEditorStore((s) => s.selectedPageId);
   const selectedSectionId = useEditorStore((s) => s.selectedSectionId);

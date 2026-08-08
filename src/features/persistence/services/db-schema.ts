@@ -29,6 +29,7 @@ import {
   STORE_DEPLOYMENT_DOMAINS,
   STORE_PERSONAL_TEMPLATES,
   STORE_RECOVERY_SNAPSHOTS,
+  STORE_COPILOT_MEMORY,
 } from "../constants";
 
 /**
@@ -82,5 +83,9 @@ export function ensureDatabaseStores(db: IDBDatabase): void {
   // Phase P9 (database version 8): bounded draft-recovery snapshots.
   if (!db.objectStoreNames.contains(STORE_RECOVERY_SNAPSHOTS)) {
     db.createObjectStore(STORE_RECOVERY_SNAPSHOTS, { keyPath: "id" });
+  }
+  // Phase P11 (database version 9): bounded per-project Copilot memory.
+  if (!db.objectStoreNames.contains(STORE_COPILOT_MEMORY)) {
+    db.createObjectStore(STORE_COPILOT_MEMORY, { keyPath: "id" });
   }
 }

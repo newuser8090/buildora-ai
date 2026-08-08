@@ -18,7 +18,8 @@ import { create } from "zustand";
 import type { EditableFieldDescriptor } from "@/features/inline-editing/types";
 import type { InlineAiSuggestion } from "@/features/inline-editing/types";
 import { markPerf } from "@/features/perf/perf-instrumentation";
-import { COPILOT_LIMITS, COPILOT_PERF } from "../constants";
+import { COPILOT_LIMITS, COPILOT_MEMORY_LIMITS, COPILOT_PERF } from "../constants";
+import { isPollutionKey } from "../memory/schema";
 import type {
   CopilotAppliedSummary,
   CopilotError,
@@ -42,6 +43,10 @@ export interface CopilotStoreState {
   lastRequest: { instruction: string; scope: CopilotScope } | null;
   /** Monotonic token — bumped on reset/clear so stale async results are ignored. */
   requestSeq: number;
+  /** Phase P11 — explicit on-device style notes (bounded, user-managed). */
+  styleNotes: string[];
+  /** Phase P11 — true when the last project restore hydrated saved memory. */
+  memoryRestored: boolean;
 
   // ---- Actions ----
   openPanel: () => void;
@@ -51,6 +56,14 @@ export interface CopilotStoreState {
   setComposing: (composing: boolean) => void;
   setScopeChoice: (choice: CopilotScopeChoice) => void;
   setLastRequest: (request: { instruction: string; scope: CopilotScope }) => void;
+  /** Phase P11 — hydrate saved memory (messages + style notes) after open. */
+  hydrateMemory: (input: { messages: CopilotMessage[]; styleNotes: string[] }) => void;
+  /** Phase P11 — add a style note (bounded, deduped). */
+  addStyleNote: (note: string) => void;
+  /** Phase P11 — remove a style note by value. */
+  removeStyleNote: (note: string) => void;
+  /** Phase P11 — remove all style notes. */
+  clearStyleNotes: () => void;
 
   addUserMessage: (content: string) => void;
   addAssistantMessage: (
@@ -100,6 +113,22 @@ function trimMessages(messages: CopilotMessage[]): CopilotMessage[] {
   return messages;
 }
 
+/** Bounded, deduped style notes for in-store hydration/actions. */
+function sanitizeStyleNotesInStore(notes: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of notes) {
+    const note = raw.trim().slice(0, COPILOT_MEMORY_LIMITS.maxStyleNoteLength);
+    // Pollution keys are dropped at entry (consistent with the write-path
+    // sanitizer) — they must never render as chips or fail a whole save.
+    if (!note || seen.has(note) || isPollutionKey(note)) continue;
+    seen.add(note);
+    result.push(note);
+    if (result.length >= COPILOT_MEMORY_LIMITS.maxStyleNotes) break;
+  }
+  return result;
+}
+
 export const useCopilotStore = create<CopilotStoreState>()((set, get) => ({
   open: false,
   status: "idle",
@@ -111,6 +140,8 @@ export const useCopilotStore = create<CopilotStoreState>()((set, get) => ({
   appliedSummary: null,
   lastRequest: null,
   requestSeq: 0,
+  styleNotes: [],
+  memoryRestored: false,
 
   openPanel: () => set({ open: true }),
   closePanel: () => set({ open: false }),
@@ -127,6 +158,34 @@ export const useCopilotStore = create<CopilotStoreState>()((set, get) => ({
 
   setScopeChoice: (choice) => set({ scopeChoice: choice }),
   setLastRequest: (request) => set({ lastRequest: request }),
+
+  // Phase P11 — restore saved memory. Only messages + style notes are ever
+  // hydrated; plan/approval state is never restored from storage and any
+  // pending approval surface is cleared (a restore can never resurrect a
+  // plan or suggestion).
+  hydrateMemory: ({ messages, styleNotes }) =>
+    set(() => ({
+      messages: trimMessages(messages),
+      styleNotes: sanitizeStyleNotesInStore(styleNotes),
+      planState: null,
+      elementSuggestion: null,
+      error: null,
+      appliedSummary: null,
+      memoryRestored: messages.length > 0 || styleNotes.length > 0,
+      status: "idle" as CopilotStatus,
+    })),
+
+  addStyleNote: (note) =>
+    set((state) => ({
+      styleNotes: sanitizeStyleNotesInStore([...state.styleNotes, note]),
+    })),
+
+  removeStyleNote: (note) =>
+    set((state) => ({
+      styleNotes: state.styleNotes.filter((n) => n !== note),
+    })),
+
+  clearStyleNotes: () => set({ styleNotes: [] }),
 
   addUserMessage: (content) =>
     set((state) => ({
@@ -205,6 +264,8 @@ export const useCopilotStore = create<CopilotStoreState>()((set, get) => ({
       error: null,
       appliedSummary: null,
       lastRequest: null,
+      styleNotes: [],
+      memoryRestored: false,
       status: "idle",
       requestSeq: state.requestSeq + 1,
     })),
@@ -226,6 +287,8 @@ export const useCopilotStore = create<CopilotStoreState>()((set, get) => ({
       error: null,
       appliedSummary: null,
       lastRequest: null,
+      styleNotes: [],
+      memoryRestored: false,
       requestSeq: state.requestSeq + 1,
     })),
 }));
