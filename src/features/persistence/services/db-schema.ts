@@ -26,6 +26,7 @@ import {
   STORE_CLOUD_SYNC_MARKERS,
   STORE_CLOUD_SYNC_CONFLICTS,
   STORE_DEPLOYMENTS,
+  STORE_DEPLOYMENT_DOMAINS,
 } from "../constants";
 
 /**
@@ -66,5 +67,10 @@ export function ensureDatabaseStores(db: IDBDatabase): void {
   // Phase P7 (database version 6): deployment history.
   if (!db.objectStoreNames.contains(STORE_DEPLOYMENTS)) {
     db.createObjectStore(STORE_DEPLOYMENTS, { keyPath: "id" });
+  }
+  // Phase P8 (database version 7): custom domain records (local history/cache
+  // of the provider-backed domain infrastructure).
+  if (!db.objectStoreNames.contains(STORE_DEPLOYMENT_DOMAINS)) {
+    db.createObjectStore(STORE_DEPLOYMENT_DOMAINS, { keyPath: "id" });
   }
 }

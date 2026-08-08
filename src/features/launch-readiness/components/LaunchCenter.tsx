@@ -9,15 +9,30 @@
 // ---------------------------------------------------------------------------
 
 import { useEffect } from "react";
-import { Rocket, Eye, X, CheckCircle2, AlertTriangle, Info, Download } from "lucide-react";
+import {
+  Rocket,
+  Eye,
+  X,
+  CheckCircle2,
+  AlertTriangle,
+  Info,
+  Download,
+  Globe,
+  ExternalLink,
+  Clock,
+} from "lucide-react";
 import { useLaunchCenterStore } from "../store/launch-center-store";
 import { useLaunchReadiness } from "../hooks/useLaunchReadiness";
 import { useSiteSettingsUiStore } from "@/features/site-settings/store/site-settings-ui-store";
 import { usePreviewStore } from "@/features/preview/store/preview-store";
 import { usePublishingStore } from "@/features/publishing/store/publishing-store";
 import { usePublishing } from "@/features/publishing/hooks/usePublishing";
+import { useDomains } from "@/features/publishing/hooks/useDomains";
+import { isSafeDeploymentUrl } from "@/features/publishing/domain/domain-utils";
+import { providerLabel } from "@/features/publishing/components/provider-labels";
 import { LaunchFindingCard } from "./LaunchFindingCard";
 import type { LaunchCheck } from "../types";
+import type { DeploymentRecord } from "@/features/publishing/types";
 
 export function LaunchCenter() {
   const open = useLaunchCenterStore((s) => s.open);
@@ -27,7 +42,30 @@ export function LaunchCenter() {
   const openPreview = usePreviewStore((s) => s.openPreview);
   const openPublishDialog = usePublishingStore((s) => s.openPublishDialog);
   const openHistory = usePublishingStore((s) => s.openHistory);
+  const deployments = usePublishingStore((s) => s.deployments);
   const { publishStatus } = usePublishing();
+  const { primaryDomain } = useDomains();
+
+  const liveDeployments = deployments.filter((d) => d.status === "live");
+  const activeDeployment: DeploymentRecord | null =
+    liveDeployments.length === 0
+      ? null
+      : liveDeployments.sort((a, b) =>
+          (b.activatedAt ?? b.completedAt ?? b.createdAt).localeCompare(
+            a.activatedAt ?? a.completedAt ?? a.createdAt,
+          ),
+        )[0];
+  const liveUrl = activeDeployment
+    ? (activeDeployment.productionUrl ??
+      (activeDeployment.providerId === "vercel" ? activeDeployment.deploymentUrl : activeDeployment.url))
+    : undefined;
+  const liveUrlSafe =
+    liveUrl && activeDeployment && isSafeDeploymentUrl(liveUrl, activeDeployment.providerId)
+      ? liveUrl
+      : null;
+  const lastPublishTime = activeDeployment
+    ? formatPublishTime(activeDeployment.completedAt ?? activeDeployment.activatedAt ?? activeDeployment.createdAt)
+    : null;
 
   useEffect(() => {
     if (!open) return;
@@ -207,6 +245,65 @@ export function LaunchCenter() {
           </section>
         )}
 
+        {/* Phase P8 — current live status */}
+        {(activeDeployment || primaryDomain) && (
+          <section
+            className="rounded-xl border border-border/60 bg-base p-4"
+            data-testid="launch-live-status"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                {activeDeployment?.providerId === "vercel" ? (
+                  <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                ) : activeDeployment?.providerId === "mock" ? (
+                  <Clock className="h-4 w-4 text-accent" />
+                ) : (
+                  <Rocket className="h-4 w-4 text-text-dim" />
+                )}
+                <h3 className="text-sm font-semibold text-text-primary">
+                  {activeDeployment
+                    ? activeDeployment.providerId === "vercel"
+                      ? "Your site is live"
+                      : activeDeployment.providerId === "mock"
+                        ? "Demo site ready"
+                        : "Website files ready"
+                    : "Custom domain connected"}
+                </h3>
+                {activeDeployment && (
+                  <span className="rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-semibold text-accent">
+                    {providerLabel(activeDeployment.providerId)}
+                  </span>
+                )}
+              </div>
+              {lastPublishTime && (
+                <span className="text-[11px] text-text-dim">
+                  Last published {lastPublishTime}
+                </span>
+              )}
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5">
+              {liveUrlSafe && (
+                <a
+                  href={liveUrlSafe}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 text-xs text-accent hover:underline"
+                  data-testid="launch-live-url"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  <span className="truncate">{liveUrlSafe}</span>
+                </a>
+              )}
+              {primaryDomain && (
+                <span className="flex items-center gap-1.5 text-xs text-text-muted">
+                  <Globe className="h-3.5 w-3.5 text-text-dim" />
+                  {primaryDomain.domain}
+                </span>
+              )}
+            </div>
+          </section>
+        )}
+
         {/* Actions */}
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <button
@@ -242,9 +339,10 @@ export function LaunchCenter() {
             }}
             className="flex h-11 items-center justify-center gap-2 rounded-xl border border-border px-4 text-sm font-medium text-text-primary transition-all duration-200 hover:bg-card hover:border-accent/30 active:scale-[0.98]"
             type="button"
+            data-testid="launch-manage-publishing"
           >
             <Download className="h-4 w-4" />
-            Publish history
+            Manage publishing
           </button>
           <button
             onClick={() => {
@@ -274,6 +372,12 @@ export function LaunchCenter() {
 // ---------------------------------------------------------------------------
 // Fix actions — route a check's fixActionId to the right UI
 // ---------------------------------------------------------------------------
+
+function formatPublishTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
 
 export function runFixAction(
   check: LaunchCheck,

@@ -14,6 +14,10 @@
 
 // @vitest-environment jsdom
 
+// TopNav mounts Phase P7+P8 publishing hooks that read deployment history
+// from IndexedDB on mount — provide a working store so those reads resolve.
+import "fake-indexeddb/auto";
+
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { useEditorStore } from "@/features/editor/store/editor-store";

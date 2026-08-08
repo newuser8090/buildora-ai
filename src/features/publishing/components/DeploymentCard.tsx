@@ -1,10 +1,12 @@
 "use client";
 
 // ---------------------------------------------------------------------------
-// DeploymentCard — one deployment in the history list (Phase P7)
+// DeploymentCard — one deployment in the history list (Phase P7 + P8)
 //
-// Shows status, time, provider, URL, project revision, and current/latest
-// indicator. Actions: Open, Republish, Restore (rollback), Delete.
+// Shows status, time, provider badge, URL, project revision, duration and a
+// sanitized failure reason. Actions are derived from the provider's declared
+// capabilities (never hard-coded names): Open, Details, Restore (rollback),
+// Delete.
 // ---------------------------------------------------------------------------
 
 import { useCallback, useState } from "react";
@@ -16,9 +18,14 @@ import {
   RotateCcw,
   Trash2,
   Loader2,
+  Info,
 } from "lucide-react";
 import type { DeploymentRecord } from "../types";
 import { usePublishing } from "../hooks/usePublishing";
+import { usePublishingStore } from "../store/publishing-store";
+import { getPublishingProvider } from "../providers";
+import { isSafeDeploymentUrl } from "../domain/domain-utils";
+import { providerLabel, formatDuration } from "./provider-labels";
 
 export interface DeploymentCardProps {
   deployment: DeploymentRecord;
@@ -57,9 +64,21 @@ export function DeploymentCard({
   onDeleted,
 }: DeploymentCardProps) {
   const { publish, deleteDeployment } = usePublishing();
+  const openDetails = usePublishingStore((s) => s.openDetails);
   const [busy, setBusy] = useState<"republish" | "delete" | null>(null);
 
   const isLive = deployment.status === "live";
+  const provider = getPublishingProvider(deployment.providerId);
+  const capabilities = provider?.capabilities;
+
+  const liveUrl =
+    deployment.productionUrl ??
+    (deployment.providerId === "vercel" ? deployment.deploymentUrl : deployment.url);
+  const liveUrlSafe = liveUrl && isSafeDeploymentUrl(liveUrl, deployment.providerId) ? liveUrl : null;
+  const duration = formatDuration(
+    deployment.buildStartedAt ?? deployment.createdAt,
+    deployment.buildCompletedAt ?? deployment.completedAt,
+  );
 
   const handleRepublish = useCallback(async () => {
     if (busy) return;
@@ -100,45 +119,69 @@ export function DeploymentCard({
         <span className="text-sm font-medium text-text-primary">
           {statusLabel(deployment.status)}
         </span>
+        <span
+          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+            deployment.providerId === "vercel"
+              ? "bg-accent/15 text-accent"
+              : deployment.providerId === "mock"
+                ? "bg-card text-text-dim"
+                : "bg-card text-text-dim"
+          }`}
+        >
+          {providerLabel(deployment.providerId)}
+        </span>
         {active && (
-          <span className="rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-semibold text-accent">
+          <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
             Current
           </span>
         )}
         <span className="ml-auto text-[11px] text-text-dim">
-          {formatTime(deployment.completedAt ?? deployment.createdAt)}
+          {formatTime(deployment.completedAt ?? deployment.activatedAt ?? deployment.createdAt)}
         </span>
       </div>
 
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-text-dim">
-        <span>
-          {deployment.providerId === "mock" ? "Demo publish" : "Website files"}
-        </span>
-        <span>·</span>
-        <span>Revision {deployment.projectRevision}</span>
-        {deployment.errorCode && (
+        <span>Published from revision {deployment.projectRevision}</span>
+        {duration && (
           <>
             <span>·</span>
-            <span className="text-red-400">{deployment.errorCode}</span>
+            <span>{duration}</span>
+          </>
+        )}
+        {deployment.status === "failed" && deployment.errorCode && (
+          <>
+            <span>·</span>
+            <span className="text-red-400" data-testid="deployment-failed-reason">
+              {deployment.providerErrorSummary ?? deployment.errorCode}
+            </span>
           </>
         )}
       </div>
 
-      {deployment.url && (
+      {liveUrlSafe && (
         <a
-          href={deployment.url}
+          href={liveUrlSafe}
           target="_blank"
           rel="noopener noreferrer"
           className="mt-1.5 flex items-center gap-1.5 text-[11px] text-accent hover:underline"
           data-testid="deployment-url"
         >
           <ExternalLink className="h-3 w-3" />
-          <span className="truncate">{deployment.url}</span>
+          <span className="truncate">{liveUrlSafe}</span>
         </a>
       )}
 
       <div className="mt-2 flex items-center gap-2">
-        {isLive && !active && (
+        <button
+          onClick={() => openDetails(deployment.id)}
+          className="flex h-7 items-center gap-1 rounded-md border border-border px-2 text-[11px] font-medium text-text-muted transition-colors hover:bg-card hover:text-text-primary"
+          type="button"
+          data-testid="deployment-details"
+        >
+          <Info className="h-3 w-3" />
+          Details
+        </button>
+        {capabilities?.rollback && isLive && !active && (
           <button
             onClick={() => onRollback(deployment)}
             className="flex h-7 items-center gap-1 rounded-md border border-border px-2 text-[11px] font-medium text-text-muted transition-colors hover:bg-card hover:text-text-primary"
@@ -164,20 +207,22 @@ export function DeploymentCard({
             Publish this version again
           </button>
         )}
-        <button
-          onClick={handleDelete}
-          disabled={busy !== null}
-          className="ml-auto flex h-7 items-center gap-1 rounded-md px-2 text-[11px] text-red-400 transition-colors hover:bg-red-500/10 disabled:opacity-50"
-          type="button"
-          aria-label={`Delete deployment ${deployment.id}`}
-        >
-          {busy === "delete" ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
-          ) : (
-            <Trash2 className="h-3 w-3" />
-          )}
-          Delete
-        </button>
+        {capabilities?.deleteDeployment && (
+          <button
+            onClick={handleDelete}
+            disabled={busy !== null}
+            className="ml-auto flex h-7 items-center gap-1 rounded-md px-2 text-[11px] text-red-400 transition-colors hover:bg-red-500/10 disabled:opacity-50"
+            type="button"
+            aria-label={`Delete deployment ${deployment.id}`}
+          >
+            {busy === "delete" ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Trash2 className="h-3 w-3" />
+            )}
+            Delete
+          </button>
+        )}
       </div>
     </div>
   );

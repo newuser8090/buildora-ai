@@ -76,25 +76,48 @@ export function DeploymentHistory() {
     );
   }
 
+  const activeIdFinal = activeId ?? current?.id;
+  const inProgress = deployments.filter(
+    (d) => d.status === "queued" || d.status === "building" || d.status === "uploading",
+  );
+  const currentDeployment = deployments.filter((d) => d.status === "live" && d.id === activeIdFinal);
+  const previous = deployments.filter((d) => d.status === "live" && d.id !== activeIdFinal);
+  const failed = deployments.filter((d) => d.status === "failed" || d.status === "cancelled");
+
+  const renderCard = (deployment: DeploymentRecord) => (
+    <DeploymentCard
+      key={deployment.id}
+      deployment={deployment}
+      active={deployment.id === activeIdFinal}
+      onRollback={setConfirmTarget}
+      onDeleted={() => {
+        setActiveId(null);
+        void refreshDeployments();
+      }}
+    />
+  );
+
+  const renderGroup = (title: string, group: DeploymentRecord[]) =>
+    group.length > 0 ? (
+      <div className="flex flex-col gap-2" data-testid={`deployment-group-${title.toLowerCase().replace(/\s+/g, "-")}`}>
+        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-text-dim">
+          {title}
+        </h3>
+        {group.map(renderCard)}
+      </div>
+    ) : null;
+
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
       <p className="text-xs text-text-dim">
         {deployments.length} publish{deployments.length > 1 ? "es" : ""} —
         restoring an older version does not change your project in the editor.
       </p>
 
-      {deployments.map((deployment) => (
-        <DeploymentCard
-          key={deployment.id}
-          deployment={deployment}
-          active={deployment.id === (activeId ?? current?.id)}
-          onRollback={setConfirmTarget}
-          onDeleted={() => {
-            setActiveId(null);
-            void refreshDeployments();
-          }}
-        />
-      ))}
+      {renderGroup("In progress", inProgress)}
+      {renderGroup("Current", currentDeployment)}
+      {renderGroup("Previous", previous)}
+      {renderGroup("Failed", failed)}
 
       {rollbackError && (
         <p className="text-xs text-red-400" data-testid="rollback-error">

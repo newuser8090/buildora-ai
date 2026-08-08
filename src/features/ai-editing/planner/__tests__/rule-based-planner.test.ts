@@ -397,7 +397,16 @@ describe("rule-based planner — determinism and purity", () => {
     );
     expect(a.ok && b.ok).toBe(true);
     if (a.ok && b.ok) {
-      expect(JSON.stringify(a.plan)).toBe(JSON.stringify(b.plan));
+      // createdAt is wall-clock time (not injected); normalize it so the
+      // determinism assertion compares planner output only, immune to a
+      // millisecond boundary being crossed between the two runs.
+      const withoutClock = (plan: { createdAt: string }) => ({
+        ...plan,
+        createdAt: "fixed",
+      });
+      expect(JSON.stringify(withoutClock(a.plan))).toBe(
+        JSON.stringify(withoutClock(b.plan)),
+      );
     }
   });
 

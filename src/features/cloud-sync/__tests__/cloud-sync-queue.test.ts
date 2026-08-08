@@ -52,10 +52,11 @@ describe("CloudSyncQueue", () => {
       "cloudSyncMarkers",
       "cloudSyncConflicts",
       "deployments",
+      "deploymentDomains",
     ]) {
       expect(names).toContain(expected);
     }
-    expect(names).toHaveLength(10);
+    expect(names).toHaveLength(11);
     await queue.clearForTests();
   });
 

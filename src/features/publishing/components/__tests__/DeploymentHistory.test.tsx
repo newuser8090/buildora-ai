@@ -102,8 +102,10 @@ describe("DeploymentHistory — list", () => {
     ]);
     render(<DeploymentHistory />);
     expect(screen.getAllByTestId("deployment-card")).toHaveLength(2);
-    expect(screen.getByText("Current")).toBeTruthy();
-    expect(screen.getAllByText("Revision 1")).toHaveLength(2);
+    // P8: history groups deployments under Current / Previous headings.
+    expect(screen.getByTestId("deployment-group-current")).toBeTruthy();
+    expect(screen.getByTestId("deployment-group-previous")).toBeTruthy();
+    expect(screen.getAllByText(/Published from revision 1/)).toHaveLength(2);
   });
 });
 

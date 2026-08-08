@@ -36,6 +36,7 @@ import {
   STORE_CLOUD_SYNC_MARKERS,
   STORE_CLOUD_SYNC_CONFLICTS,
   STORE_DEPLOYMENTS,
+  STORE_DEPLOYMENT_DOMAINS,
   METADATA_KEY_ACTIVE_PROJECT,
   DATABASE_VERSION,
 } from "@/features/persistence/constants";
@@ -257,9 +258,10 @@ describe("IndexedDB v1 → latest migration", () => {
     // Open with the thumbnail adapter at the current version — triggers the upgrade.
     await upgradeToLatest(dbName);
 
-    // After upgrade: all nine known stores present, none removed. The Phase
+    // After upgrade: all known stores present, none removed. The Phase
     // P4 myBlocks store, the Phase P5 myBlockThumbnails + myBlockCollections
-    // stores, and the Phase P6 cloudSync* stores are created by the same
+    // stores, the Phase P6 cloudSync* stores, the Phase P7 deployments store,
+    // and the Phase P8 deploymentDomains store are created by the same
     // non-destructive upgrade handler (the thumbnail adapter is often the
     // first connection to create the DB).
     const after = await getDatabaseStoreNames(dbName);
@@ -273,7 +275,8 @@ describe("IndexedDB v1 → latest migration", () => {
     expect(after).toContain(STORE_CLOUD_SYNC_MARKERS);
     expect(after).toContain(STORE_CLOUD_SYNC_CONFLICTS);
     expect(after).toContain(STORE_DEPLOYMENTS);
-    expect(after).toHaveLength(10);
+    expect(after).toContain(STORE_DEPLOYMENT_DOMAINS);
+    expect(after).toHaveLength(11);
   });
 
   it("preserves existing project records and revision after upgrade", async () => {
@@ -528,11 +531,13 @@ describe("IndexedDB v1 → latest migration", () => {
         STORE_CLOUD_SYNC_MARKERS,
         STORE_CLOUD_SYNC_CONFLICTS,
         STORE_DEPLOYMENTS,
+        STORE_DEPLOYMENT_DOMAINS,
       ]),
     );
-    // Exactly the ten known stores (Phase P4 myBlocks + Phase P5 thumbnail
+    // Exactly the eleven known stores (Phase P4 myBlocks + Phase P5 thumbnail
     // and collection stores + Phase P6 cloud sync stores + Phase P7
-    // deployments store are created non-destructively) — no stray stores.
+    // deployments store + Phase P8 deploymentDomains store are created
+    // non-destructively) — no stray stores.
     expect(
       names.filter(
         (n) =>
@@ -547,9 +552,10 @@ describe("IndexedDB v1 → latest migration", () => {
             "cloudSyncMarkers",
             "cloudSyncConflicts",
             "deployments",
+            "deploymentDomains",
           ].includes(n),
       ),
     ).toHaveLength(0);
-    expect(names).toHaveLength(10);
+    expect(names).toHaveLength(11);
   });
 });

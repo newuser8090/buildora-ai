@@ -19,7 +19,9 @@ import {
 } from "lucide-react";
 import { cn } from "@/utils/cn";
 import { formatProjectDate } from "../utils/format-project-date";
+import { isSafeDeploymentUrl } from "@/features/publishing/domain/domain-utils";
 import type { DashboardProject, DashboardOperation } from "../types";
+import type { DashboardPublishInfo } from "@/features/publishing/hooks/useDashboardPublishStatuses";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -39,8 +41,8 @@ export interface ProjectCardProps {
   onRegeneratePreview?: (projectId: string) => void;
   /** True while this project's thumbnail is being regenerated. */
   isRegeneratingPreview?: boolean;
-  /** Phase P7 — derived publish status (Draft / Ready / Published / Changes). */
-  publishStatus?: "never-published" | "published" | "changes-unpublished" | "unknown";
+  /** Phase P7+P8 — derived publish status + optional live URL (local history). */
+  publishStatus?: DashboardPublishInfo;
 }
 
 // ---------------------------------------------------------------------------
@@ -362,25 +364,49 @@ export function ProjectCard({
           </div>
         </div>
 
-        {/* Phase P7 — publish status (derived, never stored in the project) */}
-        {publishStatus && publishStatus !== "unknown" && (
-          <div className="mb-2 flex items-center gap-1.5">
+        {/* Phase P7+P8 — publish status (derived, never stored in the project) */}
+        {publishStatus && publishStatus.status !== "unknown" && (
+          <div className="mb-2 flex flex-wrap items-center gap-1.5">
             <span
               className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                publishStatus === "published"
+                publishStatus.status === "live"
                   ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                  : publishStatus === "changes-unpublished"
+                  : publishStatus.status === "changes-unpublished"
                     ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
-                    : "bg-card text-text-dim"
+                    : publishStatus.status === "failed"
+                      ? "bg-red-500/10 text-red-600 dark:text-red-400"
+                      : publishStatus.status === "demo-published"
+                        ? "bg-accent/10 text-accent"
+                        : "bg-card text-text-dim"
               }`}
               data-testid="project-publish-status"
             >
-              {publishStatus === "published"
-                ? "Published"
-                : publishStatus === "changes-unpublished"
-                  ? "Changes unpublished"
-                  : "Not published yet"}
+              {publishStatus.status === "live"
+                ? "Live"
+                : publishStatus.status === "demo-published"
+                  ? "Demo published"
+                  : publishStatus.status === "published"
+                    ? "Published"
+                    : publishStatus.status === "changes-unpublished"
+                      ? "Changes unpublished"
+                      : publishStatus.status === "failed"
+                        ? "Publish failed"
+                        : "Draft"}
             </span>
+            {publishStatus.liveUrl &&
+              isSafeDeploymentUrl(publishStatus.liveUrl, publishStatus.providerId ?? "vercel") && (
+                <a
+                  href={publishStatus.liveUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[10px] font-medium text-accent transition-colors hover:bg-accent/10"
+                  data-testid="project-open-site"
+                >
+                  <ExternalLink className="h-2.5 w-2.5" />
+                  Open site
+                </a>
+              )}
           </div>
         )}
 

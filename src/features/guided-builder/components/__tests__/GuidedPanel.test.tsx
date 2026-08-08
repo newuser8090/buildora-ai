@@ -3,6 +3,10 @@
 // GuidedPanel (score + journey + coach) — rendering tests (Phase N, §28)
 // ---------------------------------------------------------------------------
 
+// CoachPanel mounts Phase P8 publishing hooks that read deployment history
+// from IndexedDB on mount — provide a working store so those reads resolve.
+import "fake-indexeddb/auto";
+
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { GuidedPanel } from "../GuidedPanel";

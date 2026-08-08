@@ -10,13 +10,17 @@
 "use client";
 
 import { useCallback } from "react";
-import { Lightbulb, X, Sparkles, LayoutGrid, Rocket } from "lucide-react";
+import { Lightbulb, X, Sparkles, LayoutGrid, Rocket, Globe, RefreshCw } from "lucide-react";
 import { useGuidedBuilder } from "../hooks/useGuidedBuilder";
 import { useSuggestionActions } from "../hooks/useSuggestionActions";
 import { useGuidedActions } from "../hooks/useGuidedActions";
 import { useLaunchReadiness } from "@/features/launch-readiness/hooks/useLaunchReadiness";
 import { useLaunchCenterStore } from "@/features/launch-readiness/store/launch-center-store";
 import { usePreviewStore } from "@/features/preview/store/preview-store";
+import { usePublishingStore } from "@/features/publishing/store/publishing-store";
+import { usePublishing } from "@/features/publishing/hooks/usePublishing";
+import { useDomains } from "@/features/publishing/hooks/useDomains";
+import { findActiveDeployment } from "@/features/publishing/services/deployment-utils";
 import type { BuilderSuggestion } from "../types";
 
 function suggestionPrimaryLabel(suggestion: BuilderSuggestion): string {
@@ -43,6 +47,53 @@ export function CoachPanel() {
 
   // Phase P7 — launch coach (deterministic; hook must stay above returns).
   const launchReadiness = useLaunchReadiness();
+
+  // Phase P8 — live/domain coach (deterministic; never auto-mutates).
+  const deployments = usePublishingStore((s) => s.deployments);
+  const { publishStatus } = usePublishing();
+  const { domains } = useDomains();
+  const active = findActiveDeployment(deployments);
+  const hasLiveVercel = active?.providerId === "vercel";
+  const hasVerifiedDomain = domains.some((d) => d.status === "verified");
+  const hasPendingDomain = domains.some(
+    (d) => d.status === "pending" || d.status === "misconfigured",
+  );
+
+  const publishCoachCard = (() => {
+    if (publishStatus === "changes-unpublished") {
+      return {
+        title: "You changed your site",
+        description:
+          "Publish the update when you're ready — your published site keeps running until then.",
+        action: "Publish updates",
+        onRun: () => useLaunchCenterStore.getState().openLaunchCenter(),
+      };
+    }
+    if (hasLiveVercel && !hasVerifiedDomain) {
+      return {
+        title: "Your site is live",
+        description: "Want to connect your own domain? Use your own address instead of the .vercel.app link.",
+        action: "Connect a domain",
+        onRun: () => {
+          usePublishingStore.getState().openPublishDialog();
+          usePublishingStore.getState().openDomainDialog();
+        },
+      };
+    }
+    if (hasPendingDomain) {
+      return {
+        title: "Your domain is still connecting",
+        description:
+          "You can keep editing while it finishes — the domain will connect on its own.",
+        action: "Check again",
+        onRun: () => {
+          usePublishingStore.getState().openPublishDialog();
+          usePublishingStore.getState().openDomainDialog();
+        },
+      };
+    }
+    return null;
+  })();
 
   const launchCard = (() => {
     const score = launchReadiness.score;
@@ -103,6 +154,43 @@ export function CoachPanel() {
       </p>
 
       <div className="flex flex-col gap-2">
+        {/* Phase P8 — live/domain coach card (deterministic) */}
+        {publishCoachCard && (
+          <div
+            data-testid="coach-publish-card"
+            className="rounded-lg border border-accent/25 bg-accent/5 p-2.5"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-xs font-medium text-text-primary">
+                {publishCoachCard.title}
+              </p>
+              <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md text-accent">
+                {hasPendingDomain ? (
+                  <Globe className="h-3.5 w-3.5" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+              </span>
+            </div>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-text-dim">
+              {publishCoachCard.description}
+            </p>
+            <button
+              type="button"
+              onClick={publishCoachCard.onRun}
+              data-testid="coach-publish-run"
+              className="mt-2 flex h-6 items-center gap-1 rounded-md bg-accent/15 px-2 text-[11px] font-medium text-accent transition-all duration-200 hover:bg-accent/25 active:scale-95"
+            >
+              {hasPendingDomain ? (
+                <Globe className="h-3 w-3" />
+              ) : (
+                <Rocket className="h-3 w-3" />
+              )}
+              {publishCoachCard.action}
+            </button>
+          </div>
+        )}
+
         {/* Launch coach card */}
         <div
           data-testid="coach-launch-card"

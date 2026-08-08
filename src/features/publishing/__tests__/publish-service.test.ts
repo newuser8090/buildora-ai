@@ -117,6 +117,11 @@ describe("PublishService — validation gates", () => {
   it("returns PROVIDER_UNAVAILABLE when the provider is unavailable", async () => {
     const unavailable: PublishingProvider = {
       id: "off", label: "Off", description: "",
+      capabilities: {
+        realHosting: false, customDomains: false, rollback: false,
+        deploymentLogs: false, cancelDeployment: false, deleteDeployment: false,
+        previewDeployments: false,
+      },
       isAvailable: async () => ({ available: false, reason: "Not configured." }),
       publish: async () => ({ ok: false, error: { code: "DEPLOY_FAILED", message: "x" } }),
       getDeployment: async () => null,

@@ -114,9 +114,11 @@ test.describe("Phase P7 — publishing history", () => {
       timeout: 5000,
     });
 
-    // 6. Verify the active deployment changed: A now carries the Current badge.
-    await expect(cards.nth(1)).toContainText("Current", { timeout: 10000 });
-    await expect(cards.first()).not.toContainText("Current");
+    // 6. Verify the active deployment changed: A now carries the Current badge
+    //    and moves to the top of the list (Current group renders first).
+    await expect(cards.first()).toContainText("Current", { timeout: 10000 });
+    await expect(cards.first()).toContainText("Published from revision 1");
+    await expect(cards.nth(1)).not.toContainText("Current");
 
     // 7. Rollback never touched editor content — revision B is still open.
     await closePublishDialog(page);

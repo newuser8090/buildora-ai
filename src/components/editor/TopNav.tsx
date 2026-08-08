@@ -33,6 +33,8 @@ import { AccountMenu } from "@/features/auth/components/AccountMenu";
 import { usePreviewStore } from "@/features/preview/store/preview-store";
 import { useLaunchCenterStore } from "@/features/launch-readiness/store/launch-center-store";
 import { useSiteSettingsUiStore } from "@/features/site-settings/store/site-settings-ui-store";
+import { usePublishing } from "@/features/publishing/hooks/usePublishing";
+import { usePublishingStore } from "@/features/publishing/store/publishing-store";
 
 const iconButton =
   "flex h-8 w-8 items-center justify-center rounded-lg text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95";
@@ -46,6 +48,7 @@ export function TopNav() {
   const [exportingSite, setExportingSite] = useState(false);
   const [exportSiteError, setExportSiteError] = useState<string | null>(null);
   const [assetManagerOpen, setAssetManagerOpen] = useState(false);
+  const copyNotice = usePublishingStore((s) => s.copyNotice);
 
   // Guards double exports even before React re-renders the disabled state.
   const exportingRef = useRef(false);
@@ -56,6 +59,10 @@ export function TopNav() {
   const canUndo = useEditorStore((s) => s.canUndo());
   const canRedo = useEditorStore((s) => s.canRedo());
   const project = useEditorStore((s) => s.project);
+
+  // Phase P8: keep the Publish button honest — "Publish updates" when the
+  // project has unpublished changes; it always opens the Launch Center.
+  const { publishStatus } = usePublishing();
 
   const saveStatus = useEditorStore((s) => s.saveStatus);
   const isHydrated = useEditorStore((s) => s.isHydrated);
@@ -384,7 +391,9 @@ export function TopNav() {
           type="button"
         >
           <Rocket className="h-4 w-4" />
-          <span className="hidden sm:inline text-xs">Publish</span>
+          <span className="hidden sm:inline text-xs">
+            {publishStatus === "changes-unpublished" ? "Publish updates" : "Publish"}
+          </span>
         </button>
 
         <button
@@ -438,6 +447,17 @@ export function TopNav() {
       {/* ---- Asset Manager modal ---- */}
       {assetManagerOpen && (
         <AssetManager onClose={() => setAssetManagerOpen(false)} />
+      )}
+
+      {/* ---- Phase P8: transient "Link copied." announcement ---- */}
+      {copyNotice && (
+        <div
+          className="fixed bottom-16 left-1/2 z-[70] -translate-x-1/2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-xs font-medium text-emerald-600 dark:text-emerald-400 shadow-elevated"
+          role="status"
+          data-testid="publish-copy-notice"
+        >
+          {copyNotice}
+        </div>
       )}
 
       {/* ---- Back-nav error toast ---- */}
