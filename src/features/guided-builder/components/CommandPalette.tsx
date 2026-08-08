@@ -33,6 +33,10 @@ import { usePersonalTemplatesUiStore } from "@/features/personal-templates/store
 import { useHelpUiStore } from "@/features/help/store/help-ui-store";
 import { useRecoveryUiStore } from "@/features/recovery/store/recovery-ui-store";
 import { getRecoveryService } from "@/features/recovery/services/recovery-service";
+import {
+  openCopilotPanel,
+  useCopilotStore,
+} from "@/features/ai-copilot/store/copilot-store";
 
 interface PaletteCommand {
   id: string;
@@ -139,6 +143,51 @@ function buildCommands(handlers: {
       keywords: ["ai", "help", "assistant", "ask"],
       hint: "Get help from the assistant",
       run: () => handlers.askAi("create"),
+    },
+    {
+      id: "open-copilot",
+      label: "Open AI Copilot",
+      keywords: ["ai", "copilot", "assistant", "help", "ask", "suggest", "improve", "chat", "change"],
+      hint: "Ask questions or describe changes — you approve before anything applies",
+      run: () => openCopilotPanel(),
+    },
+    {
+      id: "ask-ai-about-page",
+      label: "Ask AI about this page",
+      keywords: ["ai", "copilot", "ask", "page", "help", "review this page", "improve page", "this page"],
+      hint: "Open the Copilot focused on the page you're editing",
+      run: () => {
+        const editor = useEditorStore.getState();
+        const pageId = editor.selectedPageId ?? editor.project.pages[0]?.id;
+        if (pageId) {
+          useCopilotStore.getState().setScopeChoice({ type: "page", pageId });
+        }
+        openCopilotPanel();
+      },
+    },
+    {
+      id: "ask-ai-about-selection",
+      label: "Ask AI about this selection",
+      keywords: ["ai", "copilot", "ask", "selected", "selection", "section", "part", "improve this"],
+      hint: "Open the Copilot focused on the section you selected",
+      run: () => {
+        const editor = useEditorStore.getState();
+        if (editor.selectedSectionId) {
+          const pageId = editor.project.pages.find((p) =>
+            p.sections.some((s) => s.id === editor.selectedSectionId),
+          )?.id;
+          if (pageId) {
+            useCopilotStore
+              .getState()
+              .setScopeChoice({
+                type: "section",
+                pageId,
+                sectionId: editor.selectedSectionId,
+              });
+          }
+        }
+        openCopilotPanel();
+      },
     },
     {
       id: "check-website",

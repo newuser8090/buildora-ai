@@ -19,7 +19,9 @@ import {
   LayoutTemplate,
   Keyboard,
   History,
+  Bot,
 } from "lucide-react";
+import { openCopilotPanel } from "@/features/ai-copilot/store/copilot-store";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { useMyBlocksUiStore } from "@/features/my-blocks/store/my-blocks-ui-store";
 import { AssetManager } from "@/features/assets/components/AssetManager";
@@ -420,6 +422,18 @@ export function TopNav() {
           <span className="hidden sm:inline text-xs">
             {publishStatus === "changes-unpublished" ? "Publish updates" : "Publish"}
           </span>
+        </button>
+
+        {/* Phase P10: AI Copilot — opens the canonical Copilot panel */}
+        <button
+          data-testid="topnav-copilot-button"
+          onClick={openCopilotPanel}
+          className="flex h-8 items-center gap-2 rounded-lg bg-accent/10 px-2.5 text-sm text-accent transition-all duration-200 hover:bg-accent/20 active:scale-95"
+          title="Open the AI Copilot (Ctrl/⌘+Shift+A)"
+          type="button"
+        >
+          <Bot className="h-4 w-4" />
+          <span className="hidden sm:inline text-xs">Copilot</span>
         </button>
 
         {/* Phase P9: save-as-template + help + backups */}

@@ -73,6 +73,12 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
     title: "AI",
     entries: [
       {
+        id: "open-copilot",
+        label: "Open the AI Copilot",
+        keys: "Ctrl/⌘ + Shift + A",
+        hint: "Ask questions or describe changes — you approve before anything applies.",
+      },
+      {
         id: "ask-ai",
         label: "Ask AI for help",
         keys: "",

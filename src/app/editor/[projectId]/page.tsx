@@ -37,7 +37,18 @@ import type { ProjectTransitionResult } from "@/features/persistence/types";
 import { RecoveryDialog } from "@/features/recovery/components/RecoveryDialog";
 import { getRecoveryService } from "@/features/recovery/services/recovery-service";
 import { useRecoveryUiStore } from "@/features/recovery/store/recovery-ui-store";
+import dynamic from "next/dynamic";
 import { KeyboardShortcutsDialog } from "@/features/help/components/KeyboardShortcutsDialog";
+
+// Phase P10 — AI Copilot panel. Lazy-loaded: normal editor interactions have
+// zero dependency on AI (opening/editing/saving work with the provider down).
+const CopilotPanel = dynamic(
+  () =>
+    import("@/features/ai-copilot/components/CopilotPanel").then(
+      (m) => m.CopilotPanel,
+    ),
+  { ssr: false },
+);
 import { useHelpUiStore } from "@/features/help/store/help-ui-store";
 import { SaveAsTemplateDialog } from "@/features/personal-templates/components/SaveAsTemplateDialog";
 import { usePersonalTemplatesUiStore } from "@/features/personal-templates/store/personal-templates-ui-store";
@@ -394,6 +405,9 @@ function EditorShell() {
       <SiteSettingsDialog />
       <LaunchCenter />
       <PublishDialog />
+
+      {/* Phase P10: AI Copilot — the canonical Copilot surface */}
+      <CopilotPanel />
 
       {/* Phase P9: help, personal templates, recovery, feedback */}
       <KeyboardShortcutsDialog open={shortcutsOpen} onClose={closeShortcuts} />

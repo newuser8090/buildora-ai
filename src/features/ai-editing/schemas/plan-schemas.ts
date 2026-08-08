@@ -29,6 +29,79 @@ import { validatePageTitle } from "@/features/editor/store/page-structure";
 import { validateSlug } from "@/features/routing/routes";
 
 // ---------------------------------------------------------------------------
+// Security scan — adversarial plan payloads (Phase P10)
+//
+// AI output is untrusted. Every plan (Gemini or rule-based) is scanned for:
+//   - prototype-pollution keys anywhere in applied payloads
+//   - unsafe URL schemes in href-bearing fields or protocol-prefixed strings
+// The scan is wired into AiEditPlanSchema below, so it is enforced server-side
+// for every provider and needs no client-side duplicate.
+// ---------------------------------------------------------------------------
+
+export const DANGEROUS_PROTOTYPE_KEYS = [
+  "__proto__",
+  "prototype",
+  "constructor",
+] as const;
+
+export const UNSAFE_HREF_PATTERNS = [
+  /^javascript:/i,
+  /^vbscript:/i,
+  /^data:text\/html/i,
+] as const;
+
+export interface SecurityScanIssue {
+  path: string;
+  message: string;
+}
+
+function isDangerousKey(key: string): boolean {
+  return (DANGEROUS_PROTOTYPE_KEYS as readonly string[]).includes(key);
+}
+
+/**
+ * Recursively scan a plan payload for prototype-pollution keys and unsafe
+ * URL schemes. Pure, deterministic, side-effect free. Exported for tests.
+ */
+export function scanPayloadForSecurityIssues(value: unknown): SecurityScanIssue[] {
+  const issues: SecurityScanIssue[] = [];
+
+  const visit = (node: unknown, path: string): void => {
+    if (Array.isArray(node)) {
+      node.forEach((item, index) => visit(item, `${path}[${index}]`));
+      return;
+    }
+    if (node && typeof node === "object") {
+      for (const [key, child] of Object.entries(node as Record<string, unknown>)) {
+        const childPath = path ? `${path}.${key}` : key;
+        if (isDangerousKey(key)) {
+          issues.push({
+            path: childPath,
+            message: `Key "${key}" is not allowed in AI plan payloads.`,
+          });
+        }
+        visit(child, childPath);
+      }
+      return;
+    }
+    if (typeof node === "string") {
+      const leafKey = path.split(/[.[]/).pop() ?? "";
+      const isHrefField = /href/i.test(leafKey);
+      const unsafe = UNSAFE_HREF_PATTERNS.some((pattern) => pattern.test(node));
+      if (unsafe && (isHrefField || /^javascript:/i.test(node) || /^vbscript:/i.test(node) || /^data:text\/html/i.test(node))) {
+        issues.push({
+          path,
+          message: `Unsafe URL scheme in "${node.slice(0, 48)}…"`,
+        });
+      }
+    }
+  };
+
+  visit(value, "");
+  return issues;
+}
+
+// ---------------------------------------------------------------------------
 // Limits
 // ---------------------------------------------------------------------------
 
@@ -378,6 +451,20 @@ export const AiEditPlanSchema = z
             message: `Operation "${op.id}" depends on "${dep}", which must appear earlier in the plan.`,
           });
         }
+      }
+    });
+
+    // ---- Security scan (Phase P10) — adversarial payloads ----
+    plan.operations.forEach((op, index) => {
+      const issues = scanPayloadForSecurityIssues(op);
+      if (issues.length > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["operations", index],
+          message: `Unsafe plan payload: ${issues[0].message}${
+            issues.length > 1 ? ` (+${issues.length - 1} more)` : ""
+          }`,
+        });
       }
     });
 
