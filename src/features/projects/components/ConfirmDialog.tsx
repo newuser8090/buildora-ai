@@ -4,7 +4,7 @@
 
 "use client";
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, type ReactNode } from "react";
 import { cn } from "@/utils/cn";
 
 export interface ConfirmDialogProps {
@@ -19,6 +19,8 @@ export interface ConfirmDialogProps {
   /** Name of the project being acted on (for display in the message area) */
   projectName?: string;
   isLoading?: boolean;
+  /** Optional extra content (e.g. an opt-in checkbox) below the message. */
+  children?: ReactNode;
 }
 
 export function ConfirmDialog({
@@ -31,6 +33,7 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
   isLoading = false,
+  children,
 }: ConfirmDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
@@ -104,6 +107,8 @@ export function ConfirmDialog({
         >
           {message}
         </p>
+
+        {children}
 
         <div className="mt-6 flex items-center justify-end gap-3">
           <button

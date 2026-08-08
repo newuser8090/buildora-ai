@@ -36,6 +36,7 @@ import type {
   OnboardingSelections,
 } from "@/features/guided-builder/types";
 import { useDashboardPublishStatuses } from "@/features/publishing/hooks/useDashboardPublishStatuses";
+import { removePublishedSite } from "@/features/publishing/services/remove-published-site";
 
 // Default project name for the onboarding category.
 const ONBOARDING_DEFAULT_NAMES: Record<OnboardingProjectCategory, string> = {
@@ -188,13 +189,33 @@ export default function DashboardPage() {
   }, [showDiscardDialog, discardAndOpenProject]);
 
   // ---- Delete ----
+  // Phase P8: deleting a Buildora project never silently deletes the live
+  // production site. When the project has a live provider deployment, the
+  // delete dialog offers an explicit opt-in checkbox instead.
+  const [removePublishedChecked, setRemovePublishedChecked] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const deleteTargetHasLiveSite =
+    !!deleteTarget && publishStatuses[deleteTarget.id]?.status === "live";
+
   const handleDeleteConfirm = useCallback(async () => {
     if (!deleteTarget) return;
     setOperationLoading(true);
+    setDeleteError(null);
     await deleteProject(deleteTarget.id);
+    if (removePublishedChecked) {
+      const result = await removePublishedSite(deleteTarget.id);
+      if (!result.ok) {
+        // The local project is already gone; surface the provider failure so
+        // the user knows the published site may still be online.
+        setDeleteError(
+          `${result.error.message} The published site may still be online.`,
+        );
+      }
+    }
     setDeleteTarget(null);
+    setRemovePublishedChecked(false);
     setOperationLoading(false);
-  }, [deleteTarget, deleteProject]);
+  }, [deleteTarget, deleteProject, removePublishedChecked]);
 
   // ---- Duplicate ----
   const [duplicateLoading, setDuplicateLoading] = useState(false);
@@ -604,9 +625,35 @@ export default function DashboardPage() {
         confirmLabel="Delete"
         destructive
         onConfirm={handleDeleteConfirm}
-        onCancel={() => setDeleteTarget(null)}
+        onCancel={() => {
+          setDeleteTarget(null);
+          setRemovePublishedChecked(false);
+        }}
         isLoading={operationLoading}
-      />
+      >
+        {deleteTargetHasLiveSite && (
+          <label
+            className="mt-4 flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2.5"
+            data-testid="delete-remove-published"
+          >
+            <input
+              type="checkbox"
+              checked={removePublishedChecked}
+              onChange={(e) => setRemovePublishedChecked(e.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-[var(--accent,#7c5cfc)]"
+            />
+            <span className="text-xs text-text-muted">
+              Also remove the published site. The live website will go offline
+              and its deployment history will be removed.
+            </span>
+          </label>
+        )}
+        {deleteError && (
+          <p className="mt-3 text-xs text-red-400" data-testid="delete-published-error">
+            {deleteError}
+          </p>
+        )}
+      </ConfirmDialog>
 
       {/* ---- Rename dialog ---- */}
       <RenameDialog

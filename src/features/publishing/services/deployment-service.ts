@@ -70,7 +70,7 @@ export class DeploymentService {
   async rollback(
     projectId: string,
     deploymentId: string,
-    providerRollback?: (id: string) => Promise<DeploymentRecord>,
+    providerRollback?: (id: string, projectId?: string) => Promise<DeploymentRecord>,
   ): Promise<{ ok: true; deployment: DeploymentRecord } | { ok: false; error: PublishError }> {
     try {
       if (!providerRollback) {
@@ -89,7 +89,13 @@ export class DeploymentService {
           error: makePublishError("DEPLOYMENT_NOT_FOUND", "That deployment no longer exists."),
         };
       }
-      const updated = await providerRollback(deploymentId);
+      // The provider manages deployments by ITS id (providerDeploymentId),
+      // never the local Buildora id — passing the local id would 404 on the
+      // provider (real Vercel and the dev mock server both key by dpl-...).
+      const updated = await providerRollback(
+        deployment.providerDeploymentId ?? deploymentId,
+        projectId,
+      );
       await this.storage.updateDeployment(deploymentId, {
         activatedAt: updated.activatedAt ?? this.now(),
         status: "live",
@@ -117,7 +123,9 @@ export class DeploymentService {
     providerDelete?: (id: string) => Promise<void>,
   ): Promise<{ ok: true } | { ok: false; error: PublishError }> {
     try {
-      await providerDelete?.(deploymentId);
+      const deployment = await this.storage.getDeployment(deploymentId);
+      // Same provider-id contract as rollback (see above).
+      await providerDelete?.(deployment?.providerDeploymentId ?? deploymentId);
       await this.storage.removeDeployment(deploymentId);
       return { ok: true };
     } catch (err) {

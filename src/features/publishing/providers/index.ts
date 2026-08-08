@@ -14,6 +14,7 @@
 import type { PublishingProvider } from "../types";
 import { LocalExportPublishingProvider } from "./local-export-provider";
 import { MockPublishingProvider } from "./mock-provider";
+import { VercelPublishingProvider } from "./vercel-provider";
 
 export type ProviderEnv = "development" | "test" | "production";
 
@@ -40,6 +41,12 @@ export function getPublishingProviders(env?: ProviderEnv): PublishingProvider[] 
   if (mockEnabled) {
     providers.push(new MockPublishingProvider());
   }
+
+  // Phase P8: the Vercel provider is always registered; its availability is
+  // resolved server-side via GET /api/publish/vercel/status (credentials are
+  // never present in the browser). Missing credentials simply make the
+  // provider report unavailable — never a broken action.
+  providers.push(new VercelPublishingProvider());
 
   return providers;
 }

@@ -76,15 +76,29 @@ export function createMockCloudState(): MockCloudState {
   };
 }
 
-let state: MockCloudState | null = null;
+// The mock cloud lives on globalThis (NOT a module-local variable): in Next.js
+// dev, every route handler is its own webpack bundle, so a module-level
+// singleton would be duplicated per route — sign-up sessions and synced blocks
+// written through /api/cloud/[...path] would be invisible to other routes
+// (e.g. /api/publish/vercel/*). globalThis is shared by every route bundle in
+// the dev-server process, which is what makes cross-route + cross-device e2e
+// possible. (Module-local state still works for tests that import the module
+// directly — the first getMockCloudState() call installs the global and all
+// subsequent callers see the same instance.)
+const MOCK_CLOUD_GLOBAL_KEY = "buildora.mockCloudState.v1";
 
 export function getMockCloudState(): MockCloudState {
-  if (!state) state = createMockCloudState();
-  return state;
+  const g = globalThis as unknown as Record<string, unknown>;
+  const existing = g[MOCK_CLOUD_GLOBAL_KEY];
+  if (existing) return existing as MockCloudState;
+  const fresh = createMockCloudState();
+  g[MOCK_CLOUD_GLOBAL_KEY] = fresh;
+  return fresh;
 }
 
 export function resetMockCloudState(): void {
-  state = createMockCloudState();
+  const g = globalThis as unknown as Record<string, unknown>;
+  g[MOCK_CLOUD_GLOBAL_KEY] = createMockCloudState();
 }
 
 // ---------------------------------------------------------------------------

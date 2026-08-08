@@ -1,9 +1,13 @@
 // ---------------------------------------------------------------------------
-// useDashboardPublishStatuses — publish status per dashboard project (P7)
+// useDashboardPublishStatuses — publish status per dashboard project (P7 + P8)
 //
 // Derived from deployment history + project revision — never stored in the
-// project. Lightweight: reads deployment summaries once per project list
-// change. Failures degrade to "unknown" (never block the dashboard).
+// project, and no network calls per card (the live URL comes from locally
+// persisted deployment history, not the provider). Failures degrade to
+// "unknown" (never block the dashboard).
+//
+// Status vocabulary (P8): never-published (Draft) / published (files) /
+// demo-published / live / changes-unpublished / failed.
 // ---------------------------------------------------------------------------
 
 "use client";
@@ -11,17 +15,28 @@
 import { useEffect, useState } from "react";
 import { DeploymentService } from "../services/deployment-service";
 import { getDeploymentAdapter } from "../storage/deployment-adapter";
-import type { PublishStatus } from "../types";
 
-export type DashboardPublishStatus = PublishStatus | "unknown";
+export type DashboardPublishStatus =
+  | "never-published"
+  | "published"
+  | "demo-published"
+  | "live"
+  | "changes-unpublished"
+  | "failed"
+  | "unknown";
+
+export interface DashboardPublishInfo {
+  status: DashboardPublishStatus;
+  /** Public URL when a real provider deployment is live (local history). */
+  liveUrl?: string;
+  providerId?: string;
+}
 
 export function useDashboardPublishStatuses(
   projects: { id: string; revision: number }[],
-): Record<string, DashboardPublishStatus> {
-  const [statuses, setStatuses] = useState<Record<string, DashboardPublishStatus>>({});
+): Record<string, DashboardPublishInfo> {
+  const [infos, setInfos] = useState<Record<string, DashboardPublishInfo>>({});
 
-  // Stable key: the caller may rebuild the projects array every render (e.g.
-  // page.tsx maps it inline). Keying on id:revision prevents effect churn.
   const projectsKey = projects
     .map((p) => `${p.id}:${p.revision}`)
     .join("|");
@@ -35,19 +50,61 @@ export function useDashboardPublishStatuses(
       const entries = await Promise.all(
         projects.map(async (p) => {
           try {
-            const active = await service.getActiveDeployment(p.id);
-            if (!active) return [p.id, "never-published" as DashboardPublishStatus];
-            if (p.revision > active.projectRevision) {
-              return [p.id, "changes-unpublished" as DashboardPublishStatus];
+            const all = await service.listDeployments(p.id);
+            const active = all
+              .filter((d) => d.status === "live")
+              .sort((a, b) =>
+                (b.activatedAt ?? b.completedAt ?? b.createdAt).localeCompare(
+                  a.activatedAt ?? a.completedAt ?? a.createdAt,
+                ),
+              )[0] ?? null;
+
+            if (!active) {
+              const failed = all.some(
+                (d) => d.status === "failed" || d.status === "cancelled",
+              );
+              return [
+                p.id,
+                {
+                  status: failed ? ("failed" as const) : ("never-published" as const),
+                },
+              ];
             }
-            return [p.id, "published" as DashboardPublishStatus];
+
+            if (p.revision > active.projectRevision) {
+              return [
+                p.id,
+                {
+                  status: "changes-unpublished" as const,
+                  liveUrl: active.productionUrl ?? active.url,
+                  providerId: active.providerId,
+                },
+              ];
+            }
+
+            const status: DashboardPublishStatus =
+              active.providerId === "vercel"
+                ? "live"
+                : active.providerId === "mock"
+                  ? "demo-published"
+                  : "published";
+            return [
+              p.id,
+              {
+                status,
+                liveUrl:
+                  active.productionUrl ??
+                  (active.providerId === "vercel" ? active.deploymentUrl : active.url),
+                providerId: active.providerId,
+              },
+            ];
           } catch {
-            return [p.id, "unknown" as DashboardPublishStatus];
+            return [p.id, { status: "unknown" as const }];
           }
         }),
       );
       if (cancelled) return;
-      setStatuses(Object.fromEntries(entries));
+      setInfos(Object.fromEntries(entries));
     })();
 
     return () => {
@@ -56,7 +113,5 @@ export function useDashboardPublishStatuses(
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on id:revision
   }, [projectsKey]);
 
-  // No projects → nothing to report. The async path keeps the state fresh
-  // whenever the id:revision key changes.
-  return projects.length === 0 ? {} : statuses;
+  return projects.length === 0 ? {} : infos;
 }

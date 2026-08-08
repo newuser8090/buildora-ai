@@ -19,6 +19,8 @@ import type {
 } from "../types";
 import type { Project } from "@/types/project";
 import { makePublishError } from "../errors";
+import { LOCAL_EXPORT_CAPABILITIES } from "../capabilities";
+import type { PublishingProviderCapabilities } from "../capabilities";
 
 export type ExportDownloadFn = (
   folderName: string,
@@ -33,6 +35,7 @@ export class LocalExportPublishingProvider implements PublishingProvider {
   readonly label = "Download website files";
   readonly description =
     "Save your website as files you can use with any hosting provider.";
+  readonly capabilities: PublishingProviderCapabilities = LOCAL_EXPORT_CAPABILITIES;
 
   private download: ExportDownloadFn;
 
@@ -41,7 +44,7 @@ export class LocalExportPublishingProvider implements PublishingProvider {
   }
 
   async isAvailable() {
-    return { available: true };
+    return { available: true, capabilities: LOCAL_EXPORT_CAPABILITIES };
   }
 
   async publish(

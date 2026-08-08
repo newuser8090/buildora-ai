@@ -25,6 +25,10 @@ import { usePreviewStore } from "@/features/preview/store/preview-store";
 import { useLaunchCenterStore } from "@/features/launch-readiness/store/launch-center-store";
 import { useSiteSettingsUiStore } from "@/features/site-settings/store/site-settings-ui-store";
 import { usePublishingStore } from "@/features/publishing/store/publishing-store";
+import {
+  findActiveDeployment,
+  safeLiveUrl,
+} from "@/features/publishing/services/deployment-utils";
 
 interface PaletteCommand {
   id: string;
@@ -180,15 +184,78 @@ function buildCommands(handlers: {
     {
       id: "publish-website",
       label: "Publish my website",
-      keywords: ["publish", "go live", "launch", "deploy", "live"],
+      keywords: ["publish", "go live", "launch", "deploy", "live", "put my site online", "live link", "host", "publish updates", "update"],
       hint: "Choose where your site goes",
       run: () => usePublishingStore.getState().openPublishDialog(),
     },
     {
       id: "deployment-history",
       label: "View publish history",
-      keywords: ["history", "deployments", "versions", "previous publish", "rollback"],
+      keywords: ["history", "deployments", "versions", "previous publish", "rollback", "manage publishing"],
       hint: "See every version you've published",
+      run: () => usePublishingStore.getState().openHistory(),
+    },
+    {
+      id: "open-live-site",
+      label: "Open my live site",
+      keywords: ["open live", "live site", "my site", "website", "view live", "open published"],
+      hint: "Open the published version of your site",
+      run: () => {
+        const active = findActiveDeployment(usePublishingStore.getState().deployments);
+        const url = active ? safeLiveUrl(active) : null;
+        if (url) {
+          window.open(url, "_blank", "noopener,noreferrer");
+        } else {
+          usePublishingStore.getState().openPublishDialog();
+        }
+      },
+    },
+    {
+      id: "copy-live-link",
+      label: "Copy my live link",
+      keywords: ["copy link", "copy url", "share link", "live link", "copy live"],
+      hint: "Copy the link to your published site",
+      run: () => {
+        const active = findActiveDeployment(usePublishingStore.getState().deployments);
+        const url = active ? safeLiveUrl(active) : null;
+        if (url) {
+          void navigator.clipboard
+            .writeText(url)
+            .then(() => usePublishingStore.getState().notifyCopy("Link copied."))
+            .catch(() => {
+              // No silent failure — surface the copy target instead.
+              usePublishingStore.getState().notifyCopy("Copy failed — open the site to copy it manually.");
+            });
+        } else {
+          usePublishingStore.getState().openPublishDialog();
+        }
+      },
+    },
+    {
+      id: "connect-custom-domain",
+      label: "Connect a custom domain",
+      keywords: ["domain", "custom domain", "own domain", "connect domain", "example.com", "dns", "website address"],
+      hint: "Use your own address, like example.com",
+      run: () => {
+        usePublishingStore.getState().openPublishDialog();
+        usePublishingStore.getState().openDomainDialog();
+      },
+    },
+    {
+      id: "check-domain",
+      label: "Check my domain status",
+      keywords: ["domain", "check domain", "dns", "verify", "connection", "domain status"],
+      hint: "See if your domain is connected yet",
+      run: () => {
+        usePublishingStore.getState().openPublishDialog();
+        usePublishingStore.getState().openDomainDialog();
+      },
+    },
+    {
+      id: "rollback-deployment",
+      label: "Restore an older published version",
+      keywords: ["rollback", "restore", "older version", "previous version", "go back", "revert publish"],
+      hint: "Restore a previous deployment",
       run: () => usePublishingStore.getState().openHistory(),
     },
     {

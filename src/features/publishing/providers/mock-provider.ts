@@ -17,6 +17,8 @@ import type {
   PublishStage,
 } from "../types";
 import { makePublishError } from "../errors";
+import { MOCK_CAPABILITIES } from "../capabilities";
+import type { PublishingProviderCapabilities } from "../capabilities";
 
 export interface MockProviderOptions {
   /** Stage durations in ms. Defaults keep E2E fast. */
@@ -66,6 +68,7 @@ export class MockPublishingProvider implements PublishingProvider {
   readonly label = "Demo publish";
   readonly description =
     "A practice publish that shows how publishing works. Your site is not put on the real internet.";
+  readonly capabilities: PublishingProviderCapabilities = MOCK_CAPABILITIES;
 
   private durations: Record<PublishStage, number>;
   private failAt?: PublishStage;
@@ -96,7 +99,7 @@ export class MockPublishingProvider implements PublishingProvider {
   }
 
   async isAvailable() {
-    return { available: true, devOnly: true };
+    return { available: true, devOnly: true, capabilities: MOCK_CAPABILITIES };
   }
 
   private wait(ms: number, signal?: AbortSignal): Promise<void> {
@@ -222,7 +225,7 @@ export class MockPublishingProvider implements PublishingProvider {
    * by refreshing its activatedAt. The project's editor content is never
    * touched — only which deployment is "current".
    */
-  async rollback(deploymentId: string): Promise<DeploymentRecord> {
+  async rollback(deploymentId: string, _projectId?: string): Promise<DeploymentRecord> {
     const deployment = this.deployments.get(deploymentId);
     if (!deployment) {
       throw makePublishError("DEPLOYMENT_NOT_FOUND", "That deployment no longer exists.");

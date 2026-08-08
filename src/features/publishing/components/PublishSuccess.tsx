@@ -9,7 +9,7 @@
 // ---------------------------------------------------------------------------
 
 import { useCallback, useState } from "react";
-import { CheckCircle2, ExternalLink, Copy, Eye, RefreshCw, History } from "lucide-react";
+import { CheckCircle2, ExternalLink, Copy, Eye, RefreshCw, History, Info } from "lucide-react";
 import { usePublishingStore } from "../store/publishing-store";
 import { usePublishing } from "../hooks/usePublishing";
 import { usePreviewStore } from "@/features/preview/store/preview-store";
@@ -17,6 +17,7 @@ import { usePreviewStore } from "@/features/preview/store/preview-store";
 export function PublishSuccess() {
   const result = usePublishingStore((s) => s.lastResult);
   const openHistory = usePublishingStore((s) => s.openHistory);
+  const openDetails = usePublishingStore((s) => s.openDetails);
   const { publish } = usePublishing();
   const openPreview = usePreviewStore((s) => s.openPreview);
 
@@ -62,7 +63,9 @@ export function PublishSuccess() {
         <p className="mx-auto mt-1 max-w-xs text-xs text-text-dim">
           {isMock
             ? "This is a practice publish — your site is not on the public internet. Open it to see how it works."
-            : "Your website files are ready. Open the site or copy the link to share it."}
+            : result?.ok && result.deployment.providerId === "vercel"
+              ? "Your site is live on the internet. Open it or copy the link to share it."
+              : "Your website files are ready. Open the site or copy the link to share it."}
         </p>
       </div>
 
@@ -128,6 +131,17 @@ export function PublishSuccess() {
           <History className="h-3.5 w-3.5" />
           History
         </button>
+        {result?.ok && (
+          <button
+            onClick={() => openDetails(result.deployment.id)}
+            className="flex h-9 items-center justify-center gap-1.5 rounded-lg border border-border px-3 text-xs font-medium text-text-muted transition-colors hover:bg-card hover:text-text-primary"
+            type="button"
+            data-testid="publish-view-details"
+          >
+            <Info className="h-3.5 w-3.5" />
+            Details
+          </button>
+        )}
       </div>
 
       <div className="mt-1 w-full rounded-lg border border-border/60 bg-base p-3 text-left">

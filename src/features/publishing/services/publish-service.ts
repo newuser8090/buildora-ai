@@ -139,6 +139,8 @@ export class PublishService {
           projectSnapshot: snapshot,
           deploymentId,
           exportHash,
+          contentHash,
+          idempotencyKey: `${project.id}:${exportHash}`,
         },
         (event) => {
           // 8. Update progress (persist intermediate status)
@@ -173,12 +175,14 @@ export class PublishService {
         };
       }
 
-      // 9. Persist final live state
+      // 9. Persist final live state (merge the provider's deploymentPatch —
+      //    provider metadata like providerDeploymentId / productionUrl).
       const final = await this.deps.storage.updateDeployment(deploymentId, {
         status: "live",
         completedAt: now(),
         activatedAt: now(),
         url: result.url,
+        ...(result.deploymentPatch ?? {}),
       });
 
       return { ok: true, deployment: final ?? { ...record, status: "live" } };

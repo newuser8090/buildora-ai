@@ -32,7 +32,7 @@ describe("MockPublishingProvider — publish success", () => {
     const p = provider({ durations: { checking: 0, preparing: 0, building: 0, publishing: 0, live: 0 } });
     const events: PublishProgressEvent[] = [];
     const result = await p.publish(
-      { projectId: "proj-1", projectSnapshot: {}, deploymentId: "d1", exportHash: "abc" },
+      { projectId: "proj-1", projectSnapshot: {}, deploymentId: "d1", exportHash: "abc", contentHash: "c1", idempotencyKey: "k1" },
       (e) => events.push(e),
     );
 
@@ -55,7 +55,7 @@ describe("MockPublishingProvider — publish success", () => {
   it("records the deployment as live with a demo URL", async () => {
     const p = provider();
     await p.publish(
-      { projectId: "proj-1", projectSnapshot: {}, deploymentId: "d1", exportHash: "abc" },
+      { projectId: "proj-1", projectSnapshot: {}, deploymentId: "d1", exportHash: "abc", contentHash: "c1", idempotencyKey: "k1" },
       () => {},
     );
     const record = await p.getDeployment("d1");
@@ -71,7 +71,7 @@ describe("MockPublishingProvider — failure & cancel", () => {
   it("fails with the configured error code at the requested stage", async () => {
     const p = provider({ failAt: "building", failCode: "BUILD_FAILED" });
     const result = await p.publish(
-      { projectId: "proj-1", projectSnapshot: {}, deploymentId: "d1", exportHash: "abc" },
+      { projectId: "proj-1", projectSnapshot: {}, deploymentId: "d1", exportHash: "abc", contentHash: "c1", idempotencyKey: "k1" },
       () => {},
     );
     expect(result.ok).toBe(false);
@@ -85,7 +85,7 @@ describe("MockPublishingProvider — failure & cancel", () => {
     const p = provider({ durations: { checking: 0, preparing: 0, building: 50, publishing: 0, live: 0 } });
     const controller = new AbortController();
     const promise = p.publish(
-      { projectId: "proj-1", projectSnapshot: {}, deploymentId: "d1", exportHash: "abc" },
+      { projectId: "proj-1", projectSnapshot: {}, deploymentId: "d1", exportHash: "abc", contentHash: "c1", idempotencyKey: "k1" },
       () => {},
       controller.signal,
     );

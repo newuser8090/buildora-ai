@@ -225,7 +225,10 @@ export class ProjectService {
     }
 
     // Phase P7: deployment history belongs to the project — remove it too.
-    // Non-blocking: history cleanup failure must never fail the delete.
+    // Phase P8: custom-domain records as well. Non-blocking: cleanup failure
+    // must never fail the delete. (The live provider site is NEVER deleted
+    // here — that requires the explicit "Also remove the published site"
+    // opt-in in the dashboard delete dialog.)
     try {
       const { DeploymentService } = await import(
         "@/features/publishing/services/deployment-service"
@@ -238,6 +241,18 @@ export class ProjectService {
       );
     } catch {
       // Never break the delete flow over deployment cleanup.
+    }
+    try {
+      // Phase P8: custom-domain records are local product history/cache —
+      // clear them too. (Provider-side domain/project deletion requires the
+      // explicit "Also remove the published site" opt-in flow, never a
+      // silent project delete.)
+      const { getDomainAdapter } = await import(
+        "@/features/publishing/domain/domain-storage"
+      );
+      await getDomainAdapter().removeDomainsForProject(projectId);
+    } catch {
+      // Never break the delete flow over domain cleanup.
     }
 
     return { success: true };

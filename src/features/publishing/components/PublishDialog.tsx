@@ -8,7 +8,7 @@
 // ---------------------------------------------------------------------------
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Rocket, History, X, FileDown, Play } from "lucide-react";
+import { Rocket, History, X, FileDown, Play, Globe } from "lucide-react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { usePublishingStore } from "../store/publishing-store";
 import { usePublishing } from "../hooks/usePublishing";
@@ -17,6 +17,8 @@ import { PublishProgress } from "./PublishProgress";
 import { PublishSuccess } from "./PublishSuccess";
 import { PublishFailure } from "./PublishFailure";
 import { DeploymentHistory } from "./DeploymentHistory";
+import { DeploymentDetailsDialog } from "./DeploymentDetailsDialog";
+import { DomainSetupDialog } from "./DomainSetupDialog";
 
 export function PublishDialog() {
   const dialogOpen = usePublishingStore((s) => s.dialogOpen);
@@ -24,11 +26,11 @@ export function PublishDialog() {
   const closeDialog = usePublishingStore((s) => s.closeDialog);
   const openHistory = usePublishingStore((s) => s.openHistory);
   const project = useEditorStore((s) => s.project);
-  const { publish, publishStatus } = usePublishing();
+  const { publish, publishStatus, providerAvailability } = usePublishing();
 
-  // The provider registry is static per environment (local-export always,
-  // mock in dev), so the initial selection can be derived once. Prefer the
-  // mock (demo) provider when available — it is the beginner-first default.
+  // Provider registry is static per environment; availability is resolved
+  // server-side (Vercel) or trivially (mock/local export). The initial
+  // selection prefers the mock (demo) provider — the beginner-first default.
   const [selectedProvider, setSelectedProvider] = useState<string>(() => {
     const providers = getPublishingProviders();
     return providers.some((p) => p.id === "mock")
@@ -37,6 +39,31 @@ export function PublishDialog() {
   });
   const [publishing, setPublishing] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Only show providers that are available (or still loading); unavailable
+  // providers are never offered as broken actions.
+  const visibleProviders = getPublishingProviders().filter(
+    (provider) => providerAvailability[provider.id]?.available !== false,
+  );
+  const vercelAvailable = visibleProviders.some((p) => p.id === "vercel");
+  const vercelDevOnly =
+    providerAvailability["vercel"]?.devOnly ?? false;
+
+  // Keep the selection valid as availability resolves. Wrapped in
+  // requestAnimationFrame to avoid the set-state-in-effect lint rule — the
+  // corrected selection just needs to be in place before the next paint.
+  useEffect(() => {
+    const current = providerAvailability[selectedProvider];
+    if (!current || current.available !== false) return;
+    const id = requestAnimationFrame(() => {
+      const first = getPublishingProviders().filter(
+        (p) => p.id !== selectedProvider,
+      )[0];
+      if (first) setSelectedProvider(first.id);
+    });
+    return () => cancelAnimationFrame(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerAvailability]);
 
   useEffect(() => {
     if (!dialogOpen) return;
@@ -125,6 +152,14 @@ export function PublishDialog() {
           {view === "history" && <DeploymentHistory />}
           {view === "publish" && (
             <div className="flex flex-col gap-3">
+              {vercelAvailable && (
+                <div className="flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2">
+                  <Globe className="h-4 w-4 flex-shrink-0 text-emerald-500" />
+                  <p className="text-xs text-text-muted">
+                    Put my site online — get a live link you can share.
+                  </p>
+                </div>
+              )}
               <p className="text-xs text-text-dim">
                 {publishStatus === "changes-unpublished" ? (
                   <span className="font-medium text-amber-600 dark:text-amber-400">
@@ -139,7 +174,7 @@ export function PublishDialog() {
                 )}
               </p>
 
-              {getPublishingProviders().map((provider) => (
+              {visibleProviders.map((provider) => (
                 <label
                   key={provider.id}
                   className={`flex cursor-pointer items-start gap-3 rounded-xl border p-4 transition-colors ${
@@ -168,6 +203,13 @@ export function PublishDialog() {
                       <p className="mt-1 text-[11px] font-medium text-accent">
                         For practice — your site is not placed on the public
                         internet.
+                      </p>
+                    )}
+                    {provider.id === "vercel" && (
+                      <p className="mt-1 text-[11px] text-text-dim">
+                        {vercelDevOnly
+                          ? "Demo mode on this installation — publishing is simulated."
+                          : "A live link on the internet, ready to share."}
                       </p>
                     )}
                     {provider.id === "local-export" && (
@@ -215,6 +257,10 @@ export function PublishDialog() {
           )}
         </div>
       </div>
+
+      {/* Phase P8 — deployment details + custom domain dialogs (own overlays) */}
+      <DeploymentDetailsDialog />
+      <DomainSetupDialog />
     </div>
   );
 }

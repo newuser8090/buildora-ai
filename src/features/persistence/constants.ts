@@ -86,8 +86,10 @@ export const DATABASE_NAME = "buildora";
  *       durable conflict records).
  *   6 — added deployments store (Phase P7 publishing: deployment history
  *       lives OUTSIDE ProjectSchema).
+ *   7 — added deploymentDomains store (Phase P8 publishing: custom domain
+ *       records live OUTSIDE ProjectSchema).
  */
-export const DATABASE_VERSION = 6;
+export const DATABASE_VERSION = 7;
 
 /** Object store for project records. */
 export const STORE_PROJECTS = "projects";
@@ -134,6 +136,13 @@ export const STORE_CLOUD_SYNC_CONFLICTS = "cloudSyncConflicts";
  * secrets are ever stored here.
  */
 export const STORE_DEPLOYMENTS = "deployments";
+
+/**
+ * Custom domain records (database version 7, Phase P8). Domains are
+ * deployment infrastructure, not site content — stored OUTSIDE ProjectSchema.
+ * The provider is the remote source of truth; this store is local history.
+ */
+export const STORE_DEPLOYMENT_DOMAINS = "deploymentDomains";
 
 /** Key for the active project ID in the metadata store. */
 export const METADATA_KEY_ACTIVE_PROJECT = "activeProjectId";
