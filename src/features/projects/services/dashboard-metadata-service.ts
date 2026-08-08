@@ -86,4 +86,57 @@ export class DashboardMetadataService {
   ): Promise<{ success: true } | { success: false; error: PersistenceError }> {
     return this.adapter.removeDashboardMetadata(projectId);
   }
+
+  // -----------------------------------------------------------------------
+  // Archive (Phase P9)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Set the archived state for a project (Phase P9). Archived projects are
+   * hidden from the main dashboard grid and listed in the Archived view.
+   * Archiving never deletes the project or its remote deployments.
+   */
+  async setArchived(
+    projectId: string,
+    isArchived: boolean,
+  ): Promise<{ success: true } | { success: false; error: PersistenceError }> {
+    try {
+      const current = await this.adapter.getDashboardMetadata(projectId);
+      const metadata = current.success
+        ? { ...current.metadata, isArchived }
+        : { isArchived };
+      return this.adapter.setDashboardMetadata(projectId, metadata);
+    } catch (err) {
+      return {
+        success: false,
+        error: {
+          code: "UNKNOWN_PERSISTENCE_ERROR",
+          message: err instanceof Error ? err.message : "Failed to update archive state",
+        },
+      };
+    }
+  }
+
+  /**
+   * Archive state for all projects in a list.
+   * Returns a map of project ID to archived state.
+   */
+  async getArchivedMap(
+    projectIds: string[],
+  ): Promise<Map<string, boolean>> {
+    const archivedMap = new Map<string, boolean>();
+    await Promise.all(
+      projectIds.map(async (id) => {
+        try {
+          const result = await this.adapter.getDashboardMetadata(id);
+          if (result.success && result.metadata?.isArchived) {
+            archivedMap.set(id, true);
+          }
+        } catch {
+          // Metadata unavailable — proceed without archive state.
+        }
+      }),
+    );
+    return archivedMap;
+  }
 }

@@ -32,6 +32,8 @@ const CATEGORY_TABS: (TemplateCategory | "all")[] = [
   "commerce",
   "food",
   "landing-page",
+  "event",
+  "personal",
 ];
 
 export function TemplateGallery({

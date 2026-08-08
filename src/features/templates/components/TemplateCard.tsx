@@ -102,9 +102,23 @@ function PreviewFrame({ template }: { template: BuildoraTemplate }) {
           {badge}
         </span>
       )}
+      {template.source === "personal" && (
+        <span
+          className="absolute left-1.5 top-5 rounded-full bg-white/20 px-1.5 py-0.5 text-[9px] font-semibold text-white backdrop-blur-sm"
+          data-testid="personal-template-badge"
+        >
+          Yours
+        </span>
+      )}
     </div>
   );
 }
+
+const DIFFICULTY_LABELS: Record<string, string> = {
+  beginner: "Beginner friendly",
+  intermediate: "Intermediate",
+  advanced: "Advanced",
+};
 
 export function TemplateCard({
   template,
@@ -146,8 +160,15 @@ export function TemplateCard({
             >
               {template.name}
             </h3>
-            <span className="mt-0.5 inline-block rounded bg-base px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-text-dim">
-              {TEMPLATE_CATEGORY_LABELS[template.category]}
+            <span className="mt-0.5 inline-flex items-center gap-1.5">
+              <span className="inline-block rounded bg-base px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-text-dim">
+                {TEMPLATE_CATEGORY_LABELS[template.category]}
+              </span>
+              {template.difficulty && (
+                <span className="inline-block rounded bg-base px-1.5 py-0.5 text-[10px] font-medium text-text-dim" data-testid="template-difficulty">
+                  {DIFFICULTY_LABELS[template.difficulty]}
+                </span>
+              )}
             </span>
           </div>
           <button

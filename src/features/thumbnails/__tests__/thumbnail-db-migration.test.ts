@@ -276,7 +276,11 @@ describe("IndexedDB v1 → latest migration", () => {
     expect(after).toContain(STORE_CLOUD_SYNC_CONFLICTS);
     expect(after).toContain(STORE_DEPLOYMENTS);
     expect(after).toContain(STORE_DEPLOYMENT_DOMAINS);
-    expect(after).toHaveLength(11);
+    // Phase P9 adds the personalTemplates + recoverySnapshots stores via the
+    // same non-destructive upgrade handler.
+    expect(after).toContain("personalTemplates");
+    expect(after).toContain("recoverySnapshots");
+    expect(after).toHaveLength(13);
   });
 
   it("preserves existing project records and revision after upgrade", async () => {
@@ -534,10 +538,8 @@ describe("IndexedDB v1 → latest migration", () => {
         STORE_DEPLOYMENT_DOMAINS,
       ]),
     );
-    // Exactly the eleven known stores (Phase P4 myBlocks + Phase P5 thumbnail
-    // and collection stores + Phase P6 cloud sync stores + Phase P7
-    // deployments store + Phase P8 deploymentDomains store are created
-    // non-destructively) — no stray stores.
+    // Exactly the thirteen known stores (Phase P4–P8 stores plus the Phase P9
+    // personalTemplates + recoverySnapshots stores) — no stray stores.
     expect(
       names.filter(
         (n) =>
@@ -553,9 +555,11 @@ describe("IndexedDB v1 → latest migration", () => {
             "cloudSyncConflicts",
             "deployments",
             "deploymentDomains",
+            "personalTemplates",
+            "recoverySnapshots",
           ].includes(n),
       ),
     ).toHaveLength(0);
-    expect(names).toHaveLength(11);
+    expect(names).toHaveLength(13);
   });
 });

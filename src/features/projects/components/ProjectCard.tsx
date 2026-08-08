@@ -16,6 +16,9 @@ import {
   Star,
   Download,
   ImagePlus,
+  Archive,
+  ArchiveRestore,
+  LayoutTemplate,
 } from "lucide-react";
 import { cn } from "@/utils/cn";
 import { formatProjectDate } from "../utils/format-project-date";
@@ -36,6 +39,10 @@ export interface ProjectCardProps {
   onDuplicate: (projectId: string) => void;
   onDelete: (projectId: string) => void;
   onTogglePin: (projectId: string) => void;
+  /** Phase P9 — save this project as a personal template. */
+  onSaveAsTemplate?: (project: DashboardProject) => void;
+  /** Phase P9 — archive / restore toggle. */
+  onToggleArchive?: (projectId: string) => void;
   onExport?: (projectId: string) => void;
   /** Manual thumbnail regeneration (menu action). Optional. */
   onRegeneratePreview?: (projectId: string) => void;
@@ -82,6 +89,8 @@ export function ProjectCard({
   onDuplicate,
   onDelete,
   onTogglePin,
+  onSaveAsTemplate,
+  onToggleArchive,
   onExport,
   onRegeneratePreview,
   isRegeneratingPreview,
@@ -301,6 +310,20 @@ export function ProjectCard({
                   <Copy className="h-3.5 w-3.5 text-text-dim" />
                   Duplicate
                 </button>
+                {onSaveAsTemplate && (
+                  <>
+                    <div className="mx-2 my-1 h-px bg-border" role="separator" />
+                    <button
+                      onClick={() => { onSaveAsTemplate(project); setMenuOpen(false); }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-xs text-text-primary transition-colors hover:bg-base"
+                      role="menuitem"
+                      type="button"
+                    >
+                      <LayoutTemplate className="h-3.5 w-3.5 text-text-dim" />
+                      Save as template
+                    </button>
+                  </>
+                )}
                 <div className="mx-2 my-1 h-px bg-border" role="separator" />
                 <button
                   onClick={() => { onTogglePin(project.id); setMenuOpen(false); }}
@@ -346,6 +369,29 @@ export function ProjectCard({
                     >
                       <Download className="h-3.5 w-3.5 text-text-dim" />
                       Export
+                    </button>
+                  </>
+                )}
+                {onToggleArchive && (
+                  <>
+                    <div className="mx-2 my-1 h-px bg-border" role="separator" />
+                    <button
+                      onClick={() => { onToggleArchive(project.id); setMenuOpen(false); }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-xs text-text-primary transition-colors hover:bg-base"
+                      role="menuitem"
+                      type="button"
+                    >
+                      {project.isArchived ? (
+                        <>
+                          <ArchiveRestore className="h-3.5 w-3.5 text-text-dim" />
+                          Restore
+                        </>
+                      ) : (
+                        <>
+                          <Archive className="h-3.5 w-3.5 text-text-dim" />
+                          Archive
+                        </>
+                      )}
                     </button>
                   </>
                 )}

@@ -15,6 +15,8 @@ import {
   AlertCircle,
   RefreshCw,
   Download,
+  Archive,
+  LayoutTemplate,
 } from "lucide-react";
 import { useProjectsDashboard } from "@/features/projects/hooks/useProjectsDashboard";
 import { ProjectCard } from "@/features/projects/components/ProjectCard";
@@ -25,6 +27,7 @@ import { downloadProjectFile } from "@/features/projects/utils/download-project-
 import { ConfirmDialog } from "@/features/projects/components/ConfirmDialog";
 import { RenameDialog } from "@/features/projects/components/RenameDialog";
 import type { ProjectSortMode, DashboardProject } from "@/features/projects/types";
+import type { TemplateCategory } from "@/features/templates/types";
 import { cn } from "@/utils/cn";
 import { useGuidedBuilderStore } from "@/features/guided-builder/store/guided-builder-store";
 import { useGuidedBuilderInit } from "@/features/guided-builder/hooks/useGuidedBuilderInit";
@@ -37,6 +40,11 @@ import type {
 } from "@/features/guided-builder/types";
 import { useDashboardPublishStatuses } from "@/features/publishing/hooks/useDashboardPublishStatuses";
 import { removePublishedSite } from "@/features/publishing/services/remove-published-site";
+import { PersonalTemplatesPanel } from "@/features/personal-templates/components/PersonalTemplatesPanel";
+import { SaveAsTemplateDialog } from "@/features/personal-templates/components/SaveAsTemplateDialog";
+import { getPersonalTemplateService } from "@/features/personal-templates/services/personal-template-service";
+import { getProjectController } from "@/features/persistence/services/project-controller";
+import type { Project } from "@/types/project";
 
 // Default project name for the onboarding category.
 const ONBOARDING_DEFAULT_NAMES: Record<OnboardingProjectCategory, string> = {
@@ -84,6 +92,9 @@ export default function DashboardPage() {
     togglePin,
     setSearchQuery,
     setSortMode,
+    showArchived,
+    setShowArchived,
+    setProjectArchived,
     clearError,
     parseImport,
     commitImport,
@@ -111,6 +122,57 @@ export default function DashboardPage() {
   }, []);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
+
+  // ---- Phase P9: personal templates ----
+  const [personalTemplatesOpen, setPersonalTemplatesOpen] = useState(false);
+  const [saveAsTemplateProject, setSaveAsTemplateProject] = useState<Project | null>(null);
+  const [saveAsTemplateLoading, setSaveAsTemplateLoading] = useState(false);
+
+  const handleSaveAsTemplateRequest = useCallback(async (dashboardProject: DashboardProject) => {
+    if (saveAsTemplateLoading) return;
+    setSaveAsTemplateLoading(true);
+    const controller = getProjectController();
+    if (!controller) {
+      setSaveAsTemplateLoading(false);
+      return;
+    }
+    // Load the FULL project (the dashboard card only carries a summary).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const loadResult = await (controller as any).adapter.loadProject(dashboardProject.id);
+    setSaveAsTemplateLoading(false);
+    if (loadResult.success) {
+      setSaveAsTemplateProject(loadResult.project);
+    }
+  }, [saveAsTemplateLoading]);
+
+  const handleSaveAsTemplateSubmit = useCallback(
+    async (input: { name: string; description: string; category: TemplateCategory; tags: string[] }) => {
+      if (!saveAsTemplateProject) {
+        return {
+          ok: false as const,
+          error: { code: "PERSONAL_TEMPLATE_INVALID_INPUT" as const, message: "No project selected." },
+        };
+      }
+      const result = await getPersonalTemplateService().saveAsTemplate({
+        project: saveAsTemplateProject,
+        name: input.name,
+        description: input.description,
+        category: input.category,
+        tags: input.tags,
+      });
+      return result;
+    },
+    [saveAsTemplateProject],
+  );
+
+  const handleUsePersonalTemplate = useCallback(
+    async (templateId: string, defaultName: string) => {
+      const result = await createProjectFromTemplate(templateId, defaultName);
+      if (!result.ok) return { ok: false as const, error: result.error };
+      return { ok: true as const };
+    },
+    [createProjectFromTemplate],
+  );
 
   // Phase N: first-run guided onboarding (new users / empty dashboard).
   useGuidedBuilderInit();
@@ -317,6 +379,14 @@ export default function DashboardPage() {
 
         <div className="flex items-center gap-2">
           <button
+            onClick={() => setPersonalTemplatesOpen(true)}
+            className="flex h-9 items-center gap-2 rounded-lg border border-border px-4 text-sm font-medium text-text-muted transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
+            type="button"
+          >
+            <LayoutTemplate className="h-4 w-4" />
+            My Templates
+          </button>
+          <button
             onClick={() => setImportDialogOpen(true)}
             className="flex h-9 items-center gap-2 rounded-lg border border-border px-4 text-sm font-medium text-text-muted transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
             type="button"
@@ -359,6 +429,23 @@ export default function DashboardPage() {
           </div>
 
           <div className="flex items-center gap-3">
+            {/* Archived toggle (Phase P9) */}
+            <button
+              onClick={() => setShowArchived(!showArchived)}
+              className={cn(
+                "flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs transition-all duration-200 active:scale-95",
+                showArchived
+                  ? "border-accent/40 bg-accent/10 text-accent"
+                  : "border-border text-text-dim hover:bg-card hover:text-text-primary",
+              )}
+              aria-pressed={showArchived}
+              aria-label="Show archived projects"
+              type="button"
+            >
+              <Archive className="h-3.5 w-3.5" />
+              {showArchived ? "Projects" : "Archived"}
+            </button>
+
             {/* Project count */}
             <span className="text-xs text-text-dim">
               {projects.length} project{projects.length !== 1 ? "s" : ""}
@@ -518,7 +605,27 @@ export default function DashboardPage() {
           )}
 
           {/* Empty state */}
-          {!isLoading && projects.length === 0 && (
+          {!isLoading && projects.length === 0 && showArchived && (
+            <div className="flex h-full flex-col items-center justify-center text-center">
+              <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-card">
+                <Archive className="h-7 w-7 text-text-dim" />
+              </div>
+              <h2 className="mt-4 text-lg font-semibold text-text-primary">Nothing archived yet</h2>
+              <p className="mt-1 text-sm text-text-muted">
+                Archive a project to tuck it away — you can always bring it back.
+              </p>
+              <button
+                onClick={() => setShowArchived(false)}
+                className="mt-4 text-sm font-medium text-accent hover:text-accent-hover"
+                type="button"
+              >
+                Back to projects
+              </button>
+            </div>
+          )}
+
+          {/* Empty state */}
+          {!isLoading && projects.length === 0 && !showArchived && (
             <div className="flex h-full flex-col items-center justify-center text-center">
               {searchQuery.trim() ? (
                 <>
@@ -602,6 +709,8 @@ export default function DashboardPage() {
                     if (p) setDeleteTarget(p);
                   }}
                   onTogglePin={togglePin}
+                  onSaveAsTemplate={handleSaveAsTemplateRequest}
+                  onToggleArchive={(pid) => setProjectArchived(pid, !projects.find((p) => p.id === pid)?.isArchived)}
                   onExport={handleExport}
                   onRegeneratePreview={handleRegeneratePreview}
                   isRegeneratingPreview={regeneratingId === project.id}
@@ -695,6 +804,21 @@ export default function DashboardPage() {
         open={newProjectOpen}
         onClose={() => setNewProjectOpen(false)}
         onCreate={createProjectFromTemplate}
+      />
+
+      {/* ---- Phase P9: Personal Templates ---- */}
+      <PersonalTemplatesPanel
+        open={personalTemplatesOpen}
+        onClose={() => setPersonalTemplatesOpen(false)}
+        onUse={handleUsePersonalTemplate}
+      />
+
+      {/* ---- Phase P9: Save-as-Template ---- */}
+      <SaveAsTemplateDialog
+        open={saveAsTemplateProject !== null}
+        project={saveAsTemplateProject}
+        onClose={() => setSaveAsTemplateProject(null)}
+        onSave={handleSaveAsTemplateSubmit}
       />
 
       {/* ---- First-run onboarding (Phase N) ---- */}

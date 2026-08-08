@@ -7,6 +7,7 @@
 // ---------------------------------------------------------------------------
 
 import { create } from "zustand";
+import { markPerf } from "@/features/perf/perf-instrumentation";
 
 export type PreviewDevice = "phone" | "tablet" | "desktop" | "full";
 
@@ -40,7 +41,14 @@ export const usePreviewStore = create<PreviewState>()((set) => ({
   open: false,
   device: "desktop",
   route: "/",
-  openPreview: (route) => set({ open: true, route: route ?? "/" }),
+  openPreview: (route) => {
+    try {
+      markPerf("preview-open");
+    } catch {
+      // Instrumentation is best-effort.
+    }
+    set({ open: true, route: route ?? "/" });
+  },
   closePreview: () => set({ open: false, route: "/", device: "desktop" }),
   setDevice: (device) => set({ device }),
   navigate: (route) => set({ route }),

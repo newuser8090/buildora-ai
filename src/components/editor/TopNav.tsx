@@ -16,6 +16,9 @@ import {
   Eye,
   Rocket,
   Settings2,
+  LayoutTemplate,
+  Keyboard,
+  History,
 } from "lucide-react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { useMyBlocksUiStore } from "@/features/my-blocks/store/my-blocks-ui-store";
@@ -35,6 +38,10 @@ import { useLaunchCenterStore } from "@/features/launch-readiness/store/launch-c
 import { useSiteSettingsUiStore } from "@/features/site-settings/store/site-settings-ui-store";
 import { usePublishing } from "@/features/publishing/hooks/usePublishing";
 import { usePublishingStore } from "@/features/publishing/store/publishing-store";
+import { usePersonalTemplatesUiStore } from "@/features/personal-templates/store/personal-templates-ui-store";
+import { useHelpUiStore } from "@/features/help/store/help-ui-store";
+import { useRecoveryUiStore } from "@/features/recovery/store/recovery-ui-store";
+import { notifyActionFeedback } from "@/features/feedback/action-feedback";
 
 const iconButton =
   "flex h-8 w-8 items-center justify-center rounded-lg text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95";
@@ -49,6 +56,13 @@ export function TopNav() {
   const [exportSiteError, setExportSiteError] = useState<string | null>(null);
   const [assetManagerOpen, setAssetManagerOpen] = useState(false);
   const copyNotice = usePublishingStore((s) => s.copyNotice);
+
+  // Phase P9 — save this project as a personal template (from the editor).
+  const openSaveTemplate = () => {
+    usePersonalTemplatesUiStore.getState().openSaveDialog(project);
+  };
+  const openShortcuts = () => useHelpUiStore.getState().openShortcutsDialog();
+  const openBackups = () => useRecoveryUiStore.getState().openRecovery(project.id);
 
   // Guards double exports even before React re-renders the disabled state.
   const exportingRef = useRef(false);
@@ -274,7 +288,13 @@ export function TopNav() {
         <button
           data-testid="undo-button"
           className={cn(canUndo ? iconButton : iconButtonDisabled)}
-          onClick={undo}
+          onClick={() => {
+            undo();
+            notifyActionFeedback("Change undone", {
+              actionLabel: "Redo",
+              onAction: () => useEditorStore.getState().redo(),
+            });
+          }}
           disabled={!canUndo}
           title="Undo (Ctrl+Z)"
           aria-label="Undo"
@@ -285,7 +305,13 @@ export function TopNav() {
         <button
           data-testid="redo-button"
           className={cn(canRedo ? iconButton : iconButtonDisabled)}
-          onClick={redo}
+          onClick={() => {
+            redo();
+            notifyActionFeedback("Change restored", {
+              actionLabel: "Undo",
+              onAction: () => useEditorStore.getState().undo(),
+            });
+          }}
           disabled={!canRedo}
           title="Redo (Ctrl+Shift+Z)"
           aria-label="Redo"
@@ -394,6 +420,38 @@ export function TopNav() {
           <span className="hidden sm:inline text-xs">
             {publishStatus === "changes-unpublished" ? "Publish updates" : "Publish"}
           </span>
+        </button>
+
+        {/* Phase P9: save-as-template + help + backups */}
+        <button
+          data-testid="topnav-save-template-button"
+          onClick={openSaveTemplate}
+          className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-sm text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
+          title="Save this project as a template"
+          type="button"
+        >
+          <LayoutTemplate className="h-4 w-4" />
+          <span className="hidden sm:inline text-xs">Template</span>
+        </button>
+        <button
+          data-testid="topnav-help-button"
+          onClick={openShortcuts}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
+          title="Keyboard shortcuts and help (Ctrl/⌘+K for commands)"
+          aria-label="Keyboard shortcuts and help"
+          type="button"
+        >
+          <Keyboard className="h-4 w-4" />
+        </button>
+        <button
+          data-testid="topnav-recovery-button"
+          onClick={openBackups}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
+          title="Backups and recovery"
+          aria-label="Backups and recovery"
+          type="button"
+        >
+          <History className="h-4 w-4" />
         </button>
 
         <button

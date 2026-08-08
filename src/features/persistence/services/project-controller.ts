@@ -31,6 +31,7 @@ import { INITIAL_REVISION, AUTOSAVE_DEBOUNCE_MS } from "../constants";
 import { validateProjectName } from "@/features/projects/utils/validate-project-name";
 import { TemplateProjectFactory } from "@/features/templates/services/template-project-factory";
 import { registerDefaultTemplates } from "@/features/templates/registry/register-default-templates";
+import { recordPerf } from "@/features/perf/perf-instrumentation";
 
 // ---------------------------------------------------------------------------
 // Controller
@@ -61,6 +62,33 @@ export class ProjectController {
         project: snapshot,
         projectId: snapshot.id,
         revision: store.revision,
+      });
+    } catch {
+      // Never break the save flow.
+    }
+  }
+
+  /**
+   * Phase P9 — after a successful persisted save, capture a bounded
+   * last-known-good recovery snapshot (cooldown-gated; non-blocking). A
+   * backup failure must never affect saveStatus, revision, or dirty state.
+   */
+  private _scheduleRecoveryAfterSave(): void {
+    try {
+      const store = useEditorStore.getState();
+      if (!store.project || !store.project.id) return;
+      const snapshot: Project = JSON.parse(JSON.stringify(store.project));
+      void (async () => {
+        const { getRecoveryService } = await import(
+          "@/features/recovery/services/recovery-service"
+        );
+        await getRecoveryService().capture({
+          project: snapshot,
+          revision: store.revision,
+          reason: "autosave",
+        });
+      })().catch(() => {
+        // Never break the save flow.
       });
     } catch {
       // Never break the save flow.
@@ -226,6 +254,15 @@ export class ProjectController {
     // Default templates must be registered exactly once (idempotent).
     registerDefaultTemplates();
 
+    // Phase P9: personal templates are stored locally and build a fresh
+    // Project with brand-new IDs. Deployments/domains/sync state are never
+    // copied (they live outside ProjectSchema).
+    const personal = await this._createFromPersonalTemplateIfApplicable(
+      request.templateId,
+      request.projectName,
+    );
+    if (personal) return personal;
+
     // Build the project in memory FIRST — pure and deterministic, never
     // touches persistence. Any factory failure (TEMPLATE_NOT_FOUND,
     // INVALID_PROJECT_NAME, TEMPLATE_VALIDATION_FAILED, …) returns before
@@ -287,6 +324,80 @@ export class ProjectController {
     });
   }
 
+  /**
+   * Phase P9 — resolve a personal-template creation request to the same
+   * persist + activate lifecycle as built-ins. Returns null when the
+   * templateId is not a personal template.
+   */
+  private async _createFromPersonalTemplateIfApplicable(
+    templateId: string,
+    projectName: string,
+  ): Promise<ProjectTransitionResult<{ projectId: string }> | null> {
+    if (!templateId.startsWith("personal-")) return null;
+
+    const prep = await this._prepareForProjectTransition();
+    if (!prep.success) return prep as ProjectTransitionResult<{ projectId: string }>;
+
+    let project: Project;
+    try {
+      const { getPersonalTemplateService } = await import(
+        "@/features/personal-templates/services/personal-template-service"
+      );
+      const created = await getPersonalTemplateService().createProjectFromPersonalTemplate(
+        templateId,
+        projectName,
+      );
+      if (!created.ok) {
+        return {
+          success: false,
+          code: "PROJECT_CREATE_FAILED",
+          error: {
+            code: "UNKNOWN_PERSISTENCE_ERROR",
+            message: created.error.message,
+            cause: created.error.code,
+            retryable: created.error.code === "PERSONAL_TEMPLATE_NOT_FOUND" ? false : true,
+          },
+        };
+      }
+      project = created.project;
+    } catch (err) {
+      return {
+        success: false,
+        code: "PROJECT_CREATE_FAILED",
+        error: {
+          code: "UNKNOWN_PERSISTENCE_ERROR",
+          message: "This template could not be used.",
+          cause: err instanceof Error ? err.message : String(err),
+        },
+      };
+    }
+
+    const revision = INITIAL_REVISION;
+    return this._runTransition<{ projectId: string }>(async () => {
+      const saveResult = await this.adapter.saveProject({ project, revision });
+      if (!saveResult.success) {
+        return { success: false, code: "PROJECT_CREATE_FAILED", error: saveResult.error };
+      }
+
+      const activeResult = await this.adapter.setActiveProjectId(project.id);
+      if (!activeResult.success) {
+        return { success: false, code: "ACTIVE_PROJECT_UPDATE_FAILED", error: activeResult.error };
+      }
+
+      this._suppressNextDirty = true;
+      useEditorStore.getState().hydrateProject(project, revision);
+      useEditorStore.getState().setLastSavedAt(revision === 1 ? new Date().toISOString() : null);
+
+      this._createCoordinator();
+      this._subscribeCoordinator();
+      this._subscribeStore();
+
+      this._hydrated = true;
+      this._scheduleThumbnailAfterSave();
+      return { success: true, data: { projectId: project.id } };
+    });
+  }
+
   // -----------------------------------------------------------------------
   // Open Project
   // -----------------------------------------------------------------------
@@ -312,6 +423,20 @@ export class ProjectController {
       this._suppressNextDirty = true;
       useEditorStore.getState().hydrateProject(result.project, result.revision);
       useEditorStore.getState().setLastSavedAt(result.savedAt);
+
+      // Phase P9 — transient performance measurement (block count is a safe
+      // deterministic operation count; never wall-clock-asserted in tests).
+      try {
+        recordPerf("editor-hydration", 0, {
+          count: result.project.pages.reduce(
+            (n, p) => n + p.sections.length,
+            0,
+          ),
+          detail: "open-project",
+        });
+      } catch {
+        // Instrumentation is best-effort.
+      }
 
       // Start fresh coordinator
       this._createCoordinator();
@@ -749,6 +874,7 @@ export class ProjectController {
             // Autosave/manual-save success → schedule thumbnail generation
             // (non-blocking; a thumbnail failure never changes saveStatus).
             this._scheduleThumbnailAfterSave();
+            this._scheduleRecoveryAfterSave();
           }
           break;
         }
@@ -863,7 +989,18 @@ export class ProjectController {
   }
 
   private async _hydrateExistingProject(projectId: string): Promise<void> {
+    const start = performance.now();
     const result = await this.adapter.loadProject(projectId);
+    try {
+      recordPerf("editor-hydration", performance.now() - start, {
+        count: result.success
+          ? result.project.pages.reduce((n, p) => n + p.sections.length, 0)
+          : 0,
+        detail: "initial-hydrate",
+      });
+    } catch {
+      // Instrumentation is best-effort.
+    }
 
     if (!result.success) {
       // If the project doesn't exist in storage, create a fresh one

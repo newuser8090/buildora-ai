@@ -14,6 +14,8 @@ import { agencyTemplate } from "../templates/agency-template";
 import { restaurantTemplate } from "../templates/restaurant-template";
 import { ecommerceTemplate } from "../templates/ecommerce-template";
 import { startupTemplate } from "../templates/startup-template";
+import { eventTemplate } from "../templates/event-template";
+import { personalProfileTemplate } from "../templates/personal-profile-template";
 import type { BuildoraTemplate } from "../types";
 
 const DEFAULT_TEMPLATES: BuildoraTemplate[] = [
@@ -24,6 +26,8 @@ const DEFAULT_TEMPLATES: BuildoraTemplate[] = [
   agencyTemplate,
   restaurantTemplate,
   ecommerceTemplate,
+  eventTemplate,
+  personalProfileTemplate,
 ];
 
 let registered = false;
