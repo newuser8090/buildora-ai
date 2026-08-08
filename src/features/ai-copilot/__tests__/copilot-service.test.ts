@@ -23,6 +23,7 @@ import {
   applyCopilotPlan,
   handleCopilotMessage,
   applyElementSuggestion,
+  requestElementSuggestion,
   type CopilotServiceDeps,
 } from "../services/copilot-service";
 import { hydrateEditor, makePlan, makeOperation, MOCK_PROJECT, REVISION } from "./helpers";
@@ -454,5 +455,83 @@ describe("applyElementSuggestion — quick actions", () => {
     if (result.ok) return;
     expect(result.error.code).toBe("COPILOT_PLAN_STALE");
     expect(JSON.stringify(useEditorStore.getState().project)).toBe(before);
+  });
+});
+
+describe("style notes → instruction suffix (Phase P11)", () => {
+  function styleInput(overrides: Record<string, unknown> = {}) {
+    return {
+      instruction: "Make the hero friendlier",
+      scopeChoice: "auto" as const,
+      project: MOCK_PROJECT,
+      revision: REVISION,
+      selectedPageId: "page-1",
+      selectedSectionId: "s-hero",
+      selectedField: null,
+      readiness: null,
+      device: "desktop" as const,
+      messages: [] as CopilotMessage[],
+      styleNotes: ["keep it friendly", "use British spelling"],
+      ...overrides,
+    };
+  }
+
+  it("appends the bounded style suffix to a plan-edit instruction", async () => {
+    const requestPlan = vi.fn().mockResolvedValue(okPlanResult(makePlan()));
+    const outcome = await handleCopilotMessage(
+      styleInput(),
+      depsWith(requestPlan),
+    );
+    expect(outcome.kind).toBe("plan-ready");
+    const sent = requestPlan.mock.calls[0][0].instruction as string;
+    expect(sent).toContain("keep it friendly");
+    expect(sent).toContain("use British spelling");
+  });
+
+  it("keeps the raw instruction in lastRequest so Regenerate re-applies the suffix", async () => {
+    const requestPlan = vi.fn().mockResolvedValue(okPlanResult(makePlan()));
+    const outcome = await handleCopilotMessage(
+      styleInput(),
+      depsWith(requestPlan),
+    );
+    if (outcome.kind !== "plan-ready") throw new Error("expected plan-ready");
+    expect(outcome.lastRequest.instruction).toBe("Make the hero friendlier");
+    expect(outcome.lastRequest.instruction).not.toContain("keep it friendly");
+  });
+
+  it("does not append style notes for ASK intents (no provider call)", async () => {
+    const requestPlan = vi.fn();
+    const outcome = await handleCopilotMessage(
+      styleInput({ instruction: "Why does this page feel crowded?" }),
+      depsWith(requestPlan),
+    );
+    expect(outcome.kind).toBe("ask");
+    expect(requestPlan).not.toHaveBeenCalled();
+  });
+
+  it("passes the style suffix to element quick-action suggestions", async () => {
+    const request = vi.fn().mockResolvedValue({
+      suggestion: {
+        projectId: "proj-1",
+        baseRevision: REVISION,
+        sectionId: "s-hero",
+        fieldPath: ["headline"],
+        suggestedValue: "Friendlier headline",
+        reason: "style",
+      },
+    });
+    const result = await requestElementSuggestion(
+      {
+        instruction: "Rewrite this text",
+        field: heroField(),
+        project: MOCK_PROJECT,
+        revision: REVISION,
+        styleNotes: ["keep it friendly"],
+      },
+      { requestElementSuggestion: request },
+    );
+    expect(result.ok).toBe(true);
+    const sent = request.mock.calls[0][0].instruction as string;
+    expect(sent).toContain("keep it friendly");
   });
 });

@@ -18,7 +18,7 @@ import type { FieldPathSegment } from "@/features/inline-editing/types";
 import type { Project, Viewport } from "@/types/project";
 import type { LaunchCheck, LaunchReadinessReport } from "@/features/launch-readiness/types";
 import type { CopilotMessage, CopilotScope } from "../types";
-import { COPILOT_LIMITS } from "../constants";
+import { COPILOT_LIMITS, COPILOT_MEMORY_LIMITS } from "../constants";
 
 // ---------------------------------------------------------------------------
 // Caps
@@ -80,6 +80,8 @@ export interface CopilotContext {
   device?: Viewport;
   conversationTail: string[];
   instruction: string;
+  /** Phase P11 — explicit on-device style notes (bounded, capped). */
+  styleNotes?: string[];
 }
 
 export interface BuildCopilotContextInput {
@@ -98,6 +100,8 @@ export interface BuildCopilotContextInput {
   device?: Viewport;
   messages?: CopilotMessage[];
   instruction: string;
+  /** Phase P11 — explicit on-device style notes (bounded, capped). */
+  styleNotes?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -181,6 +185,12 @@ function reduceContext(ctx: CopilotContext, maxBytes: number): CopilotContext {
   if (ctx.conversationTail.length > 0) {
     ctx = { ...ctx, conversationTail: [] };
   }
+  if (JSON.stringify(ctx).length <= maxBytes) return ctx;
+
+  // 5. Drop style notes last (smallest, user-authored).
+  if (ctx.styleNotes && ctx.styleNotes.length > 0) {
+    ctx = { ...ctx, styleNotes: undefined };
+  }
   return ctx;
 }
 
@@ -215,6 +225,15 @@ export function buildCopilotContext(input: BuildCopilotContextInput): CopilotCon
 
   // ---- Device ----
   if (input.device) context.device = input.device;
+
+  // ---- Style notes (Phase P11) — bounded, capped, never more than the limit ----
+  if (input.styleNotes && input.styleNotes.length > 0) {
+    context.styleNotes = input.styleNotes
+      .slice(0, COPILOT_MEMORY_LIMITS.maxStyleNotesInContext)
+      .map((n) => cap(n, COPILOT_MEMORY_LIMITS.maxStyleNoteLength))
+      .filter(Boolean);
+    if (context.styleNotes.length === 0) delete context.styleNotes;
+  }
 
   // ---- Readiness digest (top findings only) ----
   if (input.readiness) {

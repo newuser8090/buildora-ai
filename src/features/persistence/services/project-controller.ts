@@ -17,6 +17,7 @@
 
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { scheduleThumbnailForSave, removeThumbnailForProject } from "@/features/thumbnails/services/thumbnail-save-bridge";
+import { lazyCopilotMemoryCleanup } from "@/features/ai-copilot/memory/services/lazy-cleanup";
 import { AutosaveCoordinator } from "./autosave-coordinator";
 import type {
   ProjectPersistenceAdapter,
@@ -630,6 +631,8 @@ export class ProjectController {
         // Non-blocking thumbnail cleanup — must never block the delete or
         // make a deleted project reappear.
         removeThumbnailForProject(projectId);
+        // Phase P11 — best-effort removal of the project's Copilot memory.
+        void lazyCopilotMemoryCleanup(projectId);
         return { success: true };
       } catch (err) {
         const error = toControllerError(err, projectId);
@@ -669,6 +672,8 @@ export class ProjectController {
       } else {
         // Non-blocking thumbnail cleanup for the deleted project.
         removeThumbnailForProject(projectId);
+        // Phase P11 — best-effort removal of the project's Copilot memory.
+        void lazyCopilotMemoryCleanup(projectId);
       }
 
       // Step 3: Hydrate the replacement

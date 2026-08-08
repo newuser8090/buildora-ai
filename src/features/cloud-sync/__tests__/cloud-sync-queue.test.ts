@@ -55,10 +55,11 @@ describe("CloudSyncQueue", () => {
       "deploymentDomains",
       "personalTemplates",
       "recoverySnapshots",
+      "copilotMemory",
     ]) {
       expect(names).toContain(expected);
     }
-    expect(names).toHaveLength(13);
+    expect(names).toHaveLength(14);
     await queue.clearForTests();
   });
 

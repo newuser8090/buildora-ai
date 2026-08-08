@@ -280,7 +280,7 @@ describe("IndexedDB v1 → latest migration", () => {
     // same non-destructive upgrade handler.
     expect(after).toContain("personalTemplates");
     expect(after).toContain("recoverySnapshots");
-    expect(after).toHaveLength(13);
+    expect(after).toHaveLength(14);
   });
 
   it("preserves existing project records and revision after upgrade", async () => {
@@ -536,10 +536,13 @@ describe("IndexedDB v1 → latest migration", () => {
         STORE_CLOUD_SYNC_CONFLICTS,
         STORE_DEPLOYMENTS,
         STORE_DEPLOYMENT_DOMAINS,
+        "personalTemplates",
+        "recoverySnapshots",
+        "copilotMemory",
       ]),
     );
-    // Exactly the thirteen known stores (Phase P4–P8 stores plus the Phase P9
-    // personalTemplates + recoverySnapshots stores) — no stray stores.
+    // Exactly the fourteen known stores (Phase P4–P9 stores plus the Phase
+    // P11 copilotMemory store) — no stray stores.
     expect(
       names.filter(
         (n) =>
@@ -557,9 +560,10 @@ describe("IndexedDB v1 → latest migration", () => {
             "deploymentDomains",
             "personalTemplates",
             "recoverySnapshots",
+            "copilotMemory",
           ].includes(n),
       ),
     ).toHaveLength(0);
-    expect(names).toHaveLength(13);
+    expect(names).toHaveLength(14);
   });
 });

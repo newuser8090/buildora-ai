@@ -91,8 +91,10 @@ export const DATABASE_NAME = "buildora";
  *   8 — added personalTemplates store (Phase P9: saved personal templates,
  *       local-only) and recoverySnapshots store (Phase P9: bounded draft
  *       recovery history per project).
+ *   9 — added copilotMemory store (Phase P11: bounded per-project AI Copilot
+ *       conversation + style notes, local-only).
  */
-export const DATABASE_VERSION = 8;
+export const DATABASE_VERSION = 9;
 
 /** Object store for project records. */
 export const STORE_PROJECTS = "projects";
@@ -160,6 +162,13 @@ export const STORE_PERSONAL_TEMPLATES = "personalTemplates";
  * taken after successful saves so a corrupted write can be recovered.
  */
 export const STORE_RECOVERY_SNAPSHOTS = "recoverySnapshots";
+
+/**
+ * Per-project AI Copilot memory (database version 9, Phase P11). One record
+ * per project: a bounded conversation projection + explicit style notes.
+ * Local-only — never synced, never in ProjectSchema, never exported.
+ */
+export const STORE_COPILOT_MEMORY = "copilotMemory";
 
 /** Key for the active project ID in the metadata store. */
 export const METADATA_KEY_ACTIVE_PROJECT = "activeProjectId";
