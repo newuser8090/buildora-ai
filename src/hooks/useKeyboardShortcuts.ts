@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { saveNowViaController } from "@/features/persistence/services/project-controller";
+import { notifyActionFeedback } from "@/features/feedback/action-feedback";
 
 // ---------------------------------------------------------------------------
 // Elements where keyboard shortcuts should be suppressed
@@ -57,6 +58,10 @@ export function useKeyboardShortcuts() {
       if (ctrl && event.key === "z" && !event.shiftKey) {
         event.preventDefault();
         undo();
+        notifyActionFeedback("Change undone", {
+          actionLabel: "Redo",
+          onAction: () => useEditorStore.getState().redo(),
+        });
         return;
       }
 
@@ -64,6 +69,10 @@ export function useKeyboardShortcuts() {
       if (ctrl && event.key === "z" && event.shiftKey) {
         event.preventDefault();
         redo();
+        notifyActionFeedback("Change restored", {
+          actionLabel: "Undo",
+          onAction: () => useEditorStore.getState().undo(),
+        });
         return;
       }
 
@@ -71,6 +80,10 @@ export function useKeyboardShortcuts() {
       if (ctrl && event.key === "y") {
         event.preventDefault();
         redo();
+        notifyActionFeedback("Change restored", {
+          actionLabel: "Undo",
+          onAction: () => useEditorStore.getState().undo(),
+        });
         return;
       }
 

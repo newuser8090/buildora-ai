@@ -7,6 +7,7 @@
 // ---------------------------------------------------------------------------
 
 import { create } from "zustand";
+import { markPerf } from "@/features/perf/perf-instrumentation";
 import type { DeploymentRecord, PublishProgressEvent, PublishServiceResult } from "../types";
 
 export type PublishDialogView = "closed" | "publish" | "progress" | "success" | "failure" | "history";
@@ -54,8 +55,14 @@ export const usePublishingStore = create<PublishingState>()((set) => ({
   attemptedProviderId: null,
   copyNotice: null,
 
-  openPublishDialog: () =>
-    set({ dialogOpen: true, view: "publish", progress: null, lastResult: null }),
+  openPublishDialog: () => {
+    try {
+      markPerf("publish-dialog-open");
+    } catch {
+      // Instrumentation is best-effort.
+    }
+    set({ dialogOpen: true, view: "publish", progress: null, lastResult: null });
+  },
   setAttemptedProvider: (providerId) => set({ attemptedProviderId: providerId }),
   notifyCopy: (notice) => {
     set({ copyNotice: notice });

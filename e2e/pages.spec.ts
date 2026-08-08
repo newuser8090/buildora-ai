@@ -139,7 +139,7 @@ test.describe("Multi-page editor flow", () => {
     // 9. Add "Contact" and persist: save, reload, verify both pages remain.
     await page.locator('[data-testid="page-tab-add"]').click();
     await finishRename(page, "Contact");
-    const saveBtn = page.locator('header button[title*="Save"]');
+    const saveBtn = page.locator('[data-testid="topnav-save-button"]');
     await expect(saveBtn).toBeEnabled({ timeout: 5000 });
     await saveBtn.click();
     await expect(saveBtn).toHaveAttribute("title", "Saved", { timeout: 5000 });

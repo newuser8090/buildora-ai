@@ -4,11 +4,14 @@
 
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { templateRegistry } from "../registry/template-registry";
 import { registerDefaultTemplates } from "../registry/register-default-templates";
 import { filterTemplates, templateCategories } from "../utils/filter-templates";
 import { sortTemplates, featuredTemplates } from "../utils/sort-templates";
+import { getPersonalTemplateService } from "@/features/personal-templates/services/personal-template-service";
+import { personalTemplateToBuildoraTemplate } from "@/features/personal-templates/convert/personal-template-converter";
+import { markPerf } from "@/features/perf/perf-instrumentation";
 import type { BuildoraTemplate, TemplateCategory } from "../types";
 
 export interface TemplateGalleryState {
@@ -31,9 +34,39 @@ export function useTemplateGallery(): TemplateGalleryState {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<TemplateCategory | "all">("all");
 
-  // list() returns a fresh array and is cheap; inline reads avoid stale
-  // memoization against the mutable registry singleton.
-  const allTemplates = templateRegistry.list();
+  // Phase P9: saved personal templates are merged into the same gallery so
+  // search, category tabs, preview, and "Use" behave identically to built-ins.
+  // Loaded asynchronously (local IndexedDB) — the list upgrades in place.
+  const [personalTemplates, setPersonalTemplates] = useState<BuildoraTemplate[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await getPersonalTemplateService().listTemplates();
+        if (!cancelled && result.ok) {
+          setPersonalTemplates(
+            result.templates.map(personalTemplateToBuildoraTemplate),
+          );
+        }
+      } catch {
+        // Gallery must never break because personal templates failed to load.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Phase P9 — transient gallery-load measurement (count is deterministic).
+  // Recorded once per personal-template load (not per keystroke) via effect.
+  const allTemplates = [...templateRegistry.list(), ...personalTemplates];
+  useEffect(() => {
+    try {
+      markPerf("template-gallery-load", { count: allTemplates.length });
+    } catch {
+      // Instrumentation is best-effort.
+    }
+  }, [allTemplates.length]);
   const categories = templateCategories(allTemplates);
 
   const filtered = sortTemplates(

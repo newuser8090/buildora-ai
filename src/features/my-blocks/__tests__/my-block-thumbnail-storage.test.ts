@@ -197,9 +197,11 @@ describe("first-connection through the thumbnail adapter creates every store", (
         "cloudSyncConflicts",
         "deployments",
         "deploymentDomains",
+        "personalTemplates",
+        "recoverySnapshots",
       ]),
     );
-    expect(names).toHaveLength(11);
+    expect(names).toHaveLength(13);
   });
 });
 

@@ -205,7 +205,7 @@ test.describe("Editor structure flow", () => {
     // 22. Save. The flush is async — wait until the save indicator reaches
     // "Saved" before reloading, otherwise the reload can abort the in-flight
     // IndexedDB write and the final undo-delete would be lost.
-    const saveBtn = page.locator('header button[title*="Save"]');
+    const saveBtn = page.locator('[data-testid="topnav-save-button"]');
     await expect(saveBtn).toBeEnabled({ timeout: 5000 });
     await saveBtn.click();
     await expect(saveBtn).toHaveAttribute("title", "Saved", { timeout: 5000 });

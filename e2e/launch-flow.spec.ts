@@ -260,7 +260,7 @@ test.describe("Phase P7 — beginner launch flow", () => {
 
     // Flush the project to IndexedDB BEFORE publishing — the standalone
     // preview route reads the project from disk, not the editor store.
-    const saveBtn = page.locator('header button[title*="Save"]');
+    const saveBtn = page.locator('[data-testid="topnav-save-button"]');
     await expect(saveBtn).toBeEnabled({ timeout: 5000 });
     await saveBtn.click();
     await expect(saveBtn).toHaveAttribute("title", "Saved", { timeout: 5000 });

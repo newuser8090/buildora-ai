@@ -88,8 +88,11 @@ export const DATABASE_NAME = "buildora";
  *       lives OUTSIDE ProjectSchema).
  *   7 — added deploymentDomains store (Phase P8 publishing: custom domain
  *       records live OUTSIDE ProjectSchema).
+ *   8 — added personalTemplates store (Phase P9: saved personal templates,
+ *       local-only) and recoverySnapshots store (Phase P9: bounded draft
+ *       recovery history per project).
  */
-export const DATABASE_VERSION = 7;
+export const DATABASE_VERSION = 8;
 
 /** Object store for project records. */
 export const STORE_PROJECTS = "projects";
@@ -143,6 +146,20 @@ export const STORE_DEPLOYMENTS = "deployments";
  * The provider is the remote source of truth; this store is local history.
  */
 export const STORE_DEPLOYMENT_DOMAINS = "deploymentDomains";
+
+/**
+ * Saved personal templates (database version 8, Phase P9). Local-only in P9;
+ * stores deep-cloned Project snapshots with template metadata. No deployment,
+ * domain, sync, or auth state is ever stored here.
+ */
+export const STORE_PERSONAL_TEMPLATES = "personalTemplates";
+
+/**
+ * Draft recovery snapshots (database version 8, Phase P9). Bounded per
+ * project (see MAX_RECOVERY_SNAPSHOTS_PER_PROJECT) — last-known-good copies
+ * taken after successful saves so a corrupted write can be recovered.
+ */
+export const STORE_RECOVERY_SNAPSHOTS = "recoverySnapshots";
 
 /** Key for the active project ID in the metadata store. */
 export const METADATA_KEY_ACTIVE_PROJECT = "activeProjectId";

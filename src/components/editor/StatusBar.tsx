@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { cn } from "@/utils/cn";
 import {
   Monitor,
@@ -10,6 +11,7 @@ import {
   Loader2,
   AlertCircle,
   CheckCircle2,
+  CloudOff,
 } from "lucide-react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 
@@ -45,6 +47,23 @@ export function StatusBar() {
   const isHydrated = useEditorStore((s) => s.isHydrated);
   const persistenceError = useEditorStore((s) => s.persistenceError);
 
+  // Phase P9 — coherent status messaging: when the device is offline, "Saved"
+  // becomes "Offline — saved on this device" so the user never thinks a save
+  // reached the cloud. The status reflects the local save reality.
+  const [isOnline, setIsOnline] = useState(
+    typeof navigator !== "undefined" ? navigator.onLine : true,
+  );
+  useEffect(() => {
+    const onOnline = () => setIsOnline(true);
+    const onOffline = () => setIsOnline(false);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
+  }, []);
+
   const hasProject = project.pages.length > 0;
   const sectionCount = project.pages[0]?.sections.length ?? 0;
 
@@ -54,7 +73,10 @@ export function StatusBar() {
     if (saveStatus === "saving") return { icon: Loader2, text: "Saving...", className: "text-accent" };
     if (saveStatus === "error") return { icon: AlertCircle, text: persistenceError?.message ?? "Save failed", className: "text-red-400" };
     if (saveStatus === "unsaved" || isDirty) return { icon: Circle, text: "Unsaved changes", className: "text-yellow-400" };
-    if (saveStatus === "saved") return { icon: CheckCircle2, text: "Saved", className: "text-green-400" };
+    if (saveStatus === "saved")
+      return isOnline
+        ? { icon: CheckCircle2, text: "Saved", className: "text-green-400" }
+        : { icon: CloudOff, text: "Offline — saved on this device", className: "text-green-400" };
     return { icon: Circle, text: "Ready", className: "text-text-dim" };
   })();
 

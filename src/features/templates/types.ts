@@ -19,7 +19,9 @@ export type TemplateCategory =
   | "portfolio"
   | "commerce"
   | "food"
-  | "landing-page";
+  | "landing-page"
+  | "event"
+  | "personal";
 
 export const TEMPLATE_CATEGORY_LABELS: Record<TemplateCategory, string> = {
   blank: "Blank",
@@ -28,6 +30,8 @@ export const TEMPLATE_CATEGORY_LABELS: Record<TemplateCategory, string> = {
   commerce: "Commerce",
   food: "Food",
   "landing-page": "Landing Page",
+  event: "Events",
+  personal: "Personal",
 };
 
 // ---------------------------------------------------------------------------
@@ -98,6 +102,10 @@ export interface BuildoraTemplate {
   description: string;
   category: TemplateCategory;
   tags: string[];
+  /** Phase P9 — where the template came from (defaults to built-in). */
+  source?: "builtin" | "personal";
+  /** Phase P9 — plain-language difficulty label for cards/dialogs. */
+  difficulty?: "beginner" | "intermediate" | "advanced";
   featured?: boolean;
   /** Lower numbers sort first. Blank typically uses 0. */
   sortOrder?: number;

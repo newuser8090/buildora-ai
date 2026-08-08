@@ -9,7 +9,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
+import type { TemplateCategory } from "@/features/templates/types";
 import { TopNav } from "@/components/editor/TopNav";
 import { PageTabs } from "@/components/editor/PageTabs";
 import { LeftSidebar } from "@/components/editor/LeftSidebar";
@@ -32,7 +34,16 @@ import { getProjectController } from "@/features/persistence/services/project-co
 import { ensureProjectController } from "@/features/persistence/hooks/useProjectController";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import type { ProjectTransitionResult } from "@/features/persistence/types";
-import { Loader2, AlertCircle, ArrowLeft, Plus } from "lucide-react";
+import { RecoveryDialog } from "@/features/recovery/components/RecoveryDialog";
+import { getRecoveryService } from "@/features/recovery/services/recovery-service";
+import { useRecoveryUiStore } from "@/features/recovery/store/recovery-ui-store";
+import { KeyboardShortcutsDialog } from "@/features/help/components/KeyboardShortcutsDialog";
+import { useHelpUiStore } from "@/features/help/store/help-ui-store";
+import { SaveAsTemplateDialog } from "@/features/personal-templates/components/SaveAsTemplateDialog";
+import { usePersonalTemplatesUiStore } from "@/features/personal-templates/store/personal-templates-ui-store";
+import { getPersonalTemplateService } from "@/features/personal-templates/services/personal-template-service";
+import { ActionFeedbackHost } from "@/features/feedback/components/ActionFeedbackHost";
+import { Loader2, AlertCircle, ArrowLeft, Plus, History } from "lucide-react";
 
 // ---------------------------------------------------------------------------
 // Editor Page
@@ -50,6 +61,10 @@ export default function EditorPage() {
   // when the state is already "loading", which would leave the editor stuck
   // on "Opening project..." forever.)
   const [retryTick, setRetryTick] = useState(0);
+  // Phase P9 — recovery: when a project fails to load (e.g. a corrupted
+  // write), offer last-known-good backups instead of a dead end.
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [recoveryAvailable, setRecoveryAvailable] = useState(false);
   const initializedRef = useRef(false);
   // Tracks the in-flight openProject() transition so a React StrictMode
   // double-invoke (setup → cleanup → setup) can REUSE the same promise
@@ -135,7 +150,29 @@ export default function EditorPage() {
         if (result.success) {
           setLoadState("loaded");
         } else if (result.code === "PROJECT_LOAD_FAILED") {
-          setLoadState("not-found");
+          // Distinguish a genuinely missing project from a corrupted record:
+          // a record that exists but fails validation can be recovered from a
+          // last-known-good backup. The raw record is preserved — never
+          // overwritten without explicit confirmation.
+          if (result.error?.code === "PROJECT_NOT_FOUND") {
+            setLoadState("not-found");
+          } else {
+            setLoadState("error");
+            setLoadError(
+              result.error?.message ?? "This project could not be opened.",
+            );
+            void getRecoveryService()
+              .listSnapshots(projectId)
+              .then((res) => {
+                if (res.ok && res.snapshots.length > 0) {
+                  setRecoveryAvailable(true);
+                  setRecoveryOpen(true);
+                }
+              })
+              .catch(() => {
+                // Recovery is best-effort — never throw from the load path.
+              });
+          }
         } else if (result.code === "SAVE_BEFORE_TRANSITION_FAILED") {
           setLoadState("error");
           setLoadError("Cannot switch projects — there are unsaved changes. Please save or discard before continuing.");
@@ -235,12 +272,23 @@ export default function EditorPage() {
                 setLoadState("loading");
                 setLoadError(null);
               }}
-              className="flex h-9 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-white transition-all duration-200 hover:bg-accent-hover"
+              className="flex h-9 items-center gap-2 rounded-lg border border-border px-4 text-sm font-medium text-text-muted transition-all duration-200 hover:bg-card hover:text-text-primary"
               type="button"
             >
               <Plus className="h-4 w-4" />
               Retry
             </button>
+            {recoveryAvailable && (
+              <button
+                onClick={() => setRecoveryOpen(true)}
+                className="flex h-9 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-white transition-all duration-200 hover:bg-accent-hover"
+                type="button"
+                data-testid="recovery-open-button"
+              >
+                <History className="h-4 w-4" />
+                Restore from backup
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -249,9 +297,24 @@ export default function EditorPage() {
 
   // ---- Loaded: render editor ----
   return (
-    <EditorProvider>
-      <EditorShell />
-    </EditorProvider>
+    <>
+      <EditorProvider>
+        <EditorShell />
+      </EditorProvider>
+      {/* Phase P9 — recovery prompt mounted at the page level so it can also
+          appear on the load-failure screen. */}
+      <RecoveryDialog
+        open={recoveryOpen}
+        projectId={projectId}
+        projectName={projectId ?? undefined}
+        onClose={() => setRecoveryOpen(false)}
+        onRestored={() => {
+          // The backup was saved through the persistence path — reload the
+          // editor so the restored project hydrates cleanly.
+          window.location.reload();
+        }}
+      />
+    </>
   );
 }
 
@@ -264,6 +327,33 @@ function EditorShell() {
   const selectedPageId = useEditorStore((s) => s.selectedPageId);
   const selectedSectionId = useEditorStore((s) => s.selectedSectionId);
   const open = useEditorUiStore((s) => s.addSectionDialog.open);
+
+  // Phase P9 — mounted dialogs for help, personal templates, and recovery.
+  const shortcutsOpen = useHelpUiStore((s) => s.shortcutsDialogOpen);
+  const closeShortcuts = useHelpUiStore((s) => s.closeShortcutsDialog);
+  const saveDialog = usePersonalTemplatesUiStore((s) => s.saveDialog);
+  const closeSaveDialog = usePersonalTemplatesUiStore((s) => s.closeSaveDialog);
+  const recovery = useRecoveryUiStore();
+
+  const handleSaveAsTemplate = useCallback(
+    async (input: { name: string; description: string; category: TemplateCategory; tags: string[] }) => {
+      if (!saveDialog.project) {
+        return {
+          ok: false as const,
+          error: { code: "PERSONAL_TEMPLATE_INVALID_INPUT" as const, message: "No project selected." },
+        };
+      }
+      const result = await getPersonalTemplateService().saveAsTemplate({
+        project: saveDialog.project,
+        name: input.name,
+        description: input.description,
+        category: input.category,
+        tags: input.tags,
+      });
+      return result;
+    },
+    [saveDialog.project],
+  );
 
   const activePage =
     project.pages.find((p) => p.id === selectedPageId) ?? project.pages[0];
@@ -304,6 +394,23 @@ function EditorShell() {
       <SiteSettingsDialog />
       <LaunchCenter />
       <PublishDialog />
+
+      {/* Phase P9: help, personal templates, recovery, feedback */}
+      <KeyboardShortcutsDialog open={shortcutsOpen} onClose={closeShortcuts} />
+      <ActionFeedbackHost />
+      <SaveAsTemplateDialog
+        open={saveDialog.open}
+        project={saveDialog.project}
+        onClose={closeSaveDialog}
+        onSave={handleSaveAsTemplate}
+      />
+      <RecoveryDialog
+        open={recovery.open}
+        projectId={recovery.projectId}
+        projectName={project.name}
+        onClose={recovery.closeRecovery}
+        onRestored={() => window.location.reload()}
+      />
     </MyBlockDndProvider>
   );
 }

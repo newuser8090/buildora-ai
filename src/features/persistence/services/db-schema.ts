@@ -27,6 +27,8 @@ import {
   STORE_CLOUD_SYNC_CONFLICTS,
   STORE_DEPLOYMENTS,
   STORE_DEPLOYMENT_DOMAINS,
+  STORE_PERSONAL_TEMPLATES,
+  STORE_RECOVERY_SNAPSHOTS,
 } from "../constants";
 
 /**
@@ -72,5 +74,13 @@ export function ensureDatabaseStores(db: IDBDatabase): void {
   // of the provider-backed domain infrastructure).
   if (!db.objectStoreNames.contains(STORE_DEPLOYMENT_DOMAINS)) {
     db.createObjectStore(STORE_DEPLOYMENT_DOMAINS, { keyPath: "id" });
+  }
+  // Phase P9 (database version 8): saved personal templates (local-only).
+  if (!db.objectStoreNames.contains(STORE_PERSONAL_TEMPLATES)) {
+    db.createObjectStore(STORE_PERSONAL_TEMPLATES, { keyPath: "id" });
+  }
+  // Phase P9 (database version 8): bounded draft-recovery snapshots.
+  if (!db.objectStoreNames.contains(STORE_RECOVERY_SNAPSHOTS)) {
+    db.createObjectStore(STORE_RECOVERY_SNAPSHOTS, { keyPath: "id" });
   }
 }

@@ -29,6 +29,10 @@ import {
   findActiveDeployment,
   safeLiveUrl,
 } from "@/features/publishing/services/deployment-utils";
+import { usePersonalTemplatesUiStore } from "@/features/personal-templates/store/personal-templates-ui-store";
+import { useHelpUiStore } from "@/features/help/store/help-ui-store";
+import { useRecoveryUiStore } from "@/features/recovery/store/recovery-ui-store";
+import { getRecoveryService } from "@/features/recovery/services/recovery-service";
 
 interface PaletteCommand {
   id: string;
@@ -257,6 +261,49 @@ function buildCommands(handlers: {
       keywords: ["rollback", "restore", "older version", "previous version", "go back", "revert publish"],
       hint: "Restore a previous deployment",
       run: () => usePublishingStore.getState().openHistory(),
+    },
+    {
+      id: "save-as-template",
+      label: "Save this website as a template",
+      keywords: ["template", "save template", "reuse", "save this design", "personal template", "starting point"],
+      hint: "Reuse this project as your own private template",
+      run: () => usePersonalTemplatesUiStore.getState().openSaveDialog(useEditorStore.getState().project),
+    },
+    {
+      id: "keyboard-shortcuts",
+      label: "Show keyboard shortcuts",
+      keywords: ["shortcuts", "keys", "help", "keyboard", "hotkeys"],
+      hint: "See every shortcut that actually exists",
+      run: () => useHelpUiStore.getState().openShortcutsDialog(),
+    },
+    {
+      id: "backups",
+      label: "Open backups and recovery",
+      keywords: ["backup", "recovery", "restore backup", "undo save", "backups", "last known good"],
+      hint: "See saved backups of this project",
+      run: () =>
+        useRecoveryUiStore.getState().openRecovery(useEditorStore.getState().project.id),
+    },
+    {
+      id: "back-up-now",
+      label: "Save a backup now",
+      keywords: ["backup", "snapshot", "save backup", "back up now"],
+      hint: "Create a backup of the current version",
+      run: () => {
+        const store = useEditorStore.getState();
+        void getRecoveryService()
+          .capture({
+            project: store.project,
+            revision: store.revision,
+            reason: "manual",
+            force: true,
+          })
+          .then((result) => {
+            if (result.ok && !result.skipped) {
+              useRecoveryUiStore.getState().openRecovery(store.project.id);
+            }
+          });
+      },
     },
     {
       id: "open-my-blocks",

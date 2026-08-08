@@ -17,6 +17,8 @@ export interface DashboardProject {
   savedAt: string;
   isActive: boolean;
   isPinned: boolean;
+  /** Phase P9 — archived projects are hidden from the main grid. */
+  isArchived?: boolean;
   /** Runtime object URL for the project thumbnail (never persisted). */
   thumbnailUrl?: string | null;
   /** Thumbnail status for the card UI. */
@@ -49,6 +51,7 @@ export type ProjectDashboardErrorCode =
   | "PROJECT_DUPLICATE_FAILED"
   | "PROJECT_DELETE_FAILED"
   | "PROJECT_PIN_FAILED"
+  | "PROJECT_ARCHIVE_FAILED"
   | "SAVE_BEFORE_TRANSITION_FAILED"
   | "PROJECT_NOT_FOUND"
   | "INVALID_PROJECT_NAME"
@@ -67,7 +70,7 @@ export interface ProjectDashboardError {
 export type DashboardOperation =
   | null
   | {
-      type: "creating" | "opening" | "renaming" | "duplicating" | "deleting" | "pinning";
+      type: "creating" | "opening" | "renaming" | "duplicating" | "deleting" | "pinning" | "archiving";
       projectId?: string;
     }
   | { type: "importing"; token: number }
@@ -85,6 +88,8 @@ export interface ProjectsDashboardState {
   operation: DashboardOperation;
   searchQuery: string;
   sortMode: ProjectSortMode;
+  /** Phase P9 — archived view is a separate list; the main grid hides them. */
+  showArchived: boolean;
   error: ProjectDashboardError | null;
 }
 

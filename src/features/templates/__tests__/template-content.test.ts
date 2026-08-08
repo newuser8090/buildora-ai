@@ -44,6 +44,8 @@ const EXPECTED_SECTIONS: Record<string, string[]> = {
   "template-agency": ["header", "hero", "features", "faq", "cta", "footer"],
   "template-restaurant": ["header", "hero", "features", "cta", "footer"],
   "template-ecommerce": ["header", "hero", "features", "pricing", "cta", "footer"],
+  "template-event": ["header", "hero", "features", "faq", "cta", "footer"],
+  "template-personal": ["header", "hero", "features", "features", "features", "cta", "footer"],
 };
 
 const SUPPORTED_SECTION_TYPES = new Set([

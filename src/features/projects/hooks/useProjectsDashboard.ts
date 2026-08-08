@@ -44,6 +44,8 @@ interface DashboardState {
   operation: DashboardOperation;
   searchQuery: string;
   sortMode: ProjectSortMode;
+  /** Phase P9 — archived view toggle. */
+  showArchived: boolean;
   error: ProjectDashboardError | null;
   activeProjectId: string;
 }
@@ -64,6 +66,7 @@ export function useProjectsDashboard() {
     operation: null,
     searchQuery: "",
     sortMode: "last-edited",
+    showArchived: false,
     error: null,
     activeProjectId,
   });
@@ -133,16 +136,18 @@ export function useProjectsDashboard() {
       const store = useEditorStore.getState();
       const ctrl = getProjectController();
 
-      // Load pin metadata through the adapter's metadata API
+      // Load pin + archive metadata through the adapter's metadata API
       let pinMap = new Map<string, boolean>();
+      let archivedMap = new Map<string, boolean>();
       if (ctrl) {
         try {
           // Access adapter through a typed controller-level API
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const metaService = new DashboardMetadataService((ctrl as any).adapter);
           pinMap = await metaService.getPinMap(result.projects.map((p) => p.id));
+          archivedMap = await metaService.getArchivedMap(result.projects.map((p) => p.id));
         } catch {
-          // Pin metadata unavailable — proceed without pins
+          // Pin/archive metadata unavailable — proceed without them
         }
       }
 
@@ -155,6 +160,7 @@ export function useProjectsDashboard() {
         savedAt: p.savedAt,
         isActive: p.id === store.activeProjectId,
         isPinned: pinMap.get(p.id) ?? false,
+        isArchived: archivedMap.get(p.id) ?? false,
         pageCount: p.pageCount,
         assetCount: p.assetCount,
       }));
@@ -193,7 +199,11 @@ export function useProjectsDashboard() {
   // -----------------------------------------------------------------------
 
   const filteredProjects = useMemo(() => {
-    const filtered = filterProjects(state.projects, state.searchQuery);
+    // Phase P9: archived projects are hidden from the main grid.
+    const visible = state.showArchived
+      ? state.projects.filter((p) => p.isArchived)
+      : state.projects.filter((p) => !p.isArchived);
+    const filtered = filterProjects(visible, state.searchQuery);
     const sorted = sortProjects(filtered, state.sortMode);
     return sorted.map((p) => {
       const t: DashboardThumbnailState | undefined = thumbnails[p.id];
@@ -204,7 +214,7 @@ export function useProjectsDashboard() {
         thumbnailRevision: t?.revision ?? null,
       };
     });
-  }, [state.projects, state.searchQuery, state.sortMode, thumbnails]);
+  }, [state.projects, state.searchQuery, state.sortMode, state.showArchived, thumbnails]);
 
   // -----------------------------------------------------------------------
   // Actions
@@ -610,6 +620,21 @@ export function useProjectsDashboard() {
             }));
             return { success: false, error: msg };
           }
+          // Phase P9: renameActiveProject only updates the in-memory store and
+          // schedules a DEBOUNCED autosave. Flush now so the refreshed list
+          // (read straight from IndexedDB) shows the new name instead of a
+          // stale record.
+          const flush = await controller.saveNow();
+          if (!isCurrentOp(token)) return { success: false, error: "Operation superseded" };
+          if (!flush.success) {
+            const msg = flush.error?.message ?? "Failed to save renamed project";
+            setState((prev) => ({
+              ...prev,
+              operation: null,
+              error: { code: "PROJECT_RENAME_FAILED", message: msg, retryable: true },
+            }));
+            return { success: false, error: msg };
+          }
         } else {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const service = new ProjectService((controller as any).adapter);
@@ -834,6 +859,87 @@ export function useProjectsDashboard() {
     [state.projects, loadProjects],
   );
 
+  /** Set the archived-view toggle (Phase P9). */
+  const setShowArchived = useCallback((show: boolean) => {
+    setState((prev) => ({ ...prev, showArchived: show }));
+  }, []);
+
+  /**
+   * Archive or restore a project (Phase P9).
+   *
+   * Archive hides the project from the main grid (metadata flag only — the
+   * project record and its remote deployments are never deleted). Restore
+   * brings it back. Optimistic update with rollback on failure.
+   */
+  const setProjectArchived = useCallback(
+    async (projectId: string, isArchived: boolean) => {
+      const controller = getProjectController();
+      if (!controller) {
+        setState((prev) => ({
+          ...prev,
+          error: {
+            code: "PROJECT_ARCHIVE_FAILED",
+            message: "Controller not initialized",
+            retryable: true,
+          },
+        }));
+        return { success: false } as const;
+      }
+
+      const token = nextToken();
+      setState((prev) => ({
+        ...prev,
+        projects: prev.projects.map((p) =>
+          p.id === projectId ? { ...p, isArchived } : p,
+        ),
+        operation: { type: "archiving", projectId },
+      }));
+
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const metaService = new DashboardMetadataService((controller as any).adapter);
+        const result = await metaService.setArchived(projectId, isArchived);
+        if (!isCurrentOp(token)) return { success: true } as const;
+        if (!result.success) {
+          // Rollback the optimistic flag.
+          setState((prev) => ({
+            ...prev,
+            projects: prev.projects.map((p) =>
+              p.id === projectId ? { ...p, isArchived: !isArchived } : p,
+            ),
+            error: {
+              code: "PROJECT_ARCHIVE_FAILED",
+              message: result.error.message ?? "Failed to update archive state",
+              retryable: true,
+            },
+          }));
+          return { success: false } as const;
+        }
+        return { success: true } as const;
+      } catch (err) {
+        if (isCurrentOp(token)) {
+          setState((prev) => ({
+            ...prev,
+            projects: prev.projects.map((p) =>
+              p.id === projectId ? { ...p, isArchived: !isArchived } : p,
+            ),
+            error: {
+              code: "PROJECT_ARCHIVE_FAILED",
+              message: err instanceof Error ? err.message : "Failed to update archive state",
+              retryable: true,
+            },
+          }));
+        }
+        return { success: false } as const;
+      } finally {
+        if (isCurrentOp(token)) {
+          setState((prev) => ({ ...prev, operation: null }));
+        }
+      }
+    },
+    [],
+  );
+
   /** Clear error */
   const clearError = useCallback(() => {
     setState((prev) => ({ ...prev, error: null }));
@@ -945,6 +1051,9 @@ export function useProjectsDashboard() {
     operation: state.operation,
     searchQuery: state.searchQuery,
     sortMode: state.sortMode,
+    showArchived: state.showArchived,
+    setShowArchived,
+    setProjectArchived,
     error: state.error,
     activeProjectId: state.activeProjectId,
     loadProjects,

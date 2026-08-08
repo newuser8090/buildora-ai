@@ -239,9 +239,11 @@ describe("first-connection through the My Blocks adapter creates every store", (
         "cloudSyncConflicts",
         "deployments",
         "deploymentDomains",
+        "personalTemplates",
+        "recoverySnapshots",
       ]),
     );
-    expect(names).toHaveLength(11);
+    expect(names).toHaveLength(13);
   });
 });
 
