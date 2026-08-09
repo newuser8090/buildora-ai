@@ -27,6 +27,18 @@ export interface PersonalTemplateRecord {
   source: "personal";
   /** Deep-cloned Project snapshot, validated through ProjectSchema. */
   project: Project;
+  /**
+   * Phase P13 — provenance for templates installed from a .buildora-template
+   * package. Optional record field (no IndexedDB schema change): old records
+   * load unchanged. Non-authoritative display metadata only — imported local
+   * IDs are never trusted as authoritative.
+   */
+  provenance?: {
+    source: "import";
+    packageFormatVersion: number;
+    exportedAt: string;
+    originalName: string;
+  };
 }
 
 // ---------------------------------------------------------------------------

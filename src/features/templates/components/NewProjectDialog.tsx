@@ -22,6 +22,7 @@ import { useState, useCallback, useRef, useEffect, useId } from "react";
 import type { BuildoraTemplate } from "../types";
 import { TemplateGallery } from "./TemplateGallery";
 import { TemplatePreviewDialog } from "./TemplatePreviewDialog";
+import { ImportTemplateDialog } from "@/features/template-packages/components/ImportTemplateDialog";
 import { validateProjectName } from "@/features/projects/utils/validate-project-name";
 
 export interface NewProjectDialogProps {
@@ -41,6 +42,7 @@ export function NewProjectDialog({ open, onClose, onCreate }: NewProjectDialogPr
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [previewTemplate, setPreviewTemplate] = useState<BuildoraTemplate | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   const panelRef = useRef<HTMLDivElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -52,13 +54,15 @@ export function NewProjectDialog({ open, onClose, onCreate }: NewProjectDialogPr
   const openRef = useRef(open);
   const onCloseRef = useRef(onClose);
   const previewOpenRef = useRef(previewTemplate !== null);
+  const importOpenRef = useRef(importOpen);
 
   useEffect(() => {
     creatingRef.current = creating;
     openRef.current = open;
     onCloseRef.current = onClose;
     previewOpenRef.current = previewTemplate !== null;
-  }, [creating, open, onClose, previewTemplate]);
+    importOpenRef.current = importOpen;
+  }, [creating, open, onClose, previewTemplate, importOpen]);
 
   // Reset state when the dialog opens/closes.
   const prevOpenRef = useRef(open);
@@ -87,10 +91,10 @@ export function NewProjectDialog({ open, onClose, onCreate }: NewProjectDialogPr
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      // When the nested preview dialog is open, it owns the focus trap and
-      // Escape handling — the parent must not fight it for focus (which would
-      // cause a focus-steal loop / stack overflow).
-      if (previewOpenRef.current) return;
+      // When a nested dialog is open (preview or import), it owns the focus
+      // trap and Escape handling — the parent must not fight it for focus
+      // (which would cause a focus-steal loop / stack overflow).
+      if (previewOpenRef.current || importOpenRef.current) return;
       if (e.key === "Escape") {
         // Never interrupt an unsafe creation.
         if (creatingRef.current) return;
@@ -118,8 +122,8 @@ export function NewProjectDialog({ open, onClose, onCreate }: NewProjectDialogPr
 
     const handleFocusIn = (e: FocusEvent) => {
       if (!openRef.current) return;
-      // Never steal focus away from the nested preview dialog.
-      if (previewOpenRef.current) return;
+      // Never steal focus away from a nested dialog.
+      if (previewOpenRef.current || importOpenRef.current) return;
       if (!panelRef.current) return;
       if (!panelRef.current.contains(e.target as Node)) {
         getFocusable()[0]?.focus();
@@ -339,6 +343,15 @@ export function NewProjectDialog({ open, onClose, onCreate }: NewProjectDialogPr
                 <p className="mt-1 text-xs text-text-muted">
                   Or pick Blank to start from an empty page.
                 </p>
+                <button
+                  type="button"
+                  onClick={() => setImportOpen(true)}
+                  data-testid="new-project-import-template"
+                  className="mt-4 flex h-9 items-center gap-2 rounded-lg border border-border px-4 text-sm font-medium text-text-muted transition-all duration-200 hover:bg-base hover:text-text-primary active:scale-95"
+                >
+                  <UploadGlyph />
+                  Import template
+                </button>
               </div>
             )}
           </div>
@@ -356,7 +369,30 @@ export function NewProjectDialog({ open, onClose, onCreate }: NewProjectDialogPr
         onClose={() => setPreviewTemplate(null)}
         onUse={handleUseFromPreview}
       />
+
+      {/* Phase P13: import dialog (same component used by My Templates) */}
+      <ImportTemplateDialog
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onCreateProject={onCreate}
+      />
     </div>
+  );
+}
+
+function UploadGlyph() {
+  return (
+    <svg
+      className="h-4 w-4"
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+      aria-hidden="true"
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 16V4m0 0l-4 4m4-4l4 4M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3" />
+    </svg>
   );
 }
 

@@ -9,10 +9,16 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Pencil, Copy, Trash2, Search, X } from "lucide-react";
+import { Pencil, Copy, Trash2, Search, X, Upload, Download } from "lucide-react";
 import type { BuildoraTemplate } from "@/features/templates/types";
 import { TemplateCard } from "@/features/templates/components/TemplateCard";
 import { TemplatePreviewDialog } from "@/features/templates/components/TemplatePreviewDialog";
+import { ImportTemplateDialog } from "@/features/template-packages/components/ImportTemplateDialog";
+import {
+  downloadTemplatePackage,
+  exportTemplatePackage,
+} from "@/features/template-packages/services/template-package-exporter";
+import { markPerf } from "@/features/perf/perf-instrumentation";
 import { personalTemplateToBuildoraTemplate } from "../convert/personal-template-converter";
 import { getPersonalTemplateService } from "../services/personal-template-service";
 import { usePersonalTemplatesUiStore } from "../store/personal-templates-ui-store";
@@ -43,6 +49,8 @@ export function PersonalTemplatesPanel({
   const [renameTarget, setRenameTarget] = useState<PersonalTemplateRecord | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<PersonalTemplateRecord | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [exportingId, setExportingId] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const prevFocusRef = useRef<HTMLElement | null>(null);
   const closeLibrary = usePersonalTemplatesUiStore((s) => s.closeLibrary);
@@ -64,6 +72,14 @@ export function PersonalTemplatesPanel({
   }, [open, refresh]);
 
   // Focus trap + restore (matches the NewProjectDialog pattern).
+  // While the nested ImportTemplateDialog is open it OWNS Escape and the
+  // focus trap — the panel must stand down (same coordination as
+  // NewProjectDialog's nested preview dialog).
+  const importOpenRef = useRef(importOpen);
+  useEffect(() => {
+    importOpenRef.current = importOpen;
+  }, [importOpen]);
+
   useEffect(() => {
     if (!open) return;
     prevFocusRef.current = document.activeElement as HTMLElement | null;
@@ -78,6 +94,7 @@ export function PersonalTemplatesPanel({
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (importOpenRef.current) return;
       if (e.key === "Escape") {
         onClose();
         return;
@@ -101,6 +118,7 @@ export function PersonalTemplatesPanel({
     };
 
     const handleFocusIn = (e: FocusEvent) => {
+      if (importOpenRef.current) return;
       if (!panelRef.current) return;
       if (!panelRef.current.contains(e.target as Node)) {
         getFocusable()[0]?.focus();
@@ -162,6 +180,27 @@ export function PersonalTemplatesPanel({
     }
   }, [deleteTarget, refresh]);
 
+  // Phase P13: export a template as a portable .buildora-template package.
+  const handleExport = useCallback(
+    async (template: PersonalTemplateRecord) => {
+      if (exportingId) return;
+      setExportingId(template.id);
+      setActionError(null);
+      const result = await exportTemplatePackage({ record: template });
+      markPerf("template-export");
+      setExportingId(null);
+      if (!result.ok) {
+        setActionError(result.error.message);
+        return;
+      }
+      const dl = downloadTemplatePackage(result);
+      if (!dl.ok) {
+        setActionError(dl.error.message);
+      }
+    },
+    [exportingId],
+  );
+
   const filtered = templates.filter((t) => {
     const q = search.trim().toLowerCase();
     if (!q) return true;
@@ -219,9 +258,20 @@ export function PersonalTemplatesPanel({
               className="h-9 w-full rounded-lg border border-border bg-base pl-9 pr-3 text-sm text-text-primary placeholder:text-text-dim/50 focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/20"
             />
           </div>
-          <span className="text-xs text-text-dim">
-            {templates.length} saved
-          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setImportOpen(true)}
+              data-testid="personal-templates-import"
+              className="flex h-8 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-medium text-text-muted transition-all duration-200 hover:bg-base hover:text-text-primary active:scale-95"
+            >
+              <Upload className="h-3.5 w-3.5" />
+              Import template
+            </button>
+            <span className="text-xs text-text-dim">
+              {templates.length} saved
+            </span>
+          </div>
         </div>
 
         {/* Body */}
@@ -281,41 +331,64 @@ export function PersonalTemplatesPanel({
                       showUse={!busy}
                     />
                     {/* Management actions */}
-                    <div className="flex items-center justify-end gap-1 border-t border-border px-3 py-1.5">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setRenameTarget(template);
-                          setRenameValue(template.name);
-                        }}
-                        aria-label={`Rename ${template.name}`}
-                        className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] text-text-muted transition-colors hover:bg-base hover:text-text-primary"
-                      >
-                        <Pencil className="h-3 w-3" />
-                        Rename
-                      </button>
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          const result = await getPersonalTemplateService().duplicateTemplate(template.id);
-                          if (result.ok) await refresh();
-                          else setActionError(result.error.message);
-                        }}
-                        aria-label={`Duplicate ${template.name}`}
-                        className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] text-text-muted transition-colors hover:bg-base hover:text-text-primary"
-                      >
-                        <Copy className="h-3 w-3" />
-                        Duplicate
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setDeleteTarget(template)}
-                        aria-label={`Delete ${template.name}`}
-                        className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] text-red-400 transition-colors hover:bg-red-500/10"
-                      >
-                        <Trash2 className="h-3 w-3" />
-                        Delete
-                      </button>
+                    <div className="flex items-center justify-between gap-1 border-t border-border px-3 py-1.5">
+                      <span className="flex items-center gap-1">
+                        {template.provenance?.source === "import" && (
+                          <span
+                            data-testid="imported-template-chip"
+                            className="rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent"
+                          >
+                            Imported
+                          </span>
+                        )}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => void handleExport(template)}
+                          disabled={exportingId !== null}
+                          aria-label={`Export ${template.name}`}
+                          data-testid="personal-template-export"
+                          className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] text-text-muted transition-colors hover:bg-base hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          <Download className="h-3 w-3" />
+                          {exportingId === template.id ? "Exporting…" : "Export"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRenameTarget(template);
+                            setRenameValue(template.name);
+                          }}
+                          aria-label={`Rename ${template.name}`}
+                          className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] text-text-muted transition-colors hover:bg-base hover:text-text-primary"
+                        >
+                          <Pencil className="h-3 w-3" />
+                          Rename
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const result = await getPersonalTemplateService().duplicateTemplate(template.id);
+                            if (result.ok) await refresh();
+                            else setActionError(result.error.message);
+                          }}
+                          aria-label={`Duplicate ${template.name}`}
+                          className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] text-text-muted transition-colors hover:bg-base hover:text-text-primary"
+                        >
+                          <Copy className="h-3 w-3" />
+                          Duplicate
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeleteTarget(template)}
+                          aria-label={`Delete ${template.name}`}
+                          className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] text-red-400 transition-colors hover:bg-red-500/10"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                          Delete
+                        </button>
+                      </span>
                     </div>
                   </div>
                 );
@@ -338,6 +411,14 @@ export function PersonalTemplatesPanel({
           </button>
         </div>
       </div>
+
+      {/* Phase P13: import dialog (same component used by New Project) */}
+      <ImportTemplateDialog
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onInstalled={() => void refresh()}
+        onCreateProject={onUse}
+      />
 
       {/* Preview dialog (reuses the template preview) */}
       <TemplatePreviewDialog

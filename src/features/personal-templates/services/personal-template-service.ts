@@ -163,6 +163,60 @@ export class PersonalTemplateService {
   }
 
   // -----------------------------------------------------------------------
+  // Install a pre-validated record (Phase P13 imported templates)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Persist a fully-validated record (built by the template-package importer
+   * after its own strict validation). Re-validates the essential invariants
+   * before a single quota-enforcing storage write — a failed install never
+   * leaves a half-installed template.
+   */
+  async installRecord(
+    record: PersonalTemplateRecord,
+  ): Promise<PersonalTemplateResult> {
+    if (!record.id || !record.id.startsWith("personal-")) {
+      return {
+        ok: false,
+        error: {
+          code: "PERSONAL_TEMPLATE_INVALID_INPUT",
+          message: "The template record is invalid.",
+        },
+      };
+    }
+    const nameValidation = validateProjectName(record.name);
+    if (!nameValidation.valid) {
+      return {
+        ok: false,
+        error: {
+          code: "PERSONAL_TEMPLATE_INVALID_INPUT",
+          message: nameValidation.error ?? "Invalid template name.",
+        },
+      };
+    }
+    const validation = ProjectSchema.safeParse(record.project);
+    if (!validation.success) {
+      return {
+        ok: false,
+        error: {
+          code: "PERSONAL_TEMPLATE_SNAPSHOT_INVALID",
+          message: "The template content is invalid.",
+          cause: validation.error.issues
+            .map((issue) => `${issue.path.join(".")} — ${issue.message}`)
+            .join("; "),
+        },
+      };
+    }
+
+    const saved = await this.storage.saveTemplate({
+      ...record,
+      project: validation.data,
+    });
+    if (!saved.ok) return saved;
+    return { ok: true, record: saved.value };
+  }
+
+  // -----------------------------------------------------------------------
   // List / get
   // -----------------------------------------------------------------------
 
