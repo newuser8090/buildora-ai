@@ -5,6 +5,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import {
   Sparkles,
   Plus,
@@ -44,6 +45,7 @@ import { PersonalTemplatesPanel } from "@/features/personal-templates/components
 import { SaveAsTemplateDialog } from "@/features/personal-templates/components/SaveAsTemplateDialog";
 import { getPersonalTemplateService } from "@/features/personal-templates/services/personal-template-service";
 import { getProjectController } from "@/features/persistence/services/project-controller";
+import { useShareBadges } from "@/features/sharing/hooks/useShareBadges";
 import type { Project } from "@/types/project";
 
 // Default project name for the onboarding category.
@@ -73,6 +75,7 @@ const SORT_OPTIONS: { value: ProjectSortMode; label: string }[] = [
 // ---------------------------------------------------------------------------
 
 export default function DashboardPage() {
+  const router = useRouter();
   const {
     projects,
     isLoading,
@@ -229,6 +232,9 @@ export default function DashboardPage() {
   const publishStatuses = useDashboardPublishStatuses(
     projects.map((p) => ({ id: p.id, revision: p.revision })),
   );
+
+  // Phase P12: one batch lookup for "Shared" badges (no N+1, silent offline).
+  const shareBadges = useShareBadges(projects.map((p) => p.id));
 
   // ---- Open project with failed-flush handling ----
   const handleOpen = useCallback(
@@ -715,6 +721,8 @@ export default function DashboardPage() {
                   onRegeneratePreview={handleRegeneratePreview}
                   isRegeneratingPreview={regeneratingId === project.id}
                   publishStatus={publishStatuses[project.id]}
+                  shared={shareBadges[project.id] === true}
+                  onManageSharing={(pid) => router.push(`/editor/${pid}?share=1`)}
                 />
               ))}
             </div>
