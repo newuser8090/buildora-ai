@@ -37,6 +37,7 @@ import {
   openCopilotPanel,
   useCopilotStore,
 } from "@/features/ai-copilot/store/copilot-store";
+import { openShareDialog } from "@/features/sharing/store/share-ui-store";
 
 interface PaletteCommand {
   id: string;
@@ -262,6 +263,27 @@ function buildCommands(handlers: {
           usePublishingStore.getState().openPublishDialog();
         }
       },
+    },
+    {
+      id: "share-website",
+      label: "Share this website",
+      keywords: ["share", "review link", "share link", "send link", "get feedback", "review", "share with someone"],
+      hint: "Create a read-only review link to share with anyone",
+      run: () => openShareDialog("create"),
+    },
+    {
+      id: "manage-review-links",
+      label: "Manage review links",
+      keywords: ["manage links", "review links", "share links", "revoke", "stop sharing", "expire", "regenerate"],
+      hint: "Copy, stop, or renew your review links",
+      run: () => openShareDialog("create"),
+    },
+    {
+      id: "review-feedback",
+      label: "Review feedback",
+      keywords: ["feedback", "comments", "review", "what reviewers said", "feedback from viewers", "messages"],
+      hint: "Read, resolve, or delete feedback from reviewers",
+      run: () => openShareDialog("feedback"),
     },
     {
       id: "copy-live-link",

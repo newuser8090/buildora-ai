@@ -254,6 +254,17 @@ export class ProjectService {
     } catch {
       // Never break the delete flow over domain cleanup.
     }
+    try {
+      // Phase P12: revoke the project's review links + delete its review
+      // comments (best-effort, never blocks the delete). The result is
+      // reported truthfully — cleanup failure is not hidden.
+      const { lazyShareCleanup } = await import(
+        "@/features/sharing/services/lazy-share-cleanup"
+      );
+      await lazyShareCleanup(projectId);
+    } catch {
+      // Never break the delete flow over share cleanup.
+    }
 
     return { success: true };
   }

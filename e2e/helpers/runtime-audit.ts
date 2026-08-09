@@ -29,7 +29,12 @@ const BENIGN_PATTERNS = [
   /WebSocket/i,
   /HMR/i,
   /favicon/i,
+  // Expected status responses the app handles deliberately: the public
+  // review route returns 404 for invalid tokens and 410 for revoked/expired
+  // links — the browser logs the failed load, but the page renders the
+  // correct safe message by design.
   /Failed to load resource: the server responded with a status of 404/i,
+  /Failed to load resource: the server responded with a status of 410/i,
   /next-dev\.js/i,
   /Download the React DevTools/i,
   /React DevTools/i,

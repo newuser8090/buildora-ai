@@ -18,6 +18,7 @@
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { scheduleThumbnailForSave, removeThumbnailForProject } from "@/features/thumbnails/services/thumbnail-save-bridge";
 import { lazyCopilotMemoryCleanup } from "@/features/ai-copilot/memory/services/lazy-cleanup";
+import { lazyShareCleanup } from "@/features/sharing/services/lazy-share-cleanup";
 import { AutosaveCoordinator } from "./autosave-coordinator";
 import type {
   ProjectPersistenceAdapter,
@@ -633,6 +634,10 @@ export class ProjectController {
         removeThumbnailForProject(projectId);
         // Phase P11 — best-effort removal of the project's Copilot memory.
         void lazyCopilotMemoryCleanup(projectId);
+        // Phase P12 — best-effort revocation of the project's review links +
+        // deletion of its review comments. Never blocks the delete; the
+        // result is reported truthfully (never pretended to succeed).
+        void lazyShareCleanup(projectId);
         return { success: true };
       } catch (err) {
         const error = toControllerError(err, projectId);
@@ -674,6 +679,9 @@ export class ProjectController {
         removeThumbnailForProject(projectId);
         // Phase P11 — best-effort removal of the project's Copilot memory.
         void lazyCopilotMemoryCleanup(projectId);
+        // Phase P12 — best-effort revocation of the project's review links +
+        // deletion of its review comments.
+        void lazyShareCleanup(projectId);
       }
 
       // Step 3: Hydrate the replacement

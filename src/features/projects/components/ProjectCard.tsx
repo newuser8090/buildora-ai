@@ -19,6 +19,7 @@ import {
   Archive,
   ArchiveRestore,
   LayoutTemplate,
+  Share2,
 } from "lucide-react";
 import { cn } from "@/utils/cn";
 import { formatProjectDate } from "../utils/format-project-date";
@@ -50,6 +51,10 @@ export interface ProjectCardProps {
   isRegeneratingPreview?: boolean;
   /** Phase P7+P8 — derived publish status + optional live URL (local history). */
   publishStatus?: DashboardPublishInfo;
+  /** Phase P12 — true when this project has an active review link. */
+  shared?: boolean;
+  /** Phase P12 — open the share manager for this project (dashboard quick action). */
+  onManageSharing?: (projectId: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -95,6 +100,8 @@ export function ProjectCard({
   onRegeneratePreview,
   isRegeneratingPreview,
   publishStatus,
+  shared,
+  onManageSharing,
 }: ProjectCardProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
@@ -237,9 +244,20 @@ export function ProjectCard({
         )}
 
         {/* Pin indicator */}
-        {project.isPinned && (
+        {project.isPinned && !shared && (
           <div className="absolute right-2 top-2 z-10 text-yellow-400">
             <Pin className="h-3.5 w-3.5 fill-current" />
+          </div>
+        )}
+
+        {/* Phase P12 — Shared badge (only when an active review link exists) */}
+        {shared && (
+          <div
+            className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-full bg-accent/90 px-2 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm"
+            data-testid="project-shared-badge"
+          >
+            <Share2 className="h-2.5 w-2.5" />
+            Shared
           </div>
         )}
 
@@ -369,6 +387,20 @@ export function ProjectCard({
                     >
                       <Download className="h-3.5 w-3.5 text-text-dim" />
                       Export
+                    </button>
+                  </>
+                )}
+                {onManageSharing && (
+                  <>
+                    <div className="mx-2 my-1 h-px bg-border" role="separator" />
+                    <button
+                      onClick={() => { onManageSharing(project.id); setMenuOpen(false); }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-xs text-text-primary transition-colors hover:bg-base"
+                      role="menuitem"
+                      type="button"
+                    >
+                      <Share2 className="h-3.5 w-3.5 text-text-dim" />
+                      Manage sharing
                     </button>
                   </>
                 )}

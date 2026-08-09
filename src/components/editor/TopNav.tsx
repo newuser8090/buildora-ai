@@ -20,8 +20,10 @@ import {
   Keyboard,
   History,
   Bot,
+  Share2,
 } from "lucide-react";
 import { openCopilotPanel } from "@/features/ai-copilot/store/copilot-store";
+import { openShareDialog } from "@/features/sharing/store/share-ui-store";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { useMyBlocksUiStore } from "@/features/my-blocks/store/my-blocks-ui-store";
 import { AssetManager } from "@/features/assets/components/AssetManager";
@@ -422,6 +424,18 @@ export function TopNav() {
           <span className="hidden sm:inline text-xs">
             {publishStatus === "changes-unpublished" ? "Publish updates" : "Publish"}
           </span>
+        </button>
+
+        {/* Phase P12: Share — opens the canonical share surface */}
+        <button
+          data-testid="topnav-share-button"
+          onClick={() => openShareDialog("create")}
+          className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-sm text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
+          title="Share a read-only review link"
+          type="button"
+        >
+          <Share2 className="h-4 w-4" />
+          <span className="hidden sm:inline text-xs">Share</span>
         </button>
 
         {/* Phase P10: AI Copilot — opens the canonical Copilot panel */}

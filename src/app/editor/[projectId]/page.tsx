@@ -40,6 +40,8 @@ import { useRecoveryUiStore } from "@/features/recovery/store/recovery-ui-store"
 import dynamic from "next/dynamic";
 import { KeyboardShortcutsDialog } from "@/features/help/components/KeyboardShortcutsDialog";
 import { useCopilotMemory } from "@/features/ai-copilot/hooks/useCopilotMemory";
+import { useShareSnapshotSync } from "@/features/sharing/hooks/useShareSnapshotSync";
+import { openShareDialog } from "@/features/sharing/store/share-ui-store";
 
 // Phase P10 — AI Copilot panel. Lazy-loaded: normal editor interactions have
 // zero dependency on AI (opening/editing/saving work with the provider down).
@@ -47,6 +49,16 @@ const CopilotPanel = dynamic(
   () =>
     import("@/features/ai-copilot/components/CopilotPanel").then(
       (m) => m.CopilotPanel,
+    ),
+  { ssr: false },
+);
+
+// Phase P12 — Share dialog (lazy-loaded: sharing is never on the manual-edit
+// hot path and editor startup must not depend on sharing APIs).
+const ShareDialog = dynamic(
+  () =>
+    import("@/features/sharing/components/ShareDialog").then(
+      (m) => m.ShareDialog,
     ),
   { ssr: false },
 );
@@ -340,6 +352,21 @@ function EditorShell() {
   // project state. Mounted once so it survives the panel closing.
   useCopilotMemory();
 
+  // Phase P12 — keeps shared projections fresh after edits (best-effort,
+  // inert when no active shares exist or offline).
+  useShareSnapshotSync();
+
+  // Phase P12 — dashboard "Manage sharing" arrives as /editor/[id]?share=1
+  // and opens the canonical share dialog once, then cleans the URL.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("share") !== "1") return;
+    url.searchParams.delete("share");
+    window.history.replaceState(null, "", url.toString());
+    openShareDialog("create");
+  }, []);
+
   const project = useEditorStore((s) => s.project);
   const selectedPageId = useEditorStore((s) => s.selectedPageId);
   const selectedSectionId = useEditorStore((s) => s.selectedSectionId);
@@ -414,6 +441,9 @@ function EditorShell() {
 
       {/* Phase P10: AI Copilot — the canonical Copilot surface */}
       <CopilotPanel />
+
+      {/* Phase P12: Share — the canonical share-management surface */}
+      <ShareDialog />
 
       {/* Phase P9: help, personal templates, recovery, feedback */}
       <KeyboardShortcutsDialog open={shortcutsOpen} onClose={closeShortcuts} />
