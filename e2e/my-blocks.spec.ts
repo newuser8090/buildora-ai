@@ -66,8 +66,8 @@ test.describe("My Blocks — cross-project save & reuse", () => {
     await page.locator('[data-testid="success-save-block"]').click();
     await expect(page.locator('[data-testid="save-my-block-dialog"]')).toBeVisible({ timeout: 5000 });
     const blockNameInput = page.locator('[data-testid="save-block-name"]');
-    const suggestedName = await blockNameInput.inputValue();
-    expect(suggestedName.trim().length).toBeGreaterThan(0);
+    const suggestedName = (await blockNameInput.inputValue()).trim();
+    expect(suggestedName.length).toBeGreaterThan(0);
     await page.locator('[data-testid="save-block-submit"]').click();
     await expect(page.locator('[data-testid="my-blocks-toast"]')).toContainText(
       "saved to My Blocks",
@@ -75,12 +75,18 @@ test.describe("My Blocks — cross-project save & reuse", () => {
     );
 
     // 4. Verify the block appears in My Blocks (Command Palette → library).
+    // NOTE: assert the card + its stable saved NAME. The card thumbnail
+    // renders the block's structural preview only while idle, then swaps in an
+    // <img> — so asserting on the transient h1 text would race with thumbnail
+    // loading. The h1 content itself is verified deterministically later on
+    // the live canvas (see lines ~160/177/198).
     await page.keyboard.press("Control+k");
     await expect(page.locator('[data-testid="command-palette"]')).toBeVisible({ timeout: 5000 });
     await page.locator('[data-testid="command-open-my-blocks"]').click();
     await expect(page.locator('[data-testid="my-blocks-library"]')).toBeVisible({ timeout: 5000 });
-    await expect(page.locator('[data-testid="my-blocks-library"]')).toContainText("My Blocks hero");
-    await expect(page.locator('[data-testid^="my-block-card-"]').first()).toBeVisible();
+    const savedCard = page.locator('[data-testid^="my-block-card-"]').first();
+    await expect(savedCard).toBeVisible({ timeout: 5000 });
+    await expect(savedCard).toContainText(suggestedName);
     await page.locator('[data-testid="my-blocks-close"]').click();
 
     // Return to the dashboard (saves A) and create project B. The dashboard
