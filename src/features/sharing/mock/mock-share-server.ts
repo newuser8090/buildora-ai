@@ -21,6 +21,7 @@
 
 import { randomBytes, randomUUID } from "node:crypto";
 import { getMockCloudState } from "@/features/cloud-sync/mock/mock-cloud-server";
+import { getMockWorkspaceState } from "@/features/workspaces/mock/mock-workspace-server";
 import {
   COMMENT_BODY_MAX,
   COMMENT_DUPLICATE_WINDOW_MS,
@@ -157,6 +158,13 @@ function requireOwnerOfShare(
   if (record.ownerId !== owner.id) {
     throw new MockShareError(403, "PERMISSION_DENIED", "Only the owner can manage this review link.");
   }
+  // Phase P14: workspace projects require the caller to STILL hold owner/editor
+  // role in the owning workspace (removed/downgraded members lose management
+  // access immediately — mirror of the Supabase gate).
+  const wsAccess = workspaceShareRoleForProject(record.projectId, owner.id);
+  if (wsAccess && wsAccess.role !== "owner" && wsAccess.role !== "editor") {
+    throw new MockShareError(403, "PERMISSION_DENIED", "You no longer have permission to manage this review link.");
+  }
   return record;
 }
 
@@ -227,6 +235,37 @@ function validateProjectId(projectId: unknown): string {
   return projectId;
 }
 
+/**
+ * Phase P14 — workspace-aware share gate.
+ *
+ * If the project is a WORKSPACE project, only workspace members with owner or
+ * editor role may create/manage review links (mirrors the permission matrix
+ * and the Supabase RPC gate in the P14 migration). A project id is only
+ * unique WITHIN a workspace, so when the same id exists in several
+ * workspaces the caller must hold owner/editor role in EVERY one of them — a
+ * viewer or non-member in any workspace holding the id is denied.
+ * Personal projects keep the P12 behavior (any signed-in owner may share).
+ */
+function workspaceShareRoleForProject(
+  projectId: string,
+  userId: string,
+): { role: "owner" | "editor" | "viewer" } | null {
+  const wsState = getMockWorkspaceState();
+  let found = false;
+  for (const project of wsState.projects.values()) {
+    if (project.projectId !== projectId) continue;
+    found = true;
+    const workspace = wsState.workspaces.get(project.workspaceId);
+    if (!workspace) return { role: "viewer" };
+    if (workspace.ownerId === userId) continue;
+    // Viewer or non-member in this workspace → denied for this project id.
+    if (workspace.members.get(userId) !== "editor") return { role: "viewer" };
+  }
+  if (!found) return null;
+  // Owner/editor in every workspace holding this project id.
+  return { role: "owner" };
+}
+
 // ---------------------------------------------------------------------------
 // Owner handlers
 // ---------------------------------------------------------------------------
@@ -247,6 +286,12 @@ export function handleCreateShare(
 ): { link: ShareLinkSummary; rawToken: string; url: string } {
   const owner = requireOwner(token);
   const projectId = validateProjectId(input.projectId);
+
+  // Phase P14: workspace projects may only be shared by owner/editor members.
+  const wsAccess = workspaceShareRoleForProject(projectId, owner.id);
+  if (wsAccess && wsAccess.role !== "owner" && wsAccess.role !== "editor") {
+    throw new MockShareError(403, "PERMISSION_DENIED", "Only workspace editors can create review links for this project.");
+  }
   const feedbackEnabled = input.feedbackEnabled === true;
   const requireName = input.requireName === true && feedbackEnabled;
   const expiresAt = parseExpiry(input);
@@ -289,6 +334,11 @@ export function handleListShares(
   projectId: string,
 ): ShareLinkSummary[] {
   const owner = requireOwner(token);
+  // Phase P14: viewers / non-members must not enumerate workspace-project links.
+  const wsAccess = workspaceShareRoleForProject(projectId, owner.id);
+  if (wsAccess && wsAccess.role !== "owner" && wsAccess.role !== "editor") {
+    return [];
+  }
   return [...state.shares.values()]
     .filter((r) => r.ownerId === owner.id && r.projectId === projectId)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
@@ -303,6 +353,12 @@ export function handleShareStatusBatch(
   const owner = requireOwner(token);
   const out: Record<string, boolean> = {};
   for (const projectId of projectIds) {
+    // Phase P14: workspace projects are badge-visible only to owner/editor.
+    const wsAccess = workspaceShareRoleForProject(projectId, owner.id);
+    if (wsAccess && wsAccess.role !== "owner" && wsAccess.role !== "editor") {
+      out[projectId] = false;
+      continue;
+    }
     out[projectId] = [...state.shares.values()].some(
       (r) =>
         r.ownerId === owner.id &&
@@ -566,6 +622,57 @@ export function handleResolveShare(
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
+
+/**
+ * Phase P14 — revoke every active review link for a project id (used when a
+ * workspace project is deleted: deleted content must not remain shareable).
+ * Scoped by project id across all owners; in the (UI-unreachable) case where
+ * the same id exists in two workspaces, revoking is the safe direction.
+ */
+export function revokeActiveSharesForProject(
+  state: MockShareState,
+  projectId: string,
+): number {
+  let revoked = 0;
+  for (const record of state.shares.values()) {
+    if (record.projectId !== projectId || record.status !== "active") continue;
+    record.status = "revoked";
+    record.updatedAt = nowIso();
+    revoked += 1;
+  }
+  return revoked;
+}
+
+/**
+ * Phase P14 — revoke every active review link owned by a member for a
+ * workspace's projects (mirror of the Supabase ws_revoke_member_shares RPC).
+ * Used when a member is removed or downgraded to viewer: their public links
+ * must stop resolving immediately — not just their ability to manage them.
+ */
+export function revokeMemberSharesForWorkspace(
+  state: MockShareState,
+  workspaceId: string,
+  userId: string,
+): number {
+  const projectIds = new Set<string>();
+  const wsState = getMockWorkspaceState();
+  for (const project of wsState.projects.values()) {
+    if (project.workspaceId === workspaceId) projectIds.add(project.projectId);
+  }
+  let revoked = 0;
+  for (const record of state.shares.values()) {
+    if (
+      record.ownerId === userId &&
+      record.status === "active" &&
+      projectIds.has(record.projectId)
+    ) {
+      record.status = "revoked";
+      record.updatedAt = nowIso();
+      revoked += 1;
+    }
+  }
+  return revoked;
+}
 
 export function handleDeleteProjectShareData(
   state: MockShareState,

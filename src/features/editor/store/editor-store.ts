@@ -41,12 +41,14 @@ import type { EditableFieldDescriptor } from "@/features/inline-editing/types";
 import type { InlineFieldUpdateResult } from "@/features/inline-editing/types";
 import { blockTreeToSection } from "@/features/blocks/adapters/section-block-adapter";
 import type { BlockTree } from "@/features/blocks/types";
+import { isEditorWritable } from "@/features/workspaces/store/workspace-access-store";
 
 // ---------------------------------------------------------------------------
 // Mutation result types
 // ---------------------------------------------------------------------------
 
 export type EditorMutationErrorCode =
+  | "READONLY"
   | "PAGE_NOT_FOUND"
   | "SECTION_NOT_FOUND"
   | "TARGET_NOT_FOUND"
@@ -68,6 +70,19 @@ export interface EditorMutationError {
 export type EditorMutationResult =
   | { ok: true; changed: boolean }
   | { ok: false; error: EditorMutationError };
+
+/** Read-only guard result for mutation actions (Phase P14 — viewers and
+ *  lease-blocked editors must never mutate a shared project through the
+ *  store boundary). */
+export function readonlyDenied(): EditorMutationResult {
+  return {
+    ok: false,
+    error: {
+      code: "READONLY",
+      message: "This project is read-only right now.",
+    },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // History stack
@@ -382,6 +397,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   setProject: (project) => {
+    if (!isEditorWritable()) return;
     set(withHistory(get(), (p) => {
       Object.assign(p, cloneProject(project));
     }));
@@ -400,6 +416,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   // ---- Page lifecycle ----
 
   addPage: (options) => {
+    if (!isEditorWritable()) return readonlyDenied();
     const state = get();
     const requested = options?.title?.trim();
     const title = requested
@@ -426,6 +443,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   renamePage: (pageId, title) => {
+    if (!isEditorWritable()) return readonlyDenied();
     const state = get();
     const result = renamePageInList({
       pages: state.project.pages,
@@ -445,6 +463,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   deletePage: (pageId) => {
+    if (!isEditorWritable()) return readonlyDenied();
     const state = get();
     const result = deletePageFromList(state.project.pages, pageId);
     if (!result.ok) return mapPageStructureError(result.error);
@@ -462,6 +481,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   movePage: (pageId, targetIndex) => {
+    if (!isEditorWritable()) return readonlyDenied();
     const state = get();
     const result = movePageToIndex(state.project.pages, pageId, targetIndex);
     if (!result.ok) return mapPageStructureError(result.error);
@@ -477,6 +497,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   updatePageMeta: (pageId, meta) => {
+    if (!isEditorWritable()) return readonlyDenied();
     const state = get();
     const page = state.project.pages.find((p) => p.id === pageId);
     if (!page) {
@@ -504,6 +525,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   updateSiteSettings: (patch) => {
+    if (!isEditorWritable()) return readonlyDenied();
     const state = get();
     const current = state.project.siteSettings;
 
@@ -548,6 +570,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   addAsset: (asset) => {
+    if (!isEditorWritable()) return;
     set(
       withHistory(get(), (project) => {
         project.assets.push(asset);
@@ -557,6 +580,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   removeAsset: (assetId, options) => {
+    if (!isEditorWritable()) return;
     const shouldClear = options?.clearReferences ?? true;
     set(
       withHistory(get(), (project) => {
@@ -573,6 +597,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   replaceAsset: (assetId, replacement) => {
+    if (!isEditorWritable()) return;
     set(
       withHistory(get(), (project) => {
         const idx = project.assets.findIndex((a) => a.id === assetId);
@@ -589,6 +614,9 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   renameAsset: (assetId, name) => {
+    if (!isEditorWritable()) {
+      return { success: false, error: "This project is read-only right now." };
+    }
     if (!name || typeof name !== "string") {
       return { success: false, error: "Name must be a non-empty string." };
     }
@@ -686,11 +714,13 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   // ---- Editing session ----
 
   beginEditSession: () => {
+    if (!isEditorWritable()) return;
     const { project } = get();
     set({ _editingSession: { snapshot: cloneProject(project) } });
   },
 
   commitEditSession: () => {
+    if (!isEditorWritable()) return;
     const { _editingSession, project, history } = get();
     if (!_editingSession) return;
     // Push the snapshot to past, set current project as present, clear future
@@ -705,6 +735,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   cancelEditSession: () => {
+    if (!isEditorWritable()) return;
     const { _editingSession } = get();
     if (!_editingSession) return;
     // Restore the snapshot
@@ -723,6 +754,12 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   // normal store subscription (one project-reference change → one revision).
 
   applyAiEditPlan: (plan, selectedOperationIds, options) => {
+    if (!isEditorWritable()) {
+      return {
+        ok: false,
+        error: { code: "PLAN_READONLY", message: "This project is read-only right now." },
+      };
+    }
     const state = get();
 
     // 1. Project identity
@@ -865,6 +902,15 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   // store subscription (one project-reference change → one revision).
 
   updateEditableFieldValue: (descriptor, nextValue) => {
+    if (!isEditorWritable()) {
+      return {
+        ok: false,
+        error: {
+          code: "INLINE_READONLY",
+          message: "This project is read-only right now.",
+        },
+      };
+    }
     const state = get();
 
     const result = updateEditableField(state.project, descriptor, nextValue);
@@ -893,6 +939,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   // (handled by the controller's normal store subscription).
 
   commitBlockTree: (pageId, sectionId, tree) => {
+    if (!isEditorWritable()) return readonlyDenied();
     const state = get();
     const page = state.project.pages.find((p) => p.id === pageId);
     if (!page) {
@@ -940,6 +987,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   updateSection: (sectionId, updates) => {
+    if (!isEditorWritable()) return;
     const state = get();
     // If in an edit session, mutate project directly without pushing to history
     if (state._editingSession) {
@@ -970,6 +1018,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   updateSectionProps: (sectionId, props) => {
+    if (!isEditorWritable()) return;
     const state = get();
     // If in an edit session, mutate project directly without pushing to history
     if (state._editingSession) {
@@ -1006,6 +1055,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   updateSectionStyles: (sectionId, styles) => {
+    if (!isEditorWritable()) return;
     const state = get();
     if (state._editingSession) {
       const updated = cloneProject(state.project);
@@ -1041,6 +1091,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   insertSection: (pageId, section, position) => {
+    if (!isEditorWritable()) return readonlyDenied();
     const state = get();
     const page = state.project.pages.find((p) => p.id === pageId);
     if (!page) {
@@ -1093,6 +1144,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   reorderSection: (pageId, activeSectionId, overSectionId) => {
+    if (!isEditorWritable()) return readonlyDenied();
     const state = get();
     const page = state.project.pages.find((p) => p.id === pageId);
     if (!page) {
@@ -1129,6 +1181,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   moveSection: (pageId, sectionId, targetIndex) => {
+    if (!isEditorWritable()) return readonlyDenied();
     const state = get();
     const page = state.project.pages.find((p) => p.id === pageId);
     if (!page) {
@@ -1204,6 +1257,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   duplicateSection: (sectionId) => {
+    if (!isEditorWritable()) return readonlyDenied();
     const state = get();
     const page = state.project.pages.find((p) =>
       p.sections.some((s) => s.id === sectionId),
@@ -1259,6 +1313,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   deleteSection: (sectionId) => {
+    if (!isEditorWritable()) return readonlyDenied();
     const state = get();
     const page = state.project.pages.find((p) =>
       p.sections.some((s) => s.id === sectionId),
@@ -1295,6 +1350,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   setSectionVisible: (sectionId, visible) => {
+    if (!isEditorWritable()) return readonlyDenied();
     const state = get();
     const page = state.project.pages.find((p) =>
       p.sections.some((s) => s.id === sectionId),
@@ -1332,6 +1388,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   toggleSectionVisibility: (sectionId) => {
+    if (!isEditorWritable()) return readonlyDenied();
     const state = get();
     const section = state.project.pages
       .flatMap((p) => p.sections)
@@ -1348,6 +1405,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   // ---- History ----
 
   undo: () => {
+    if (!isEditorWritable()) return;
     const { history } = get();
     if (history.past.length === 0) return;
     const previous = history.past[history.past.length - 1];
@@ -1363,6 +1421,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   redo: () => {
+    if (!isEditorWritable()) return;
     const { history } = get();
     if (history.future.length === 0) return;
     const next = history.future[0];

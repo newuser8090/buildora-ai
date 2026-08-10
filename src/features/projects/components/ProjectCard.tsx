@@ -55,6 +55,8 @@ export interface ProjectCardProps {
   shared?: boolean;
   /** Phase P12 — open the share manager for this project (dashboard quick action). */
   onManageSharing?: (projectId: string) => void;
+  /** Phase P14 — move a personal project into a workspace. */
+  onMoveToWorkspace?: (project: DashboardProject) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -102,6 +104,7 @@ export function ProjectCard({
   publishStatus,
   shared,
   onManageSharing,
+  onMoveToWorkspace,
 }: ProjectCardProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
@@ -403,6 +406,17 @@ export function ProjectCard({
                       Manage sharing
                     </button>
                   </>
+                )}
+                {onMoveToWorkspace && (
+                  <button
+                    onClick={() => { onMoveToWorkspace(project); setMenuOpen(false); }}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-xs text-text-primary transition-colors hover:bg-base"
+                    role="menuitem"
+                    type="button"
+                  >
+                    <Share2 className="h-3.5 w-3.5 text-text-dim" />
+                    Move to workspace
+                  </button>
                 )}
                 {onToggleArchive && (
                   <>

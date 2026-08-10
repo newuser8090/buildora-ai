@@ -32,9 +32,12 @@ const BENIGN_PATTERNS = [
   // Expected status responses the app handles deliberately: the public
   // review route returns 404 for invalid tokens and 410 for revoked/expired
   // links — the browser logs the failed load, but the page renders the
-  // correct safe message by design.
+  // correct safe message by design. Workspace project saves rejected with
+  // 409 (optimistic-concurrency STALE_REVISION) are likewise deliberate — the
+  // editor surfaces the safe conflict dialog instead of overwriting.
   /Failed to load resource: the server responded with a status of 404/i,
   /Failed to load resource: the server responded with a status of 410/i,
+  /Failed to load resource: the server responded with a status of 409/i,
   /next-dev\.js/i,
   /Download the React DevTools/i,
   /React DevTools/i,

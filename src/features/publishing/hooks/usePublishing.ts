@@ -22,6 +22,8 @@ import {
 } from "../services/publish-concurrency";
 import { usePublishingStore } from "../store/publishing-store";
 import { makePublishError } from "../errors";
+import { useWorkspaceAccessStore } from "@/features/workspaces/store/workspace-access-store";
+import { canPublishProject } from "@/features/workspaces/permissions/workspace-permissions";
 import type { ProviderAvailability, PublishServiceResult, PublishStatus } from "../types";
 
 export function usePublishing() {
@@ -99,6 +101,32 @@ export function usePublishing() {
     async (providerId: string, signal?: AbortSignal): Promise<PublishServiceResult> => {
       if (!project.id) {
         return { ok: false, error: makePublishError("PROJECT_INVALID", "No project is open.") };
+      }
+
+      // Phase P14 — collaboration permission gate (service boundary). A viewer
+      // (or a member whose role was revoked while the editor was open) must
+      // never publish, even if a stale UI state would have shown the button.
+      const accessState = useWorkspaceAccessStore.getState();
+      if (accessState.workspaceId) {
+        const role = accessState.role ?? "viewer";
+        if (!canPublishProject(role)) {
+          return {
+            ok: false,
+            error: makePublishError(
+              "PERMISSION_DENIED",
+              "Only workspace editors and owners can publish this project.",
+            ),
+          };
+        }
+        if (accessState.access.mode !== "editable") {
+          return {
+            ok: false,
+            error: makePublishError(
+              "PERMISSION_DENIED",
+              "This project is open read-only, so it can't be published right now.",
+            ),
+          };
+        }
       }
 
       // Client-side concurrency guard: one active publish per project+provider.

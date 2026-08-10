@@ -20,6 +20,7 @@ import { X, Link2, MessageSquareText, WifiOff, ShieldAlert } from "lucide-react"
 import { useAuth } from "@/features/auth/useAuth";
 import { AuthDialog } from "@/features/auth/components/AuthDialog";
 import { useEditorStore } from "@/features/editor/store/editor-store";
+import { useWorkspaceAccessStore } from "@/features/workspaces/store/workspace-access-store";
 import { shareBackendAvailable } from "../services/share-link-service";
 import { useShareUiStore, type ShareDialogTab } from "../store/share-ui-store";
 import { markPerf } from "@/features/perf/perf-instrumentation";
@@ -41,6 +42,9 @@ export function ShareDialog() {
   const project = useEditorStore((s) => s.project);
 
   const { status: authStatus } = useAuth();
+  // Phase P14 — read-only workspace sessions (viewer / blocked / offline)
+  // cannot create or manage review links (server enforces this too).
+  const accessMode = useWorkspaceAccessStore((s) => s.access.mode);
   const [authOpen, setAuthOpen] = useState(false);
   const [online, setOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -153,8 +157,19 @@ export function ShareDialog() {
             </div>
           )}
 
+          {/* Gate: workspace read-only (Phase P14) */}
+          {configured && online && authStatus === "signed-in" && isHydrated && project.id && accessMode === "readonly" && (
+            <div className="flex flex-col items-center gap-3 px-6 py-12 text-center">
+              <ShieldAlert className="h-8 w-8 text-text-dim" />
+              <p className="max-w-xs text-sm text-text-muted">
+                This project is read-only for you, so review links are managed
+                by workspace editors and owners.
+              </p>
+            </div>
+          )}
+
           {/* Content */}
-          {configured && online && authStatus === "signed-in" && isHydrated && project.id && (
+          {configured && online && authStatus === "signed-in" && isHydrated && project.id && accessMode !== "readonly" && (
             <>
               {/* Tabs */}
               <div className="flex gap-1 border-b border-border px-4 pt-3" role="tablist" aria-label="Share options">

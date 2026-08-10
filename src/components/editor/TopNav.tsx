@@ -37,6 +37,7 @@ import { ExperienceModeSwitcher } from "@/features/guided-builder/components/Exp
 import { EXPORT_SITE_EVENT } from "@/features/guided-builder/constants";
 import { CloudSyncStatusControl } from "@/features/cloud-sync/components/CloudSyncStatusControl";
 import { AccountMenu } from "@/features/auth/components/AccountMenu";
+import { useWorkspaceAccessStore } from "@/features/workspaces/store/workspace-access-store";
 import { usePreviewStore } from "@/features/preview/store/preview-store";
 import { useLaunchCenterStore } from "@/features/launch-readiness/store/launch-center-store";
 import { useSiteSettingsUiStore } from "@/features/site-settings/store/site-settings-ui-store";
@@ -77,6 +78,12 @@ export function TopNav() {
   const canUndo = useEditorStore((s) => s.canUndo());
   const canRedo = useEditorStore((s) => s.canRedo());
   const project = useEditorStore((s) => s.project);
+
+  // Phase P14 — collaboration session state for indicators + button gating.
+  const wsAccess = useWorkspaceAccessStore((s) => s.access);
+  const wsName = useWorkspaceAccessStore((s) => s.workspaceName);
+  const wsLeaseHolder = useWorkspaceAccessStore((s) => s.leaseHolderName);
+  const isWsReadOnly = wsAccess.mode === "readonly";
 
   // Phase P8: keep the Publish button honest — "Publish updates" when the
   // project has unpublished changes; it always opens the Launch Center.
@@ -279,6 +286,30 @@ export function TopNav() {
             {project.name || "Untitled Project"}
           </span>
         </div>
+
+        {/* Phase P14 — workspace + editing state indicator */}
+        {wsName && (
+          <div
+            className="flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-text-dim"
+            data-testid="workspace-editor-context"
+          >
+            <span className="text-text-muted">{wsName}</span>
+            <span aria-hidden="true" className="text-text-dim/40">·</span>
+            {isWsReadOnly ? (
+              <span className="text-yellow-600 dark:text-yellow-400" data-testid="workspace-editing-indicator">
+                {wsAccess.reason === "being-edited" && wsLeaseHolder
+                  ? `Being edited by ${wsLeaseHolder}`
+                  : wsAccess.reason === "offline"
+                    ? "Offline — read only"
+                    : "Read only"}
+              </span>
+            ) : (
+              <span className="text-emerald-600 dark:text-emerald-400" data-testid="workspace-editing-indicator">
+                Editing
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ---- Spacer ---- */}
@@ -416,8 +447,9 @@ export function TopNav() {
         <button
           data-testid="topnav-publish-button"
           onClick={() => useLaunchCenterStore.getState().openLaunchCenter()}
-          className="flex h-8 items-center gap-2 rounded-lg bg-accent px-3 text-sm font-medium text-white transition-all duration-200 hover:bg-accent-hover active:scale-95"
-          title="Check and publish your website"
+          disabled={isWsReadOnly}
+          className="flex h-8 items-center gap-2 rounded-lg bg-accent px-3 text-sm font-medium text-white transition-all duration-200 hover:bg-accent-hover active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+          title={isWsReadOnly ? "Read-only sessions can't publish" : "Check and publish your website"}
           type="button"
         >
           <Rocket className="h-4 w-4" />
@@ -430,8 +462,9 @@ export function TopNav() {
         <button
           data-testid="topnav-share-button"
           onClick={() => openShareDialog("create")}
-          className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-sm text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
-          title="Share a read-only review link"
+          disabled={isWsReadOnly}
+          className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-sm text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+          title={isWsReadOnly ? "Review links are managed by workspace editors" : "Share a read-only review link"}
           type="button"
         >
           <Share2 className="h-4 w-4" />

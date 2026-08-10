@@ -43,6 +43,10 @@ import { useCopilotMemory } from "@/features/ai-copilot/hooks/useCopilotMemory";
 import { useShareSnapshotSync } from "@/features/sharing/hooks/useShareSnapshotSync";
 import { openShareDialog } from "@/features/sharing/store/share-ui-store";
 
+// Phase P14 — Team Workspaces & Controlled Collaboration
+import { useWorkspaceEditorAccess } from "@/features/workspaces/hooks/useWorkspaceEditorAccess";
+import { CollaborationDialogs } from "@/features/workspaces/components/CollaborationDialogs";
+
 // Phase P10 — AI Copilot panel. Lazy-loaded: normal editor interactions have
 // zero dependency on AI (opening/editing/saving work with the provider down).
 const CopilotPanel = dynamic(
@@ -352,6 +356,10 @@ function EditorShell() {
   // project state. Mounted once so it survives the panel closing.
   useCopilotMemory();
 
+  // Phase P14 — workspace editor session: access resolution, edit lease,
+  // server saves with optimistic concurrency, authorization-loss handling.
+  useWorkspaceEditorAccess();
+
   // Phase P12 — keeps shared projections fresh after edits (best-effort,
   // inert when no active shares exist or offline).
   useShareSnapshotSync();
@@ -444,6 +452,9 @@ function EditorShell() {
 
       {/* Phase P12: Share — the canonical share-management surface */}
       <ShareDialog />
+
+      {/* Phase P14: collaboration session dialogs + read-only banner */}
+      <CollaborationDialogs />
 
       {/* Phase P9: help, personal templates, recovery, feedback */}
       <KeyboardShortcutsDialog open={shortcutsOpen} onClose={closeShortcuts} />

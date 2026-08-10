@@ -92,7 +92,8 @@ export type InlineAiErrorCode =
   | "INLINE_REVISION_MISMATCH"
   | "INLINE_APPLY_FAILED"
   | "INLINE_NO_CHANGE"
-  | "INLINE_REQUEST_CANCELLED";
+  | "INLINE_REQUEST_CANCELLED"
+  | "INLINE_READONLY";
 
 export interface InlineAiError {
   code: InlineAiErrorCode;
