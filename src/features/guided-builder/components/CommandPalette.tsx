@@ -38,6 +38,8 @@ import {
   useCopilotStore,
 } from "@/features/ai-copilot/store/copilot-store";
 import { openShareDialog } from "@/features/sharing/store/share-ui-store";
+import { useWorkspaceAccessStore } from "@/features/workspaces/store/workspace-access-store";
+import { useWorkspaceHistoryUiStore } from "@/features/workspaces/store/workspace-history-ui-store";
 
 interface PaletteCommand {
   id: string;
@@ -346,6 +348,28 @@ function buildCommands(handlers: {
       keywords: ["shortcuts", "keys", "help", "keyboard", "hotkeys"],
       hint: "See every shortcut that actually exists",
       run: () => useHelpUiStore.getState().openShortcutsDialog(),
+    },
+    {
+      id: "open-version-history",
+      label: "Open version history",
+      keywords: ["history", "versions", "version history", "previous version", "restore version", "older version", "changes"],
+      hint: "Browse, preview, and restore saved versions",
+      run: () => {
+        if (useWorkspaceAccessStore.getState().workspaceId) {
+          useWorkspaceHistoryUiStore.getState().openDialog("versions");
+        }
+      },
+    },
+    {
+      id: "save-version",
+      label: "Save a version",
+      keywords: ["version", "checkpoint", "save version", "snapshot", "mark this point", "save a version"],
+      hint: "Create a version checkpoint of this project",
+      run: () => {
+        if (useWorkspaceAccessStore.getState().workspaceId) {
+          useWorkspaceHistoryUiStore.getState().openDialog("versions");
+        }
+      },
     },
     {
       id: "backups",

@@ -16,6 +16,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Copy, Plus, RefreshCw, ShieldOff, Loader2, Link2, Check } from "lucide-react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
+import { useWorkspaceAccessStore } from "@/features/workspaces/store/workspace-access-store";
+import { recordWorkspaceActivity } from "@/features/workspaces/services/activity-bridge";
 import { getShareProvider, ShareLinkService } from "../services/share-link-service";
 import {
   cachedShareToken,
@@ -252,6 +254,12 @@ export function ReviewLinksTab({ projectId }: { projectId: string }) {
     markPerf(SHARE_PERF_MARKS.created);
     setJustCreated(created.value);
     setCreating(false);
+    // Phase P15 — activity: a new review link for a workspace project.
+    recordWorkspaceActivity({
+      workspaceId: useWorkspaceAccessStore.getState().workspaceId,
+      projectId,
+      type: "share.created",
+    });
     await load();
   }, [projectId, feedbackEnabled, requireName, preset, project, revision, creating, links, load]);
 
@@ -267,13 +275,19 @@ export function ReviewLinksTab({ projectId }: { projectId: string }) {
       cacheShareToken(id, result.value.rawToken);
       setJustCreated(result.value);
       notifyActionFeedback("New review link created — the old one stopped working.");
+      // Phase P15 — activity: regenerating creates a fresh link.
+      recordWorkspaceActivity({
+        workspaceId: useWorkspaceAccessStore.getState().workspaceId,
+        projectId,
+        type: "share.created",
+      });
       await load();
     } else {
       setError(shareErrorMessage(result.error));
     }
     setBusy(null);
     setConfirm(null);
-  }, [load]);
+  }, [projectId, load]);
 
   const handleRevoke = useCallback(async (id: string) => {
     const provider = getShareProvider();
@@ -285,13 +299,19 @@ export function ReviewLinksTab({ projectId }: { projectId: string }) {
     if (result.ok) {
       removeCachedShareToken(id);
       notifyActionFeedback("Review link stopped.");
+      // Phase P15 — activity: a workspace project's review link was revoked.
+      recordWorkspaceActivity({
+        workspaceId: useWorkspaceAccessStore.getState().workspaceId,
+        projectId,
+        type: "share.revoked",
+      });
       await load();
     } else {
       setError(shareErrorMessage(result.error));
     }
     setBusy(null);
     setConfirm(null);
-  }, [load]);
+  }, [projectId, load]);
 
   const activeLinks = useMemo(() => links.filter((l) => l.status === "active"), [links]);
   const otherLinks = useMemo(() => links.filter((l) => l.status !== "active"), [links]);

@@ -47,6 +47,10 @@ import { openShareDialog } from "@/features/sharing/store/share-ui-store";
 import { useWorkspaceEditorAccess } from "@/features/workspaces/hooks/useWorkspaceEditorAccess";
 import { CollaborationDialogs } from "@/features/workspaces/components/CollaborationDialogs";
 
+// Phase P15 — Presence, Activity & Version History
+import { useWorkspacePresence } from "@/features/workspaces/hooks/useWorkspacePresence";
+import { WorkspaceHistoryDialogs } from "@/features/workspaces/components/WorkspaceHistoryDialogs";
+
 // Phase P10 — AI Copilot panel. Lazy-loaded: normal editor interactions have
 // zero dependency on AI (opening/editing/saving work with the provider down).
 const CopilotPanel = dynamic(
@@ -360,6 +364,10 @@ function EditorShell() {
   // server saves with optimistic concurrency, authorization-loss handling.
   useWorkspaceEditorAccess();
 
+  // Phase P15 — live collaboration presence (joined while a workspace project
+  // is open; heartbeated, left on unmount/switch/sign-out).
+  useWorkspacePresence();
+
   // Phase P12 — keeps shared projections fresh after edits (best-effort,
   // inert when no active shares exist or offline).
   useShareSnapshotSync();
@@ -455,6 +463,9 @@ function EditorShell() {
 
       {/* Phase P14: collaboration session dialogs + read-only banner */}
       <CollaborationDialogs />
+
+      {/* Phase P15: version history + preview + restore + copy dialogs */}
+      <WorkspaceHistoryDialogs />
 
       {/* Phase P9: help, personal templates, recovery, feedback */}
       <KeyboardShortcutsDialog open={shortcutsOpen} onClose={closeShortcuts} />

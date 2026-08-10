@@ -126,6 +126,118 @@ export interface EditorAccessContext {
 }
 
 // ---------------------------------------------------------------------------
+// Presence (Phase P15) — ephemeral collaboration sessions
+// ---------------------------------------------------------------------------
+
+/** Presence mode is DERIVED server-side from the edit lease — never trusted
+ *  from the client (a viewer or a blocked editor is always "viewing"). */
+export type WorkspacePresenceMode = "viewing" | "editing";
+
+/** Display-safe presence projection (no device ids, tokens, or payload passthrough). */
+export interface WorkspacePresence {
+  workspaceId: string;
+  /** Null = workspace-wide presence (e.g. dashboard). */
+  projectId: string | null;
+  userId: string;
+  /** Client-generated; one per open tab. */
+  sessionId: string;
+  mode: WorkspacePresenceMode;
+  joinedAt: string;
+  lastSeenAt: string;
+  /** Server-derived friendly name (never a raw device id). */
+  displayName: string;
+}
+
+// ---------------------------------------------------------------------------
+// Workspace activity (Phase P15) — durable, bounded, privacy-safe
+// ---------------------------------------------------------------------------
+
+/** Allow-listed event types. The server rejects anything else. */
+export type WorkspaceActivityType =
+  | "workspace.created"
+  | "workspace.renamed"
+  | "member.invited"
+  | "member.joined"
+  | "member.role_changed"
+  | "member.removed"
+  | "project.created"
+  | "project.moved_in"
+  | "project.renamed"
+  | "project.saved"
+  | "project.duplicated"
+  | "project.deleted"
+  | "project.version_created"
+  | "project.version_restored"
+  | "publish.completed"
+  | "publish.rollback"
+  | "share.created"
+  | "share.revoked"
+  | "domain.attached"
+  | "domain.removed";
+
+/** Metadata values are scalars only (allow-listed per type — never free JSON). */
+export type WorkspaceActivityMetadata = Record<string, string | number | boolean>;
+
+export interface WorkspaceActivityEvent {
+  id: string;
+  workspaceId: string;
+  projectId: string | null;
+  /** SERVER-DERIVED from the session — a client-supplied actor is ignored. */
+  actorUserId: string;
+  type: WorkspaceActivityType;
+  createdAt: string;
+  metadata: WorkspaceActivityMetadata;
+  /** Server-populated display name (lists only) — never client-supplied. */
+  actorName?: string;
+}
+
+/** Activity list filters (UI-level; the server allow-lists types regardless). */
+export type WorkspaceActivityFilter =
+  | "all"
+  | "projects"
+  | "members"
+  | "publishing"
+  | "sharing";
+
+/** Cursor for (createdAt DESC, id DESC) pagination. */
+export interface ActivityCursor {
+  ts: string;
+  id: string;
+}
+
+// ---------------------------------------------------------------------------
+// Project version history (Phase P15) — server-backed snapshots
+// ---------------------------------------------------------------------------
+
+export type ProjectVersionReason =
+  | "autosave"
+  | "publish"
+  | "checkpoint"
+  | "pre-restore"
+  | "restore";
+
+/** Metadata-only list entry — snapshots are fetched lazily on preview. */
+export interface ProjectVersionMeta {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  /** Project revision captured at version time (before it incremented). */
+  revision: number;
+  createdBy: string;
+  /** Server-populated display name (lists only) — never client-supplied. */
+  createdByName?: string;
+  createdAt: string;
+  reason: ProjectVersionReason;
+  label?: string;
+  contentHash: string;
+}
+
+export interface ProjectVersionFull extends ProjectVersionMeta {
+  /** Validated canonical Project payload (no collaboration metadata). */
+  project: Project;
+}
+
+// ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
 
@@ -148,6 +260,7 @@ export type WorkspaceErrorCode =
   | "LEASE_HELD"
   | "LEASE_INVALID"
   | "PROJECT_NOT_FOUND"
+  | "VERSION_NOT_FOUND"
   | "PAYLOAD_TOO_LARGE"
   | "PAYLOAD_INVALID"
   | "LAST_OWNER"

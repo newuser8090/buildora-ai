@@ -34,7 +34,12 @@ const BENIGN_PATTERNS = [
   // links — the browser logs the failed load, but the page renders the
   // correct safe message by design. Workspace project saves rejected with
   // 409 (optimistic-concurrency STALE_REVISION) are likewise deliberate — the
-  // editor surfaces the safe conflict dialog instead of overwriting.
+  // editor surfaces the safe conflict dialog instead of overwriting. And 403
+  // (membership/authorization denials) is the DESIGNED outcome whenever a
+  // still-open editor's presence/lease heartbeat or read runs after a member
+  // is removed or downgraded — the app transitions to an honest read-only /
+  // disconnected state (never fake live data) instead of erroring.
+  /Failed to load resource: the server responded with a status of 403/i,
   /Failed to load resource: the server responded with a status of 404/i,
   /Failed to load resource: the server responded with a status of 410/i,
   /Failed to load resource: the server responded with a status of 409/i,

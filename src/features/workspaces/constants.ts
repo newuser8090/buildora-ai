@@ -25,3 +25,34 @@ export const WORKSPACE_PROJECT_MAX_BYTES = 8 * 1024 * 1024;
 
 /** Local cache metadata key prefix used by the dashboard-metadata service. */
 export const WORKSPACE_META_KEY = "workspace";
+
+// ---------------------------------------------------------------------------
+// Phase P15 — presence, activity, version history
+// ---------------------------------------------------------------------------
+
+/** Presence sessions expire after 45 s without a heartbeat (server-authoritative). */
+export const PRESENCE_TTL_MS = 45 * 1000;
+
+/** Client presence heartbeat interval while a workspace is open. */
+export const PRESENCE_HEARTBEAT_MS = 10 * 1000;
+
+/** Mock transport: poll the presence list this often (Supabase uses realtime). */
+export const PRESENCE_POLL_MS = 5 * 1000;
+
+/** Max live presence sessions per user per workspace (anti-abuse bound). */
+export const MAX_PRESENCE_SESSIONS_PER_USER = 8;
+
+/** Activity retention: keep the latest N events per workspace. */
+export const ACTIVITY_RETENTION = 300;
+
+/** Activity page size for listActivity. */
+export const ACTIVITY_PAGE_SIZE = 30;
+
+/** Version retention: keep the latest N versions per workspace project. */
+export const VERSION_RETENTION = 50;
+
+/** Manual checkpoint label bounds (plain text). */
+export const MAX_VERSION_LABEL_LENGTH = 80;
+
+/** Presence join payload bound (session id). */
+export const MAX_PRESENCE_SESSION_ID_LENGTH = 200;

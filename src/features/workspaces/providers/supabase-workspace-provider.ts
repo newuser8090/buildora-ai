@@ -13,9 +13,15 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseClient } from "@/features/auth/supabase-client";
 import { makeWorkspaceError } from "../errors";
 import type {
+  ActivityCursor,
   LeaseAcquireResult,
   ProjectEditLease,
+  ProjectVersionFull,
+  ProjectVersionMeta,
   Workspace,
+  WorkspaceActivityEvent,
+  WorkspaceActivityMetadata,
+  WorkspaceActivityType,
   WorkspaceInvitation,
   WorkspaceListing,
   WorkspaceMember,
@@ -149,13 +155,14 @@ export class SupabaseWorkspaceProvider implements WorkspaceProvider {
   }
   async createWorkspaceProject(
     workspaceId: string,
-    input: { projectId: string; name: string; project: unknown },
+    input: { projectId: string; name: string; project: unknown; origin?: "create" | "move-in" },
   ): Promise<WorkspaceProjectSummary> {
     return this.requireRpc<WorkspaceProjectSummary>("create_workspace_project", {
       p_workspace_id: workspaceId,
       p_project_id: input.projectId,
       p_name: input.name,
       p_project: input.project,
+      p_origin: input.origin === "move-in" ? "move-in" : "create",
     });
   }
   async saveWorkspaceProject(input: WorkspaceProjectSaveInput): Promise<WorkspaceProjectSummary> {
@@ -212,6 +219,99 @@ export class SupabaseWorkspaceProvider implements WorkspaceProvider {
     await this.requireRpc("revoke_leases_for_project", { p_project_id: projectId });
   }
 
+  // ---- Activity (Phase P15) ----
+  async recordActivityEvent(input: {
+    workspaceId: string;
+    projectId?: string | null;
+    type: WorkspaceActivityType;
+    metadata?: WorkspaceActivityMetadata;
+  }): Promise<void> {
+    await this.requireRpc("record_activity_event", {
+      p_workspace_id: input.workspaceId,
+      p_project_id: input.projectId ?? null,
+      p_type: input.type,
+      p_metadata: input.metadata ?? {},
+    });
+  }
+  async listActivity(input: {
+    workspaceId: string;
+    before?: ActivityCursor | null;
+    limit?: number;
+    filter?: string;
+  }): Promise<{ events: WorkspaceActivityEvent[]; nextCursor: ActivityCursor | null }> {
+    return this.requireRpc<{ events: WorkspaceActivityEvent[]; nextCursor: ActivityCursor | null }>(
+      "list_workspace_activity",
+      {
+        p_workspace_id: input.workspaceId,
+        p_before_ts: input.before?.ts ?? null,
+        p_before_id: input.before?.id ?? null,
+        p_limit: input.limit ?? 30,
+        p_filter: input.filter ?? "all",
+      },
+    );
+  }
+
+  // ---- Project version history (Phase P15) ----
+  async listProjectVersions(
+    workspaceId: string,
+    projectId: string,
+  ): Promise<ProjectVersionMeta[]> {
+    return this.requireRpc<ProjectVersionMeta[]>("list_project_versions", {
+      p_workspace_id: workspaceId,
+      p_project_id: projectId,
+    });
+  }
+  async fetchProjectVersion(
+    workspaceId: string,
+    projectId: string,
+    versionId: string,
+  ): Promise<ProjectVersionFull> {
+    return this.requireRpc<ProjectVersionFull>("fetch_project_version", {
+      p_workspace_id: workspaceId,
+      p_project_id: projectId,
+      p_version_id: versionId,
+    });
+  }
+  async createManualVersion(
+    workspaceId: string,
+    projectId: string,
+    label?: string,
+  ): Promise<ProjectVersionMeta> {
+    return this.requireRpc<ProjectVersionMeta>("create_manual_version", {
+      p_workspace_id: workspaceId,
+      p_project_id: projectId,
+      p_label: label ?? null,
+    });
+  }
+  async restoreProjectVersion(
+    workspaceId: string,
+    projectId: string,
+    versionId: string,
+    expectedRevision: number,
+  ): Promise<{ revision: number }> {
+    return this.requireRpc<{ revision: number }>("restore_project_version", {
+      p_workspace_id: workspaceId,
+      p_project_id: projectId,
+      p_version_id: versionId,
+      p_expected_revision: expectedRevision,
+    });
+  }
+  async copyProjectFromVersion(
+    workspaceId: string,
+    projectId: string,
+    versionId: string,
+    newProjectId: string,
+    name: string,
+  ): Promise<WorkspaceProjectSummary> {
+    return this.requireRpc<WorkspaceProjectSummary>("copy_project_from_version", {
+      p_workspace_id: workspaceId,
+      p_project_id: projectId,
+      p_version_id: versionId,
+      p_new_project_id: newProjectId,
+      p_name: name,
+    });
+  }
+
   // -------------------------------------------------------------------------
   // Error mapping — never leak raw provider messages to users
   // -------------------------------------------------------------------------
@@ -246,7 +346,8 @@ const KNOWN_CODES: ReadonlySet<string> = new Set([
   "AUTH_REQUIRED", "PERMISSION_DENIED", "INVALID_NAME", "INVALID_EMAIL",
   "INVALID_ROLE", "INVALID_INPUT", "ALREADY_MEMBER", "INVITE_INVALID",
   "INVITE_EXPIRED", "STALE_REVISION", "LEASE_HELD", "LEASE_INVALID",
-  "PROJECT_NOT_FOUND", "PAYLOAD_TOO_LARGE", "PAYLOAD_INVALID", "LAST_OWNER",
+  "PROJECT_NOT_FOUND", "VERSION_NOT_FOUND", "PAYLOAD_TOO_LARGE",
+  "PAYLOAD_INVALID", "LAST_OWNER",
 ]);
 
 function isKnownCode(value: string): boolean {
