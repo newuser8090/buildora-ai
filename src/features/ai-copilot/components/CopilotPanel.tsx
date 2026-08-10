@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bot, Loader2, MessageSquarePlus, Send, Sparkles, X } from "lucide-react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
+import { useWorkspaceAccessStore } from "@/features/workspaces/store/workspace-access-store";
 import { useCopilotStore } from "../store/copilot-store";
 import { useCopilot } from "../hooks/useCopilot";
 import { ScopeBadge, buildScopeOptions } from "./ScopeBadge";
@@ -64,6 +65,12 @@ export function CopilotPanel() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevFocusRef = useRef<HTMLElement | null>(null);
+
+  // Phase P14 — collaboration read-only state (viewer / blocked-by-lease /
+  // offline). ASK stays available; edit requests are rejected by the service.
+  const accessMode = useWorkspaceAccessStore((s) => s.access.mode);
+  const accessReason = useWorkspaceAccessStore((s) => s.access.reason);
+  const readOnly = accessMode === "readonly";
 
   // Live editor context for the scope badge + quick actions.
   const project = useEditorStore((s) => s.project);
@@ -212,6 +219,21 @@ export function CopilotPanel() {
           <X className="h-4 w-4" />
         </button>
       </div>
+
+      {/* ---- Phase P14: read-only notice ---- */}
+      {readOnly && (
+        <div
+          role="status"
+          data-testid="copilot-readonly-notice"
+          className="border-b border-border bg-yellow-500/[0.08] px-4 py-2.5 text-[11px] leading-relaxed text-yellow-600 dark:text-yellow-400"
+        >
+          {accessReason === "being-edited"
+            ? "Someone else is editing this project right now. I can answer questions and suggest changes, but nothing can be applied until they finish."
+            : accessReason === "offline"
+              ? "You're offline, so shared projects are read-only. Ask me anything — changes need a connection."
+              : "This project is read-only for you. I can answer questions and suggest changes, but a workspace editor must apply them."}
+        </div>
+      )}
 
       {/* ---- Scope indicator ---- */}
       <div className="border-b border-border px-4 py-2.5">
@@ -363,6 +385,7 @@ export function CopilotPanel() {
           sectionType={selectedSection?.type ?? null}
           hasPage={(project.pages?.length ?? 0) > 0}
           busy={busy}
+          readOnly={readOnly}
           onElementAction={(a) => void runElementQuickAction(a)}
           onSectionAction={(a) => void sendMessage(a.instruction)}
           onPageAction={(a) => void sendMessage(a.instruction)}

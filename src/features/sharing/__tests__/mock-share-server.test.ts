@@ -33,7 +33,21 @@ import {
 import { hashShareTokenSync } from "../token";
 import { MOCK_PROJECT } from "@/features/editor/mock/mock-project";
 import { buildShareProjection, serializeProjection } from "../projection/sanitize-share-projection";
-import type { MockShareState } from "../mock/mock-share-server";
+import {
+  getMockWorkspaceState,
+  resetMockWorkspaceState,
+  handleCreateWorkspace,
+  handleCreateWorkspaceProject,
+  handleListMembers,
+  handleRemoveMember,
+  handleInviteMember,
+  handleAcceptInvitation,
+} from "@/features/workspaces/mock/mock-workspace-server";
+import {
+  revokeActiveSharesForProject,
+  revokeMemberSharesForWorkspace,
+  type MockShareState,
+} from "../mock/mock-share-server";
 
 const ORIGIN = "http://localhost:3000";
 
@@ -87,6 +101,9 @@ function pushProjection(state: MockShareState, token: string, shareId: string): 
 beforeEach(() => {
   resetMockCloudState();
   resetMockShareState();
+  // The workspace mock state is global; P12 share tests must never inherit
+  // seeded workspace projects (which would change share-gate outcomes).
+  resetMockWorkspaceState();
   getMockShareState();
 });
 
@@ -410,6 +427,147 @@ describe("public resolve", () => {
     const token = signUp("a@example.com");
     const created = createShare(state, token);
     expectCode(() => handleResolveShare(state, created.rawToken), "INVALID_TOKEN");
+  });
+});
+
+describe("Phase P14 workspace share gates", () => {
+  /** Create a workspace with the given project (returns workspaceId). */
+  function seedWorkspaceProject(
+    ownerToken: string,
+    projectId: string,
+    workspaceName = "Acme Team",
+  ): string {
+    const ws = handleCreateWorkspace(getMockWorkspaceState(), ownerToken, { name: workspaceName });
+    handleCreateWorkspaceProject(getMockWorkspaceState(), ownerToken, ws.id, {
+      projectId,
+      project: JSON.parse(JSON.stringify(MOCK_PROJECT)),
+    });
+    return ws.id;
+  }
+
+  /** Invite + accept a user into a workspace with the given role. */
+  function joinWorkspace(
+    ownerToken: string,
+    inviteeToken: string,
+    workspaceId: string,
+    role: "editor" | "viewer",
+  ): void {
+    const state = getMockWorkspaceState();
+    handleInviteMember(state, ownerToken, workspaceId, {
+      email: "b@example.com",
+      role,
+    });
+    const invitation = [...state.invitations.values()].find(
+      (i) => i.workspaceId === workspaceId && i.status === "pending",
+    )!;
+    handleAcceptInvitation(state, inviteeToken, invitation.id);
+  }
+
+  it("a viewer in a workspace cannot create a review link for its project", () => {
+    const state = getMockShareState();
+    const tokenA = signUp("a@example.com");
+    const tokenB = signUp("b@example.com");
+    const wsId = seedWorkspaceProject(tokenA, "proj-1");
+    joinWorkspace(tokenA, tokenB, wsId, "viewer");
+    expectCode(
+      () => handleCreateShare(state, tokenB, { projectId: "proj-1" }, ORIGIN),
+      "PERMISSION_DENIED",
+    );
+    // Enumeration is also empty for the viewer.
+    expect(handleListShares(state, tokenB, "proj-1")).toHaveLength(0);
+  });
+
+  it("an editor can create and manage a review link for the workspace project", () => {
+    const state = getMockShareState();
+    const tokenA = signUp("a@example.com");
+    const tokenB = signUp("b@example.com");
+    const wsId = seedWorkspaceProject(tokenA, "proj-1");
+    joinWorkspace(tokenA, tokenB, wsId, "editor");
+    const created = handleCreateShare(state, tokenB, { projectId: "proj-1" }, ORIGIN);
+    pushProjection(state, tokenB, created.link.id);
+    expect(handleResolveShare(state, created.rawToken).state).toBe("active");
+  });
+
+  it("a removed member loses the ability to manage their review links", () => {
+    const state = getMockShareState();
+    const tokenA = signUp("a@example.com");
+    const tokenB = signUp("b@example.com");
+    const wsId = seedWorkspaceProject(tokenA, "proj-1");
+    joinWorkspace(tokenA, tokenB, wsId, "editor");
+    const created = handleCreateShare(state, tokenB, { projectId: "proj-1" }, ORIGIN);
+    // Owner removes b — the workspace role check now denies link management.
+    const wsState = getMockWorkspaceState();
+    const members = handleListMembers(wsState, tokenA, wsId);
+    handleRemoveMember(wsState, tokenA, wsId, members[0].userId);
+    expectCode(
+      () => handleRevokeShare(state, tokenB, created.link.id),
+      "PERMISSION_DENIED",
+    );
+  });
+
+  it("same project id in two workspaces: viewer in ANY workspace is denied", () => {
+    const state = getMockShareState();
+    const tokenA = signUp("a@example.com");
+    const tokenB = signUp("b@example.com");
+    // A owns a workspace where b is an EDITOR, and another where b is a VIEWER
+    // — both hold the same project id.
+    const wsEditor = seedWorkspaceProject(tokenA, "proj-shared", "Team A");
+    const wsViewer = seedWorkspaceProject(tokenA, "proj-shared", "Team B");
+    joinWorkspace(tokenA, tokenB, wsEditor, "editor");
+    joinWorkspace(tokenA, tokenB, wsViewer, "viewer");
+    // Denied: b is a viewer in one of the workspaces holding the id.
+    expectCode(
+      () => handleCreateShare(state, tokenB, { projectId: "proj-shared" }, ORIGIN),
+      "PERMISSION_DENIED",
+    );
+  });
+
+  it("same project id in two workspaces: editor in ALL workspaces is allowed", () => {
+    const state = getMockShareState();
+    const tokenA = signUp("a@example.com");
+    const tokenB = signUp("b@example.com");
+    const ws1 = seedWorkspaceProject(tokenA, "proj-shared", "Team A");
+    const ws2 = seedWorkspaceProject(tokenA, "proj-shared", "Team B");
+    joinWorkspace(tokenA, tokenB, ws1, "editor");
+    joinWorkspace(tokenA, tokenB, ws2, "editor");
+    const created = handleCreateShare(state, tokenB, { projectId: "proj-shared" }, ORIGIN);
+    expect(created.link.projectId).toBe("proj-shared");
+  });
+
+  it("revoking a workspace project's shares kills every active link to it", () => {
+    const state = getMockShareState();
+    const tokenA = signUp("a@example.com");
+    const tokenB = signUp("b@example.com");
+    const wsId = seedWorkspaceProject(tokenA, "proj-1");
+    joinWorkspace(tokenA, tokenB, wsId, "editor");
+    const byOwner = handleCreateShare(state, tokenA, { projectId: "proj-1" }, ORIGIN);
+    const byEditor = handleCreateShare(state, tokenB, { projectId: "proj-1" }, ORIGIN);
+    const other = handleCreateShare(state, tokenA, { projectId: "proj-2" }, ORIGIN);
+    // Project deletion revokes links by project id (across owners).
+    const revoked = revokeActiveSharesForProject(state, "proj-1");
+    expect(revoked).toBe(2);
+    expect(state.shares.get(byOwner.link.id)!.status).toBe("revoked");
+    expect(state.shares.get(byEditor.link.id)!.status).toBe("revoked");
+    // Unrelated project untouched.
+    expect(state.shares.get(other.link.id)!.status).toBe("active");
+  });
+
+  it("a removed member's review links are revoked (mirror of ws_revoke_member_shares)", () => {
+    const state = getMockShareState();
+    const tokenA = signUp("a@example.com");
+    const tokenB = signUp("b@example.com");
+    const wsId = seedWorkspaceProject(tokenA, "proj-1");
+    const wsOther = seedWorkspaceProject(tokenA, "proj-2", "Other Team");
+    joinWorkspace(tokenA, tokenB, wsId, "editor");
+    joinWorkspace(tokenA, tokenB, wsOther, "editor");
+    const inWorkspace = handleCreateShare(state, tokenB, { projectId: "proj-1" }, ORIGIN);
+    const otherWorkspace = handleCreateShare(state, tokenB, { projectId: "proj-2" }, ORIGIN);
+    // Removal from one workspace revokes only that workspace's project links.
+    const userBId = getMockCloudState().sessions.get(tokenB)!;
+    const revoked = revokeMemberSharesForWorkspace(state, wsId, userBId);
+    expect(revoked).toBe(1);
+    expect(state.shares.get(inWorkspace.link.id)!.status).toBe("revoked");
+    expect(state.shares.get(otherWorkspace.link.id)!.status).toBe("active");
   });
 });
 

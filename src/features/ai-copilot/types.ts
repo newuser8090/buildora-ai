@@ -124,7 +124,8 @@ export type CopilotErrorCode =
   | "COPILOT_TARGET_REMOVED"
   | "COPILOT_APPLY_FAILED"
   | "COPILOT_PROVIDER_FAILED"
-  | "COPILOT_QUICK_ACTION_UNAVAILABLE";
+  | "COPILOT_QUICK_ACTION_UNAVAILABLE"
+  | "COPILOT_EDIT_UNAVAILABLE";
 
 export interface CopilotError {
   code: CopilotErrorCode;

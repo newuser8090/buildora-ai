@@ -15,6 +15,8 @@ interface QuickActionsProps {
   /** True when a page scope is available. */
   hasPage: boolean;
   busy: boolean;
+  /** Phase P14 — read-only sessions hide quick-edit actions (ASK stays). */
+  readOnly?: boolean;
   onElementAction: (action: { label: string; instruction: string }) => void;
   onSectionAction: (action: { label: string; instruction: string }) => void;
   onPageAction: (action: { label: string; instruction: string }) => void;
@@ -25,10 +27,12 @@ export function QuickActions({
   sectionType,
   hasPage,
   busy,
+  readOnly = false,
   onElementAction,
   onSectionAction,
   onPageAction,
 }: QuickActionsProps) {
+  if (readOnly) return null;
   let actions: Array<{ id: string; label: string; instruction: string; run: () => void }> = [];
 
   if (elementLabel) {

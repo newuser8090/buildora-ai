@@ -28,6 +28,7 @@ import { buildDiffs } from "@/features/ai-editing/services/diff-builder";
 import { runPlanEdit, PlanEditClientError } from "@/features/ai-editing/services/plan-service";
 import { scanPayloadForSecurityIssues } from "@/features/ai-editing/schemas/plan-schemas";
 import { useEditorStore } from "@/features/editor/store/editor-store";
+import { useWorkspaceAccessStore } from "@/features/workspaces/store/workspace-access-store";
 import { markPerf } from "@/features/perf/perf-instrumentation";
 import {
   COPILOT_LIMITS,
@@ -559,6 +560,30 @@ export async function handleCopilotMessage(
 
   if (intent.kind === "readiness-review") {
     return { kind: "readiness-review", answer: buildReadinessReview(context).answer };
+  }
+
+  // Phase P14 — collaboration permission boundary. A read-only session (viewer
+  // role, blocked-by-lease, offline, or revoked access) can never request an
+  // EDIT plan. ASK/readiness stay available (no mutation, no provider call).
+  // This is defense-in-depth: even if a stale UI allowed the request, the
+  // mutation layer (editor store) would reject it — but blocking earlier keeps
+  // provider calls honest and the UX clear.
+  const accessState = useWorkspaceAccessStore.getState();
+  if (accessState.access.mode !== "editable") {
+    const reason =
+      accessState.access.reason === "being-edited"
+        ? "Someone else is editing this project right now. Open it read-only, then ask me to suggest changes you can review."
+        : accessState.access.reason === "offline"
+          ? "You're offline, so shared projects are read-only. Reconnect to let me make changes."
+          : "This project is open read-only, so I can prepare suggestions but not apply changes. Ask me anything, or ask a workspace editor to make the change.";
+    return {
+      kind: "error",
+      error: {
+        code: "COPILOT_EDIT_UNAVAILABLE",
+        message: reason,
+        retryable: false,
+      },
+    };
   }
 
   // Plan-edit. Style notes are appended to the user's own instruction as a

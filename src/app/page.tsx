@@ -48,6 +48,17 @@ import { getProjectController } from "@/features/persistence/services/project-co
 import { useShareBadges } from "@/features/sharing/hooks/useShareBadges";
 import type { Project } from "@/types/project";
 
+// Phase P14 — Team Workspaces & Controlled Collaboration
+import { useWorkspaceDashboard } from "@/features/workspaces/hooks/useWorkspaceDashboard";
+import { useWorkspaceDashboardStore } from "@/features/workspaces/store/workspace-dashboard-store";
+import { WorkspaceSwitcher } from "@/features/workspaces/components/WorkspaceSwitcher";
+import { WorkspaceSettingsDialog } from "@/features/workspaces/components/WorkspaceSettingsDialog";
+import { WorkspaceInvitationsPanel } from "@/features/workspaces/components/WorkspaceInvitationsPanel";
+import { WorkspaceProjectsView } from "@/features/workspaces/components/WorkspaceProjectsView";
+import { MoveProjectDialog } from "@/features/workspaces/components/MoveProjectDialog";
+import { getWorkspaceProvider, WorkspaceService } from "@/features/workspaces/services/workspace-service";
+import type { Workspace } from "@/features/workspaces/types";
+
 // Default project name for the onboarding category.
 const ONBOARDING_DEFAULT_NAMES: Record<OnboardingProjectCategory, string> = {
   business: "My Business",
@@ -236,6 +247,106 @@ export default function DashboardPage() {
   // Phase P12: one batch lookup for "Shared" badges (no N+1, silent offline).
   const shareBadges = useShareBadges(projects.map((p) => p.id));
 
+  // ---- Phase P14: workspaces ----
+  const ws = useWorkspaceDashboard();
+  const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false);
+  const [settingsWorkspace, setSettingsWorkspace] = useState<Workspace | null>(null);
+  const [invitationsOpen, setInvitationsOpen] = useState(false);
+  const [moveProject, setMoveProject] = useState<DashboardProject | null>(null);
+  const [wsError, setWsError] = useState<string | null>(null);
+  const [wsBusy, setWsBusy] = useState(false);
+
+  const openWorkspaceSettings = useCallback((workspaceId: string | null) => {
+    if (workspaceId === null) {
+      setSettingsWorkspace(null);
+      setWorkspaceSettingsOpen(true);
+      return;
+    }
+    const all = [...ws.owned, ...ws.shared];
+    const found = all.find((w) => w.id === workspaceId) ?? null;
+    setSettingsWorkspace(found);
+    setWorkspaceSettingsOpen(true);
+  }, [ws.owned, ws.shared]);
+
+  const handleWorkspaceOpen = useCallback(
+    async (projectId: string) => {
+      const workspaceId = ws.selectedWorkspaceId;
+      if (!workspaceId) return;
+      setWsBusy(true);
+      setWsError(null);
+      const result = await ws.openWorkspaceProject(workspaceId, projectId);
+      setWsBusy(false);
+      if (!result.ok) {
+        setWsError(result.error.message);
+      }
+    },
+    [ws],
+  );
+
+  const handleWorkspaceDuplicate = useCallback(
+    async (projectId: string) => {
+      const workspaceId = ws.selectedWorkspaceId;
+      if (!workspaceId || wsBusy) return;
+      setWsBusy(true);
+      setWsError(null);
+      const provider = getWorkspaceProvider();
+      if (!provider) {
+        setWsBusy(false);
+        return;
+      }
+      const service = new WorkspaceService(provider);
+      // Fresh identity: new project id (date-based, deterministic enough for
+      // the dashboard), name with " Copy" suffix — the server creates the
+      // fresh record (no lease/links/deployments copied).
+      const source = ws.workspaceProjects.find((p) => p.projectId === projectId);
+      const newId = `ws-copy-${Date.now().toString(36)}`;
+      const result = await service.duplicateWorkspaceProject(
+        workspaceId,
+        projectId,
+        newId,
+        `${source?.name ?? "Project"} Copy`,
+      );
+      setWsBusy(false);
+      if (!result.ok) {
+        setWsError(result.error.message);
+      }
+      await ws.reloadWorkspaces();
+      // Refresh the workspace project list.
+      const provider2 = getWorkspaceProvider();
+      if (provider2) {
+        const listResult = await new WorkspaceService(provider2).listWorkspaceProjects(workspaceId);
+        if (listResult.ok) {
+          useWorkspaceDashboardStore.getState().setWorkspaceProjects(listResult.value);
+        }
+      }
+    },
+    [ws, wsBusy],
+  );
+
+  const handleWorkspaceDelete = useCallback(
+    async (projectId: string) => {
+      const workspaceId = ws.selectedWorkspaceId;
+      if (!workspaceId || wsBusy) return;
+      setWsBusy(true);
+      setWsError(null);
+      const provider = getWorkspaceProvider();
+      if (!provider) {
+        setWsBusy(false);
+        return;
+      }
+      const result = await new WorkspaceService(provider).deleteWorkspaceProject(workspaceId, projectId);
+      setWsBusy(false);
+      if (!result.ok) {
+        setWsError(result.error.message);
+      }
+      const listResult = await new WorkspaceService(provider).listWorkspaceProjects(workspaceId);
+      if (listResult.ok) {
+        useWorkspaceDashboardStore.getState().setWorkspaceProjects(listResult.value);
+      }
+    },
+    [ws, wsBusy],
+  );
+
   // ---- Open project with failed-flush handling ----
   const handleOpen = useCallback(
     async (projectId: string) => {
@@ -384,6 +495,12 @@ export default function DashboardPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Phase P14: workspace context switcher (hidden when unavailable) */}
+          <WorkspaceSwitcher
+            onManage={openWorkspaceSettings}
+            onOpenInvitations={() => setInvitationsOpen(true)}
+          />
+
           <button
             onClick={() => setPersonalTemplatesOpen(true)}
             className="flex h-9 items-center gap-2 rounded-lg border border-border px-4 text-sm font-medium text-text-muted transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
@@ -590,8 +707,45 @@ export default function DashboardPage() {
           </div>
         )}
 
+        {/* ---- Phase P14: workspace banner ---- */}
+        {wsError && (
+          <div className="mx-6 mt-3 flex items-start gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3">
+            <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-400" />
+            <div className="flex-1">
+              <p className="text-sm text-red-300">{wsError}</p>
+            </div>
+            <button
+              onClick={() => setWsError(null)}
+              className="text-xs text-text-dim underline hover:no-underline"
+              type="button"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
         {/* ---- Project grid ---- */}
         <div className="flex-1 overflow-y-auto px-6 py-6">
+          {/* ---- Phase P14: workspace projects ---- */}
+          {ws.selectedWorkspaceId !== null && (
+            <WorkspaceProjectsView
+              workspaceId={ws.selectedWorkspaceId}
+              projects={ws.workspaceProjects}
+              loading={ws.loading}
+              busy={wsBusy}
+              owned={ws.owned}
+              shared={ws.shared}
+              onOpen={handleWorkspaceOpen}
+              onDuplicate={handleWorkspaceDuplicate}
+              onDelete={handleWorkspaceDelete}
+              onManage={() => openWorkspaceSettings(ws.selectedWorkspaceId)}
+              onNewProject={() => setNewProjectOpen(true)}
+              searchQuery={searchQuery}
+            />
+          )}
+
+          {/* ---- Personal view (default) ---- */}
+          {ws.selectedWorkspaceId === null && (<>
           {/* Loading state */}
           {isLoading && (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -723,10 +877,12 @@ export default function DashboardPage() {
                   publishStatus={publishStatuses[project.id]}
                   shared={shareBadges[project.id] === true}
                   onManageSharing={(pid) => router.push(`/editor/${pid}?share=1`)}
+                  onMoveToWorkspace={(p) => setMoveProject(p)}
                 />
               ))}
             </div>
           )}
+          </>)}
         </div>
       </main>
 
@@ -808,10 +964,60 @@ export default function DashboardPage() {
       />
 
       {/* ---- New Project Dialog ---- */}
+      {/* Phase P14: when a workspace is selected, new projects are created
+          into that workspace (server-authoritative). */}
       <NewProjectDialog
         open={newProjectOpen}
         onClose={() => setNewProjectOpen(false)}
-        onCreate={createProjectFromTemplate}
+        onCreate={async (templateId, projectName) => {
+          if (ws.selectedWorkspaceId === null) {
+            return createProjectFromTemplate(templateId, projectName);
+          }
+          // Workspace create: use the controller to create the local project
+          // (existing flow), then push it to the workspace server. The editor
+          // then treats it as a workspace project via the cache metadata.
+          const controller = getProjectController();
+          if (!controller) {
+            return { ok: false as const, error: "Editor isn't ready yet. Try again." };
+          }
+          const result = await controller.createProjectFromTemplate({
+            templateId,
+            projectName,
+          });
+          if (!result.success) {
+            return {
+              ok: false as const,
+              error: result.error?.message ?? "Couldn't create the project.",
+            };
+          }
+          if (!result.data) {
+            return {
+              ok: false as const,
+              error: "The project was created but its workspace copy couldn't be prepared. Try again.",
+            };
+          }
+          const projectId = result.data.projectId;
+          const loadResult = await ws.loadPersonalProject(projectId);
+          if (!loadResult.ok || loadResult.project === undefined) {
+            return {
+              ok: false as const,
+              error: "The project was created but couldn't be added to the workspace. Try again.",
+            };
+          }
+          const moved = await ws.moveProjectToWorkspace(
+            ws.selectedWorkspaceId,
+            projectId,
+            loadResult.project,
+            projectName.trim(),
+          );
+          if (!moved.ok) {
+            return { ok: false as const, error: moved.error.message };
+          }
+          // Refresh the workspace project grid so the new card appears
+          // immediately (create-in-workspace stays on the dashboard).
+          void ws.refreshSelectedWorkspaceProjects();
+          return { ok: true as const };
+        }}
       />
 
       {/* ---- Phase P9: Personal Templates ---- */}
@@ -827,6 +1033,31 @@ export default function DashboardPage() {
         project={saveAsTemplateProject}
         onClose={() => setSaveAsTemplateProject(null)}
         onSave={handleSaveAsTemplateSubmit}
+      />
+
+      {/* ---- Phase P14: Workspaces ---- */}
+      <WorkspaceSettingsDialog
+        open={workspaceSettingsOpen}
+        workspace={settingsWorkspace}
+        onClose={() => setWorkspaceSettingsOpen(false)}
+        onChange={() => ws.reloadWorkspaces()}
+      />
+      <WorkspaceInvitationsPanel
+        open={invitationsOpen}
+        onClose={() => setInvitationsOpen(false)}
+      />
+      <MoveProjectDialog
+        open={moveProject !== null}
+        projectId={moveProject?.id ?? ""}
+        projectName={moveProject?.name ?? ""}
+        onLoadProject={ws.loadPersonalProject}
+        onClose={() => setMoveProject(null)}
+        onMoved={(workspaceId) => {
+          // Refresh the workspace project list + switch to the workspace view.
+          ws.selectWorkspace(workspaceId);
+          void ws.reloadWorkspaces();
+          void ws.refreshSelectedWorkspaceProjects();
+        }}
       />
 
       {/* ---- First-run onboarding (Phase N) ---- */}

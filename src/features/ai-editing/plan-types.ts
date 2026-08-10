@@ -243,7 +243,8 @@ export type AiEditPlanErrorCode =
   | "PLAN_APPLY_FAILED"
   | "PLAN_NO_CHANGES"
   | "PLAN_DESTRUCTIVE_CONFIRMATION_REQUIRED"
-  | "PLAN_SCOPE_INVALID";
+  | "PLAN_SCOPE_INVALID"
+  | "PLAN_READONLY";
 
 export interface AiEditPlanError {
   code: AiEditPlanErrorCode;
