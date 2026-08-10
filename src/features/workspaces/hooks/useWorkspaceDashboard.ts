@@ -248,6 +248,8 @@ export function useWorkspaceDashboard() {
         projectId,
         name,
         project,
+        // Phase P15 — activity: distinguish "moved in" from "created".
+        origin: "move-in",
       });
       if (!result.ok) return result;
 

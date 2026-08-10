@@ -24,6 +24,7 @@ import { usePublishingStore } from "../store/publishing-store";
 import { makePublishError } from "../errors";
 import { useWorkspaceAccessStore } from "@/features/workspaces/store/workspace-access-store";
 import { canPublishProject } from "@/features/workspaces/permissions/workspace-permissions";
+import { recordWorkspaceActivity } from "@/features/workspaces/services/activity-bridge";
 import type { ProviderAvailability, PublishServiceResult, PublishStatus } from "../types";
 
 export function usePublishing() {
@@ -154,6 +155,17 @@ export function usePublishing() {
         );
         usePublishingStore.getState().setResult(result);
         await refreshDeployments();
+        // Phase P15 — activity: a successful publish of a workspace project is
+        // recorded server-side (actor derived from the session; type + metadata
+        // allow-listed). Fire-and-forget — activity never breaks publishing.
+        if (result.ok) {
+          recordWorkspaceActivity({
+            workspaceId: useWorkspaceAccessStore.getState().workspaceId,
+            projectId: project.id,
+            type: "publish.completed",
+            metadata: { provider: providerId, project: project.name },
+          });
+        }
         return result;
       } finally {
         releasePublishLock(project.id, providerId);
@@ -172,10 +184,19 @@ export function usePublishing() {
         deploymentId,
         provider?.rollback ? provider.rollback.bind(provider) : undefined,
       );
-      if (result.ok) await refreshDeployments();
+      if (result.ok) {
+        await refreshDeployments();
+        // Phase P15 — activity: a rollback is a meaningful shared-project event.
+        recordWorkspaceActivity({
+          workspaceId: useWorkspaceAccessStore.getState().workspaceId,
+          projectId: project.id,
+          type: "publish.rollback",
+          metadata: { provider: record?.providerId ?? "", project: project.name },
+        });
+      }
       return result;
     },
-    [project.id, services, refreshDeployments, providerFor],
+    [project.id, project.name, services, refreshDeployments, providerFor],
   );
 
   const cancelDeployment = useCallback(

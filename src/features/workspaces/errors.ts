@@ -136,6 +136,8 @@ export function workspaceErrorMessage(error: WorkspaceError): string {
       return "Your editing session ended. Reconnect to keep editing.";
     case "PROJECT_NOT_FOUND":
       return "That project could not be found.";
+    case "VERSION_NOT_FOUND":
+      return "That version could not be found.";
     case "PAYLOAD_TOO_LARGE":
       return "This project is too large to share with the workspace. Try removing some large images.";
     case "PAYLOAD_INVALID":

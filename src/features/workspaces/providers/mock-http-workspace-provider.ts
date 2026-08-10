@@ -10,9 +10,15 @@
 
 import { makeWorkspaceError } from "../errors";
 import type {
+  ActivityCursor,
   LeaseAcquireResult,
   ProjectEditLease,
+  ProjectVersionFull,
+  ProjectVersionMeta,
   Workspace,
+  WorkspaceActivityEvent,
+  WorkspaceActivityMetadata,
+  WorkspaceActivityType,
   WorkspaceInvitation,
   WorkspaceListing,
   WorkspaceMember,
@@ -102,6 +108,8 @@ function mapMockErrorCode(code: string): WorkspaceErrorCode {
       return "LEASE_INVALID";
     case "PROJECT_NOT_FOUND":
       return "PROJECT_NOT_FOUND";
+    case "VERSION_NOT_FOUND":
+      return "VERSION_NOT_FOUND";
     case "PAYLOAD_TOO_LARGE":
       return "PAYLOAD_TOO_LARGE";
     case "PAYLOAD_INVALID":
@@ -205,7 +213,7 @@ export class MockHttpWorkspaceProvider implements WorkspaceProvider {
   }
   async createWorkspaceProject(
     workspaceId: string,
-    input: { projectId: string; name: string; project: unknown },
+    input: { projectId: string; name: string; project: unknown; origin?: "create" | "move-in" },
   ): Promise<WorkspaceProjectSummary> {
     return mockFetch<WorkspaceProjectSummary>(`${workspaceId}/projects`, {
       method: "POST",
@@ -258,5 +266,88 @@ export class MockHttpWorkspaceProvider implements WorkspaceProvider {
     await mockFetch<void>(`lease/project/${encodeURIComponent(projectId)}`, {
       method: "DELETE",
     });
+  }
+
+  // ---- Activity (Phase P15) ----
+  async recordActivityEvent(input: {
+    workspaceId: string;
+    projectId?: string | null;
+    type: WorkspaceActivityType;
+    metadata?: WorkspaceActivityMetadata;
+  }): Promise<void> {
+    await mockFetch<void>("activity", { method: "POST", body: input });
+  }
+  async listActivity(input: {
+    workspaceId: string;
+    before?: ActivityCursor | null;
+    limit?: number;
+    filter?: string;
+  }): Promise<{ events: WorkspaceActivityEvent[]; nextCursor: ActivityCursor | null }> {
+    const query = new URLSearchParams();
+    if (input.before) {
+      query.set("beforeTs", input.before.ts);
+      query.set("beforeId", input.before.id);
+    }
+    if (input.limit !== undefined) query.set("limit", String(input.limit));
+    if (input.filter) query.set("filter", input.filter);
+    const qs = query.toString();
+    return mockFetch<{ events: WorkspaceActivityEvent[]; nextCursor: ActivityCursor | null }>(
+      `${input.workspaceId}/activity${qs ? `?${qs}` : ""}`,
+      {},
+    );
+  }
+
+  // ---- Project version history (Phase P15) ----
+  async listProjectVersions(
+    workspaceId: string,
+    projectId: string,
+  ): Promise<ProjectVersionMeta[]> {
+    return mockFetch<ProjectVersionMeta[]>(
+      `${workspaceId}/projects/${encodeURIComponent(projectId)}/versions`,
+      {},
+    );
+  }
+  async fetchProjectVersion(
+    workspaceId: string,
+    projectId: string,
+    versionId: string,
+  ): Promise<ProjectVersionFull> {
+    return mockFetch<ProjectVersionFull>(
+      `${workspaceId}/projects/${encodeURIComponent(projectId)}/versions/${encodeURIComponent(versionId)}`,
+      {},
+    );
+  }
+  async createManualVersion(
+    workspaceId: string,
+    projectId: string,
+    label?: string,
+  ): Promise<ProjectVersionMeta> {
+    return mockFetch<ProjectVersionMeta>(
+      `${workspaceId}/projects/${encodeURIComponent(projectId)}/versions`,
+      { method: "POST", body: label !== undefined ? { label } : {} },
+    );
+  }
+  async restoreProjectVersion(
+    workspaceId: string,
+    projectId: string,
+    versionId: string,
+    expectedRevision: number,
+  ): Promise<{ revision: number }> {
+    return mockFetch<{ revision: number }>(
+      `${workspaceId}/projects/${encodeURIComponent(projectId)}/versions/${encodeURIComponent(versionId)}/restore`,
+      { method: "POST", body: { expectedRevision } },
+    );
+  }
+  async copyProjectFromVersion(
+    workspaceId: string,
+    projectId: string,
+    versionId: string,
+    newProjectId: string,
+    name: string,
+  ): Promise<WorkspaceProjectSummary> {
+    return mockFetch<WorkspaceProjectSummary>(
+      `${workspaceId}/projects/${encodeURIComponent(projectId)}/versions/${encodeURIComponent(versionId)}/copy`,
+      { method: "POST", body: { newProjectId, name } },
+    );
   }
 }

@@ -21,21 +21,36 @@
 
 import { randomBytes, randomUUID } from "node:crypto";
 import { getMockCloudState } from "@/features/cloud-sync/mock/mock-cloud-server";
+import { stableHash } from "@/features/cloud-sync/hash";
 import { ProjectSchema } from "@/features/generation/schemas/generation-plan-schema";
 import { validateProjectName } from "@/features/projects/utils/validate-project-name";
 import {
+  ACTIVITY_PAGE_SIZE,
+  ACTIVITY_RETENTION,
   EDIT_LEASE_DURATION_MS,
   INVITATION_TTL_MS,
   MAX_PENDING_INVITATIONS_PER_WORKSPACE,
+  MAX_PRESENCE_SESSIONS_PER_USER,
+  MAX_VERSION_LABEL_LENGTH,
   MAX_WORKSPACE_NAME_LENGTH,
+  PRESENCE_TTL_MS,
+  VERSION_RETENTION,
   WORKSPACE_PROJECT_MAX_BYTES,
 } from "../constants";
 import type {
+  ActivityCursor,
   LeaseAcquireResult,
   ProjectEditLease,
+  ProjectVersionFull,
+  ProjectVersionMeta,
+  ProjectVersionReason,
   Workspace,
+  WorkspaceActivityEvent,
+  WorkspaceActivityMetadata,
+  WorkspaceActivityType,
   WorkspaceInvitation,
   WorkspaceMember,
+  WorkspacePresence,
   WorkspaceProjectFull,
   WorkspaceProjectSummary,
   WorkspaceRole,
@@ -60,12 +75,43 @@ interface MockWorkspaceProject {
   updatedAt: string;
 }
 
+// ---- Phase P15: presence (ephemeral) ----
+
+interface MockPresenceSession {
+  sessionId: string;
+  workspaceId: string;
+  projectId: string | null;
+  userId: string;
+  joinedAt: string;
+  lastSeenAt: string;
+  expiresAt: string;
+}
+
+// ---- Phase P15: project versions (durable, bounded) ----
+
+interface MockProjectVersion {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  /** Project revision AFTER the change this snapshot represents. */
+  revision: number;
+  createdBy: string;
+  createdAt: string;
+  reason: ProjectVersionReason;
+  label?: string;
+  contentHash: string;
+  snapshot: string; // serialized validated project JSON
+}
+
 export interface MockWorkspaceState {
   workspaces: Map<string, MockWorkspaceRecord>;
   invitations: Map<string, WorkspaceInvitation>;
   projects: Map<string, MockWorkspaceProject>; // `${workspaceId}:${projectId}`
   leases: Map<string, ProjectEditLease>; // `${workspaceId}:${projectId}` -> lease
   inviteAttempts: Map<string, number[]>; // workspaceId -> timestamps
+  presence: Map<string, MockPresenceSession>; // sessionId -> session (P15)
+  activity: Map<string, WorkspaceActivityEvent[]>; // workspaceId -> events, newest first (P15)
+  versions: Map<string, MockProjectVersion[]>; // `${ws}:${pid}` -> versions, newest first (P15)
 }
 
 export function createMockWorkspaceState(): MockWorkspaceState {
@@ -75,6 +121,9 @@ export function createMockWorkspaceState(): MockWorkspaceState {
     projects: new Map(),
     leases: new Map(),
     inviteAttempts: new Map(),
+    presence: new Map(),
+    activity: new Map(),
+    versions: new Map(),
   };
 }
 
@@ -279,6 +328,548 @@ function requireProject(
 }
 
 // ---------------------------------------------------------------------------
+// Phase P15 — activity (durable, bounded, actor server-derived)
+// ---------------------------------------------------------------------------
+
+/** Allow-listed event types — the server rejects anything else. */
+const ACTIVITY_TYPES: ReadonlySet<string> = new Set<WorkspaceActivityType>([
+  "workspace.created",
+  "workspace.renamed",
+  "member.invited",
+  "member.joined",
+  "member.role_changed",
+  "member.removed",
+  "project.created",
+  "project.moved_in",
+  "project.renamed",
+  "project.saved",
+  "project.duplicated",
+  "project.deleted",
+  "project.version_created",
+  "project.version_restored",
+  "publish.completed",
+  "publish.rollback",
+  "share.created",
+  "share.revoked",
+  "domain.attached",
+  "domain.removed",
+]);
+
+/** Per-type metadata key allow-lists (scalar values only, never free JSON). */
+const ACTIVITY_METADATA_KEYS: Record<string, ReadonlySet<string>> = {
+  "workspace.created": new Set(),
+  "workspace.renamed": new Set(["to"]),
+  "member.invited": new Set(["email", "role"]),
+  "member.joined": new Set(["role"]),
+  "member.role_changed": new Set(["member", "to"]),
+  "member.removed": new Set(["member"]),
+  "project.created": new Set(["project"]),
+  "project.moved_in": new Set(["project"]),
+  "project.renamed": new Set(["project", "to"]),
+  "project.saved": new Set(["revision"]),
+  "project.duplicated": new Set(["project", "from"]),
+  "project.deleted": new Set(["project"]),
+  "project.version_created": new Set(["version", "label"]),
+  "project.version_restored": new Set(["from", "to"]),
+  "publish.completed": new Set(["provider", "project"]),
+  "publish.rollback": new Set(["provider", "project"]),
+  "share.created": new Set(["project"]),
+  "share.revoked": new Set(["project"]),
+  "domain.attached": new Set(["domain", "project"]),
+  "domain.removed": new Set(["domain", "project"]),
+};
+
+const MAX_ACTIVITY_METADATA_STRING = 200;
+const MAX_ACTIVITY_METADATA_ENTRIES = 4;
+
+/** Validate metadata against the type's allow-list; returns a clean copy. */
+function sanitizeActivityMetadata(
+  type: string,
+  raw: unknown,
+): WorkspaceActivityMetadata {
+  const allowed = ACTIVITY_METADATA_KEYS[type] ?? new Set<string>();
+  const metadata: WorkspaceActivityMetadata = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return metadata;
+  let entries = 0;
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (entries >= MAX_ACTIVITY_METADATA_ENTRIES) break;
+    if (!allowed.has(key)) continue;
+    if (typeof value === "string") {
+      if (value.length > MAX_ACTIVITY_METADATA_STRING) continue;
+      metadata[key] = value;
+    } else if (typeof value === "number" && Number.isFinite(value)) {
+      metadata[key] = value;
+    } else if (typeof value === "boolean") {
+      metadata[key] = value;
+    }
+    entries += 1;
+  }
+  return metadata;
+}
+
+/** Insert an event (newest first) and prune to the retention bound. */
+function pushActivity(
+  state: MockWorkspaceState,
+  actorUserId: string,
+  workspaceId: string,
+  projectId: string | null,
+  type: WorkspaceActivityType,
+  metadata: WorkspaceActivityMetadata,
+): WorkspaceActivityEvent {
+  const event: WorkspaceActivityEvent = {
+    id: `wsact-${randomUUID()}`,
+    workspaceId,
+    projectId,
+    actorUserId,
+    type,
+    createdAt: nowIso(),
+    metadata,
+  };
+  const list = state.activity.get(workspaceId) ?? [];
+  list.unshift(event);
+  if (list.length > ACTIVITY_RETENTION) list.length = ACTIVITY_RETENTION;
+  state.activity.set(workspaceId, list);
+  return event;
+}
+
+function displayNameOf(state: MockWorkspaceState, userId: string): string {
+  return emailToDisplayName(userEmail(state, userId));
+}
+
+/** Friendly display name from an email (same heuristic as P14 lease holders). */
+function emailToDisplayName(email: string): string {
+  const local = email.split("@")[0] ?? "";
+  if (!local) return "A teammate";
+  const parts = local.split(/[._-]+/).filter(Boolean);
+  if (parts.length === 0) return local;
+  return parts
+    .slice(0, 2)
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+    .join(" ");
+}
+
+// ---------------------------------------------------------------------------
+// Phase P15 — presence (ephemeral, TTL-based, membership-scoped)
+// ---------------------------------------------------------------------------
+
+function pruneExpiredPresence(state: MockWorkspaceState, now = Date.now()): void {
+  for (const [sessionId, session] of [...state.presence]) {
+    if (new Date(session.expiresAt).getTime() <= now) {
+      state.presence.delete(sessionId);
+    }
+  }
+}
+
+function presenceModeOf(
+  state: MockWorkspaceState,
+  session: MockPresenceSession,
+): WorkspacePresence["mode"] {
+  // Mode is DERIVED from the edit lease — a client can never claim "editing".
+  if (!session.projectId) return "viewing";
+  const lease = state.leases.get(projectKey(session.workspaceId, session.projectId));
+  if (lease && lease.userId === session.userId && isLeaseActive(lease)) {
+    return "editing";
+  }
+  return "viewing";
+}
+
+export function handleJoinPresence(
+  state: MockWorkspaceState,
+  token: string | null,
+  input: { workspaceId?: unknown; projectId?: unknown; sessionId?: unknown },
+): void {
+  const user = requireUser(token);
+  const workspaceId = typeof input.workspaceId === "string" ? input.workspaceId : "";
+  // Throws for non-members — presence is workspace-scoped (never global).
+  requireMember(state, user, workspaceId);
+  const sessionId = typeof input.sessionId === "string" ? input.sessionId.trim() : "";
+  if (!isValidId(sessionId, 200)) {
+    throw new MockWorkspaceError(400, "INVALID_INPUT", "That presence session isn't valid.");
+  }
+
+  let projectId: string | null = null;
+  if (input.projectId !== undefined && input.projectId !== null && input.projectId !== "") {
+    projectId = typeof input.projectId === "string" ? input.projectId : "";
+    if (!isValidId(projectId)) {
+      throw new MockWorkspaceError(400, "INVALID_INPUT", "That project isn't valid.");
+    }
+    // Presence for a project requires the project to exist here.
+    requireProject(state, workspaceId, projectId);
+  }
+
+  const existing = state.presence.get(sessionId);
+  if (existing && (existing.userId !== user.id || existing.workspaceId !== workspaceId)) {
+    // Session-id forgery — never let one session hijack another user's slot.
+    throw new MockWorkspaceError(403, "PERMISSION_DENIED", "That presence session isn't yours.");
+  }
+
+  const now = Date.now();
+  if (!existing) {
+    const mine = [...state.presence.values()].filter(
+      (s) => s.userId === user.id && s.workspaceId === workspaceId,
+    ).length;
+    if (mine >= MAX_PRESENCE_SESSIONS_PER_USER) {
+      throw new MockWorkspaceError(429, "RATE_LIMITED", "Too many open sessions for this workspace.");
+    }
+  }
+
+  state.presence.set(sessionId, {
+    sessionId,
+    workspaceId,
+    projectId,
+    userId: user.id,
+    joinedAt: existing?.joinedAt ?? nowIso(),
+    lastSeenAt: nowIso(),
+    expiresAt: new Date(now + PRESENCE_TTL_MS).toISOString(),
+  });
+}
+
+export function handleHeartbeatPresence(
+  state: MockWorkspaceState,
+  token: string | null,
+  sessionId: string,
+): void {
+  const user = requireUser(token);
+  const session = state.presence.get(sessionId);
+  if (!session || session.userId !== user.id) {
+    throw new MockWorkspaceError(403, "PERMISSION_DENIED", "That presence session ended.");
+  }
+  session.lastSeenAt = nowIso();
+  session.expiresAt = new Date(Date.now() + PRESENCE_TTL_MS).toISOString();
+}
+
+export function handleLeavePresence(
+  state: MockWorkspaceState,
+  token: string | null,
+  sessionId: string,
+): void {
+  const user = requireUser(token);
+  const session = state.presence.get(sessionId);
+  if (!session) return; // idempotent
+  if (session.userId !== user.id) {
+    throw new MockWorkspaceError(403, "PERMISSION_DENIED", "That presence session isn't yours.");
+  }
+  state.presence.delete(sessionId);
+}
+
+export function handleListWorkspacePresence(
+  state: MockWorkspaceState,
+  token: string | null,
+  workspaceId: string,
+  projectId?: string | null,
+): WorkspacePresence[] {
+  const user = requireUser(token);
+  requireMember(state, user, workspaceId);
+  pruneExpiredPresence(state);
+  const sessions = [...state.presence.values()].filter(
+    (s) =>
+      s.workspaceId === workspaceId &&
+      (projectId ? s.projectId === projectId : true),
+  );
+  // UI dedupes by user; the raw list keeps every tab's session.
+  sessions.sort((a, b) => a.joinedAt.localeCompare(b.joinedAt));
+  return sessions.map((s) => ({
+    workspaceId: s.workspaceId,
+    projectId: s.projectId,
+    userId: s.userId,
+    sessionId: s.sessionId,
+    mode: presenceModeOf(state, s),
+    joinedAt: s.joinedAt,
+    lastSeenAt: s.lastSeenAt,
+    displayName: displayNameOf(state, s.userId),
+  }));
+}
+
+/** Remove every presence session a user holds in a workspace (access loss). */
+export function purgeUserPresence(
+  state: MockWorkspaceState,
+  workspaceId: string,
+  userId: string,
+): void {
+  for (const [sessionId, session] of [...state.presence]) {
+    if (session.workspaceId === workspaceId && session.userId === userId) {
+      state.presence.delete(sessionId);
+    }
+  }
+}
+
+/** Remove every presence session tied to a project (project deletion). */
+export function purgeProjectPresence(
+  state: MockWorkspaceState,
+  workspaceId: string,
+  projectId: string,
+): void {
+  for (const [sessionId, session] of [...state.presence]) {
+    if (session.workspaceId === workspaceId && session.projectId === projectId) {
+      state.presence.delete(sessionId);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Phase P15 — project version history (durable, bounded, lazy snapshots)
+// ---------------------------------------------------------------------------
+
+function versionKey(workspaceId: string, projectId: string): string {
+  return `${workspaceId}:${projectId}`;
+}
+
+function contentHashOf(snapshotPayload: string): string {
+  return stableHash(JSON.parse(snapshotPayload));
+}
+
+function toVersionMeta(
+  version: MockProjectVersion,
+  state: MockWorkspaceState,
+): ProjectVersionMeta {
+  return {
+    id: version.id,
+    workspaceId: version.workspaceId,
+    projectId: version.projectId,
+    revision: version.revision,
+    createdBy: version.createdBy,
+    createdByName: displayNameOf(state, version.createdBy),
+    createdAt: version.createdAt,
+    reason: version.reason,
+    label: version.label,
+    contentHash: version.contentHash,
+  };
+}
+
+function requireVersion(
+  state: MockWorkspaceState,
+  workspaceId: string,
+  projectId: string,
+  versionId: string,
+): MockProjectVersion {
+  const list = state.versions.get(versionKey(workspaceId, projectId)) ?? [];
+  const version = list.find((v) => v.id === versionId);
+  if (!version) {
+    throw new MockWorkspaceError(404, "VERSION_NOT_FOUND", "That version could not be found.");
+  }
+  return version;
+}
+
+/**
+ * Insert a version (newest first), prune to retention. Autosave versions are
+ * deduped by content hash against the latest version; explicit actions
+ * (checkpoint/publish/restore/pre-restore) always record.
+ */
+function pushVersion(
+  state: MockWorkspaceState,
+  input: {
+    workspaceId: string;
+    projectId: string;
+    revision: number;
+    createdBy: string;
+    reason: ProjectVersionReason;
+    label?: string;
+    snapshot: string;
+  },
+): ProjectVersionMeta | null {
+  const contentHash = contentHashOf(input.snapshot);
+  const list = state.versions.get(versionKey(input.workspaceId, input.projectId)) ?? [];
+  if (input.reason === "autosave") {
+    const latest = list[0];
+    if (latest && latest.contentHash === contentHash) return null;
+  }
+  const version: MockProjectVersion = {
+    id: `wsv-${randomUUID()}`,
+    workspaceId: input.workspaceId,
+    projectId: input.projectId,
+    revision: input.revision,
+    createdBy: input.createdBy,
+    createdAt: nowIso(),
+    reason: input.reason,
+    label: input.label,
+    contentHash,
+    snapshot: input.snapshot,
+  };
+  list.unshift(version);
+  if (list.length > VERSION_RETENTION) list.length = VERSION_RETENTION;
+  state.versions.set(versionKey(input.workspaceId, input.projectId), list);
+  return toVersionMeta(version, state);
+}
+
+export function handleListProjectVersions(
+  state: MockWorkspaceState,
+  token: string | null,
+  workspaceId: string,
+  projectId: string,
+): ProjectVersionMeta[] {
+  const user = requireUser(token);
+  requireMember(state, user, workspaceId);
+  requireProject(state, workspaceId, projectId);
+  const list = state.versions.get(versionKey(workspaceId, projectId)) ?? [];
+  return list.map((v) => toVersionMeta(v, state));
+}
+
+export function handleFetchProjectVersion(
+  state: MockWorkspaceState,
+  token: string | null,
+  workspaceId: string,
+  projectId: string,
+  versionId: string,
+): ProjectVersionFull {
+  const user = requireUser(token);
+  requireMember(state, user, workspaceId);
+  requireProject(state, workspaceId, projectId);
+  const version = requireVersion(state, workspaceId, projectId, versionId);
+  return {
+    ...toVersionMeta(version, state),
+    project: JSON.parse(version.snapshot) as ProjectVersionFull["project"],
+  };
+}
+
+export function handleCreateManualVersion(
+  state: MockWorkspaceState,
+  token: string | null,
+  workspaceId: string,
+  projectId: string,
+  label?: unknown,
+): ProjectVersionMeta {
+  const user = requireUser(token);
+  requireEditor(state, user, workspaceId);
+  const project = requireProject(state, workspaceId, projectId);
+  // Manual checkpoints require the current session to be editable (lease held).
+  const lease = state.leases.get(projectKey(workspaceId, projectId));
+  if (!lease || lease.userId !== user.id) {
+    throw new MockWorkspaceError(
+      403,
+      "LEASE_HELD",
+      "Someone else is editing this project — you can't save a version right now.",
+    );
+  }
+  let cleanLabel: string | undefined;
+  if (label !== undefined && label !== null && label !== "") {
+    cleanLabel = typeof label === "string" ? label.trim().slice(0, MAX_VERSION_LABEL_LENGTH) : "";
+    if (!cleanLabel) {
+      throw new MockWorkspaceError(400, "INVALID_INPUT", "Give your version a label.");
+    }
+  }
+  const version = pushVersion(state, {
+    workspaceId,
+    projectId,
+    revision: project.revision,
+    createdBy: user.id,
+    reason: "checkpoint",
+    label: cleanLabel,
+    snapshot: project.payload,
+  });
+  if (!version) {
+    // Identical content: still record the explicit checkpoint intent.
+    throw new MockWorkspaceError(409, "INVALID_INPUT", "Nothing changed since the last version.");
+  }
+  pushActivity(state, user.id, workspaceId, projectId, "project.version_created", {
+    version: version.id,
+    ...(cleanLabel ? { label: cleanLabel } : {}),
+  });
+  return version;
+}
+
+export function handleRestoreProjectVersion(
+  state: MockWorkspaceState,
+  token: string | null,
+  workspaceId: string,
+  projectId: string,
+  versionId: string,
+  expectedRevision: unknown,
+): { revision: number } {
+  const user = requireUser(token);
+  requireOwner(state, user, workspaceId); // Owner-only restore (documented).
+  const project = requireProject(state, workspaceId, projectId);
+
+  // Optimistic concurrency: never silently overwrite a newer server revision.
+  const expected = typeof expectedRevision === "number" ? expectedRevision : -1;
+  if (project.revision !== expected) {
+    throw new MockWorkspaceError(409, "STALE_REVISION", "This project changed while you were reviewing history.");
+  }
+
+  const version = requireVersion(state, workspaceId, projectId, versionId);
+
+  // Safety version of the CURRENT state (preserves what restore overwrites).
+  if (contentHashOf(project.payload) !== version.contentHash) {
+    pushVersion(state, {
+      workspaceId,
+      projectId,
+      revision: project.revision,
+      createdBy: user.id,
+      reason: "pre-restore",
+      label: `Before restoring version ${version.revision}`,
+      snapshot: project.payload,
+    });
+  }
+
+  // Apply the snapshot as a NEW revision; old versions are never deleted.
+  project.payload = version.snapshot;
+  project.name = JSON.parse(version.snapshot).name ?? project.name;
+  project.revision += 1;
+  project.updatedAt = nowIso();
+
+  pushVersion(state, {
+    workspaceId,
+    projectId,
+    revision: project.revision,
+    createdBy: user.id,
+    reason: "restore",
+    label: `Restored from version ${version.revision}`,
+    snapshot: version.snapshot,
+  });
+  pushActivity(state, user.id, workspaceId, projectId, "project.version_restored", {
+    from: version.id,
+    to: project.revision,
+  });
+  return { revision: project.revision };
+}
+
+export function handleCopyProjectFromVersion(
+  state: MockWorkspaceState,
+  token: string | null,
+  workspaceId: string,
+  projectId: string,
+  versionId: string,
+  input: { newProjectId?: unknown; name?: unknown },
+): WorkspaceProjectSummary {
+  const user = requireUser(token);
+  requireEditor(state, user, workspaceId);
+  requireProject(state, workspaceId, projectId);
+  const version = requireVersion(state, workspaceId, projectId, versionId);
+
+  const newProjectId = typeof input.newProjectId === "string" ? input.newProjectId : "";
+  if (!isValidId(newProjectId)) {
+    throw new MockWorkspaceError(400, "INVALID_INPUT", "That project isn't valid.");
+  }
+  if (state.projects.has(projectKey(workspaceId, newProjectId))) {
+    throw new MockWorkspaceError(409, "INVALID_INPUT", "That project already exists in this workspace.");
+  }
+  const name =
+    typeof input.name === "string" && input.name.trim()
+      ? input.name.trim().slice(0, 80)
+      : `Copy of ${version.revision}`;
+  const nameValidation = validateProjectName(name);
+  if (!nameValidation.valid) {
+    throw new MockWorkspaceError(400, "INVALID_INPUT", nameValidation.error ?? "That name isn't valid.");
+  }
+
+  const now = nowIso();
+  const project: MockWorkspaceProject = {
+    workspaceId,
+    projectId: newProjectId,
+    name,
+    payload: version.snapshot, // validated when the version was created
+    revision: 1,
+    createdBy: user.id,
+    createdAt: now,
+    updatedAt: now,
+  };
+  state.projects.set(projectKey(workspaceId, newProjectId), project);
+  pushActivity(state, user.id, workspaceId, newProjectId, "project.created", {
+    project: name,
+  });
+  return toProjectSummary(project);
+}
+
+// ---------------------------------------------------------------------------
 // Workspaces
 // ---------------------------------------------------------------------------
 
@@ -319,6 +910,7 @@ export function handleCreateWorkspace(
     members: new Map([[user.id, "owner"]]),
   };
   state.workspaces.set(record.id, record);
+  pushActivity(state, user.id, record.id, null, "workspace.created", {});
   return toWorkspaceView(record, user.id);
 }
 
@@ -336,6 +928,7 @@ export function handleUpdateWorkspace(
   }
   workspace.name = name;
   workspace.updatedAt = nowIso();
+  pushActivity(state, user.id, workspaceId, null, "workspace.renamed", { to: name });
   return toWorkspaceView(workspace, user.id);
 }
 
@@ -347,7 +940,7 @@ export function handleDeleteWorkspace(
   const user = requireUser(token);
   requireOwner(state, user, workspaceId);
   state.workspaces.delete(workspaceId);
-  // Cascade: projects, invitations, leases.
+  // Cascade: projects, invitations, leases, presence, activity, versions.
   for (const key of [...state.projects.keys()]) {
     if (key.startsWith(`${workspaceId}:`)) state.projects.delete(key);
   }
@@ -359,6 +952,13 @@ export function handleDeleteWorkspace(
   for (const [id, invitation] of [...state.invitations]) {
     if (invitation.workspaceId === workspaceId) state.invitations.delete(id);
   }
+  for (const [sessionId, session] of [...state.presence]) {
+    if (session.workspaceId === workspaceId) state.presence.delete(sessionId);
+  }
+  for (const key of [...state.versions.keys()]) {
+    if (key.startsWith(`${workspaceId}:`)) state.versions.delete(key);
+  }
+  state.activity.delete(workspaceId);
 }
 
 // ---------------------------------------------------------------------------
@@ -407,14 +1007,20 @@ export function handleChangeMemberRole(
   }
   workspace.members.set(memberUserId, role as "editor" | "viewer");
   workspace.updatedAt = nowIso();
-  // A role change to viewer invalidates any lease the member holds.
+  // A role change to viewer invalidates any lease the member holds and ends
+  // their live editing presence.
   if (role === "viewer") {
     for (const lease of [...state.leases.values()]) {
       if (lease.workspaceId === workspaceId && lease.userId === memberUserId) {
         state.leases.delete(projectKey(lease.workspaceId, lease.projectId));
       }
     }
+    purgeUserPresence(state, workspaceId, memberUserId);
   }
+  pushActivity(state, user.id, workspaceId, null, "member.role_changed", {
+    member: displayNameOf(state, memberUserId),
+    to: role as string,
+  });
 }
 
 export function handleRemoveMember(
@@ -430,12 +1036,14 @@ export function handleRemoveMember(
   }
   workspace.members.delete(memberUserId);
   workspace.updatedAt = nowIso();
-  // Immediate access loss: drop any lease the removed member held.
+  // Immediate access loss: drop any lease the removed member held and end
+  // their presence sessions (no streaming private events after removal).
   for (const lease of [...state.leases.values()]) {
     if (lease.workspaceId === workspaceId && lease.userId === memberUserId) {
       state.leases.delete(projectKey(lease.workspaceId, lease.projectId));
     }
   }
+  purgeUserPresence(state, workspaceId, memberUserId);
   // Void their pending invitations.
   for (const invitation of [...state.invitations.values()]) {
     if (
@@ -446,6 +1054,9 @@ export function handleRemoveMember(
       invitation.status = "revoked";
     }
   }
+  pushActivity(state, user.id, workspaceId, null, "member.removed", {
+    member: displayNameOf(state, memberUserId),
+  });
 }
 
 export function handleLeaveWorkspace(
@@ -464,6 +1075,10 @@ export function handleLeaveWorkspace(
       state.leases.delete(projectKey(lease.workspaceId, lease.projectId));
     }
   }
+  purgeUserPresence(state, workspaceId, user.id);
+  pushActivity(state, user.id, workspaceId, null, "member.removed", {
+    member: displayNameOf(state, user.id),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -531,6 +1146,10 @@ export function handleInviteMember(
     expiresAt: new Date(now.getTime() + INVITATION_TTL_MS).toISOString(),
   };
   state.invitations.set(invitation.id, invitation);
+  pushActivity(state, user.id, workspaceId, null, "member.invited", {
+    email,
+    role: role as string,
+  });
   return invitation;
 }
 
@@ -583,6 +1202,9 @@ export function handleAcceptInvitation(
   invitation.status = "accepted";
   invitation.acceptedAt = nowIso();
   workspace.updatedAt = nowIso();
+  pushActivity(state, user.id, invitation.workspaceId, null, "member.joined", {
+    role: invitation.role as string,
+  });
 }
 
 export function handleRevokeInvitation(
@@ -629,7 +1251,7 @@ export function handleCreateWorkspaceProject(
   state: MockWorkspaceState,
   token: string | null,
   workspaceId: string,
-  input: { projectId?: unknown; project?: unknown },
+  input: { projectId?: unknown; project?: unknown; origin?: unknown },
 ): WorkspaceProjectSummary {
   const user = requireUser(token);
   requireEditor(state, user, workspaceId);
@@ -653,6 +1275,15 @@ export function handleCreateWorkspaceProject(
     updatedAt: now,
   };
   state.projects.set(projectKey(workspaceId, projectId), project);
+  const origin = input.origin === "move-in" ? "move-in" : "create";
+  pushActivity(
+    state,
+    user.id,
+    workspaceId,
+    projectId,
+    origin === "move-in" ? "project.moved_in" : "project.created",
+    { project: name },
+  );
   return toProjectSummary(project);
 }
 
@@ -707,10 +1338,32 @@ export function handleSaveWorkspaceProject(
   }
 
   const { payload, name } = serializeProjectPayload(input.project);
+  const renamed = name !== project.name;
   project.payload = payload;
   project.name = name;
   project.revision += 1;
   project.updatedAt = nowIso();
+  // Version history: a changed-content save creates a deduped autosave version
+  // and records meaningful activity (identical saves are silent).
+  const version = pushVersion(state, {
+    workspaceId,
+    projectId,
+    revision: project.revision,
+    createdBy: user.id,
+    reason: "autosave",
+    snapshot: payload,
+  });
+  if (version) {
+    pushActivity(state, user.id, workspaceId, projectId, "project.saved", {
+      revision: project.revision,
+    });
+  }
+  if (renamed) {
+    pushActivity(state, user.id, workspaceId, projectId, "project.renamed", {
+      project: name,
+      to: name,
+    });
+  }
   return toProjectSummary(project);
 }
 
@@ -722,10 +1375,20 @@ export function handleDeleteWorkspaceProject(
 ): void {
   const user = requireUser(token);
   requireOwner(state, user, workspaceId);
+  const project = state.projects.get(projectKey(workspaceId, projectId));
   state.projects.delete(projectKey(workspaceId, projectId));
   // Leases are scoped by (workspace, project) — never touch another
   // workspace's same-id project.
   state.leases.delete(projectKey(workspaceId, projectId));
+  // Phase P15: versions are removed with the project; presence sessions for
+  // the project end; activity retains a safe metadata tombstone.
+  state.versions.delete(versionKey(workspaceId, projectId));
+  purgeProjectPresence(state, workspaceId, projectId);
+  if (project) {
+    pushActivity(state, user.id, workspaceId, projectId, "project.deleted", {
+      project: project.name,
+    });
+  }
 }
 
 export function handleDuplicateWorkspaceProject(
@@ -758,7 +1421,115 @@ export function handleDuplicateWorkspaceProject(
     updatedAt: now,
   };
   state.projects.set(projectKey(workspaceId, newProjectId), project);
+  pushActivity(state, user.id, workspaceId, newProjectId, "project.duplicated", {
+    project: name,
+    from: source.name,
+  });
   return toProjectSummary(project);
+}
+
+// ---------------------------------------------------------------------------
+// Phase P15 — activity public handlers (client bridges: publish/share/domain)
+// ---------------------------------------------------------------------------
+
+export function handleRecordActivityEvent(
+  state: MockWorkspaceState,
+  token: string | null,
+  input: { workspaceId?: unknown; projectId?: unknown; type?: unknown; metadata?: unknown },
+): WorkspaceActivityEvent {
+  const user = requireUser(token);
+  const workspaceId = typeof input.workspaceId === "string" ? input.workspaceId : "";
+  requireMember(state, user, workspaceId);
+  const type = typeof input.type === "string" ? input.type : "";
+  if (!ACTIVITY_TYPES.has(type)) {
+    throw new MockWorkspaceError(400, "INVALID_INPUT", "That activity event isn't supported.");
+  }
+  let projectId: string | null = null;
+  if (input.projectId !== undefined && input.projectId !== null && input.projectId !== "") {
+    projectId = typeof input.projectId === "string" ? input.projectId : "";
+    if (!isValidId(projectId)) {
+      throw new MockWorkspaceError(400, "INVALID_INPUT", "That project isn't valid.");
+    }
+    requireProject(state, workspaceId, projectId);
+  }
+  const metadata = sanitizeActivityMetadata(type, input.metadata);
+  return pushActivity(state, user.id, workspaceId, projectId, type as WorkspaceActivityType, metadata);
+}
+
+const FILTER_TYPES: Record<string, ReadonlySet<WorkspaceActivityType>> = {
+  projects: new Set<WorkspaceActivityType>([
+    "project.created",
+    "project.moved_in",
+    "project.renamed",
+    "project.saved",
+    "project.duplicated",
+    "project.deleted",
+    "project.version_created",
+    "project.version_restored",
+  ]),
+  members: new Set<WorkspaceActivityType>([
+    "member.invited",
+    "member.joined",
+    "member.role_changed",
+    "member.removed",
+  ]),
+  publishing: new Set<WorkspaceActivityType>([
+    "publish.completed",
+    "publish.rollback",
+    "domain.attached",
+    "domain.removed",
+  ]),
+  sharing: new Set<WorkspaceActivityType>(["share.created", "share.revoked"]),
+};
+
+function parseActivityCursor(raw: unknown): ActivityCursor | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const obj = raw as Record<string, unknown>;
+  if (typeof obj.ts === "string" && typeof obj.id === "string") {
+    return { ts: obj.ts, id: obj.id };
+  }
+  return null;
+}
+
+export function handleListActivity(
+  state: MockWorkspaceState,
+  token: string | null,
+  workspaceId: string,
+  opts: { before?: unknown; limit?: unknown; filter?: unknown },
+): { events: WorkspaceActivityEvent[]; nextCursor: ActivityCursor | null } {
+  const user = requireUser(token);
+  requireMember(state, user, workspaceId);
+  const limit = Math.min(
+    Math.max(typeof opts.limit === "number" ? Math.floor(opts.limit) : ACTIVITY_PAGE_SIZE, 1),
+    ACTIVITY_PAGE_SIZE,
+  );
+  let list = state.activity.get(workspaceId) ?? [];
+  const filter = typeof opts.filter === "string" ? opts.filter : "all";
+  if (filter !== "all" && FILTER_TYPES[filter]) {
+    list = list.filter((e) => FILTER_TYPES[filter].has(e.type));
+  }
+  // Deterministic ordering: (createdAt DESC, id DESC). Events created in the
+  // same millisecond (common in tight loops) must still page correctly, so the
+  // cursor filter runs against a fully sorted copy — never insertion order.
+  list = [...list].sort(
+    (a, b) =>
+      b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+  );
+  const before = parseActivityCursor(opts.before);
+  if (before) {
+    list = list.filter(
+      (e) => e.createdAt < before.ts || (e.createdAt === before.ts && e.id < before.id),
+    );
+  }
+  const page = list.slice(0, limit);
+  const last = page[page.length - 1];
+  const nextCursor =
+    page.length === limit && list.length > limit
+      ? { ts: last.createdAt, id: last.id }
+      : null;
+  // Enrich with server-derived actor display names (never client-supplied).
+  const events = page.map((e) => ({ ...e, actorName: displayNameOf(state, e.actorUserId) }));
+  return { events, nextCursor };
 }
 
 // ---------------------------------------------------------------------------

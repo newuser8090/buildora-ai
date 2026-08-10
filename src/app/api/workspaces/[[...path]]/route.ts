@@ -30,6 +30,13 @@
 //   POST /api/workspaces/lease/[lid]/heartbeat          → heartbeat
 //   POST /api/workspaces/lease/[lid]/release            → release
 //   DELETE /api/workspaces/lease/project/[pid]          → revoke for project
+//   GET  /api/workspaces/[id]/activity                  → activity (paginated)
+//   POST /api/workspaces/activity                       → record (bridge events)
+//   GET  /api/workspaces/[id]/projects/[pid]/versions   → metadata-only list
+//   POST /api/workspaces/[id]/projects/[pid]/versions   → manual checkpoint
+//   GET  /api/workspaces/[id]/projects/[pid]/versions/[vid] → fetch snapshot
+//   POST /api/workspaces/[id]/projects/[pid]/versions/[vid]/restore → restore
+//   POST /api/workspaces/[id]/projects/[pid]/versions/[vid]/copy → copy
 // ---------------------------------------------------------------------------
 
 import { NextResponse } from "next/server";
@@ -61,6 +68,13 @@ import {
   handleReleaseEditLease,
   handleGetEditLease,
   handleRevokeLeasesForProject,
+  handleRecordActivityEvent,
+  handleListActivity,
+  handleListProjectVersions,
+  handleFetchProjectVersion,
+  handleCreateManualVersion,
+  handleRestoreProjectVersion,
+  handleCopyProjectFromVersion,
 } from "@/features/workspaces/mock/mock-workspace-server";
 import { getMockCloudState } from "@/features/cloud-sync/mock/mock-cloud-server";
 import {
@@ -161,6 +175,34 @@ export async function GET(
     if (segments[1] === "projects" && segments[3] === "lease") {
       return ok(handleGetEditLease(state, token, segments[0], decodeURIComponent(segments[2])));
     }
+    if (segments[1] === "activity") {
+      const url = new URL(request.url);
+      const beforeTs = url.searchParams.get("beforeTs");
+      const beforeId = url.searchParams.get("beforeId");
+      const limitRaw = url.searchParams.get("limit");
+      const filter = url.searchParams.get("filter") ?? undefined;
+      const before =
+        beforeTs && beforeId ? { ts: beforeTs, id: beforeId } : undefined;
+      return ok(
+        handleListActivity(state, token, segments[0], {
+          before,
+          limit: limitRaw ? Number(limitRaw) : undefined,
+          filter,
+        }),
+      );
+    }
+    if (segments[1] === "projects" && segments[3] === "versions") {
+      const workspaceId = segments[0];
+      const projectId = decodeURIComponent(segments[2]);
+      if (segments.length === 4) {
+        return ok(handleListProjectVersions(state, token, workspaceId, projectId));
+      }
+      if (segments.length === 5) {
+        return ok(
+          handleFetchProjectVersion(state, token, workspaceId, projectId, segments[4]),
+        );
+      }
+    }
     return NextResponse.json(
       { ok: false, error: { code: "NOT_FOUND", message: "Unknown endpoint." } },
       { status: 404 },
@@ -186,6 +228,9 @@ export async function POST(
     }
     if (segments[0] === "save") {
       return ok(handleSaveWorkspaceProject(state, token, body));
+    }
+    if (segments[0] === "activity") {
+      return ok(handleRecordActivityEvent(state, token, body));
     }
     if (segments[0] === "invitations" && segments[2] === "accept") {
       handleAcceptInvitation(state, token, segments[1]);
@@ -222,6 +267,35 @@ export async function POST(
       }
       if (segments[3] === "lease") {
         return ok(handleAcquireEditLease(state, token, segments[0], decodeURIComponent(segments[2])));
+      }
+      if (segments[3] === "versions" && segments.length === 4) {
+        return ok(
+          handleCreateManualVersion(state, token, segments[0], decodeURIComponent(segments[2]), body.label),
+        );
+      }
+      if (segments[3] === "versions" && segments[5] === "restore") {
+        return ok(
+          handleRestoreProjectVersion(
+            state,
+            token,
+            segments[0],
+            decodeURIComponent(segments[2]),
+            segments[4],
+            body.expectedRevision,
+          ),
+        );
+      }
+      if (segments[3] === "versions" && segments[5] === "copy") {
+        return ok(
+          handleCopyProjectFromVersion(
+            state,
+            token,
+            segments[0],
+            decodeURIComponent(segments[2]),
+            segments[4],
+            body,
+          ),
+        );
       }
     }
     return NextResponse.json(

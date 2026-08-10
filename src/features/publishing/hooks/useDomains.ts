@@ -11,6 +11,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
+import { useWorkspaceAccessStore } from "@/features/workspaces/store/workspace-access-store";
+import { recordWorkspaceActivity } from "@/features/workspaces/services/activity-bridge";
 import { getDeploymentAdapter } from "../storage/deployment-adapter";
 import { getDomainAdapter } from "../domain/domain-storage";
 import { DomainService } from "../domain/domain-service";
@@ -112,10 +114,19 @@ export function useDomains() {
         return { ok: false, error: { code: "DOMAIN_ATTACH_FAILED", message: "Custom domains aren't available for this publishing option." } };
       }
       const result = await service.attach(project.id, input);
-      if (result.ok) await refresh();
+      if (result.ok) {
+        await refresh();
+        // Phase P15 — activity: attaching a custom domain to a workspace project.
+        recordWorkspaceActivity({
+          workspaceId: useWorkspaceAccessStore.getState().workspaceId,
+          projectId: project.id,
+          type: "domain.attached",
+          metadata: { domain: input, project: project.name },
+        });
+      }
       return result;
     },
-    [service, project.id, refresh],
+    [service, project.id, project.name, refresh],
   );
 
   const refreshStatus = useCallback(
@@ -132,10 +143,19 @@ export function useDomains() {
     async (record: DeploymentDomainRecord): Promise<DomainActionResult<void>> => {
       if (!service) return { ok: false, error: { code: "DOMAIN_ATTACH_FAILED", message: "Custom domains aren't available for this publishing option." } };
       const result = await service.remove(record);
-      if (result.ok) await refresh();
+      if (result.ok) {
+        await refresh();
+        // Phase P15 — activity: removing a custom domain from a workspace project.
+        recordWorkspaceActivity({
+          workspaceId: useWorkspaceAccessStore.getState().workspaceId,
+          projectId: project.id,
+          type: "domain.removed",
+          metadata: { domain: record.domain, project: project.name },
+        });
+      }
       return result;
     },
-    [service, refresh],
+    [service, project.id, project.name, refresh],
   );
 
   const primaryDomain = useMemo(

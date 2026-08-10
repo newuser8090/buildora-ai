@@ -11,9 +11,15 @@
 import { getCloudEnvironment } from "@/features/cloud-sync/cloud-environment";
 import { toWorkspaceError } from "../errors";
 import type {
+  ActivityCursor,
   LeaseAcquireResult,
   ProjectEditLease,
+  ProjectVersionFull,
+  ProjectVersionMeta,
   Workspace,
+  WorkspaceActivityEvent,
+  WorkspaceActivityMetadata,
+  WorkspaceActivityType,
   WorkspaceInvitation,
   WorkspaceListing,
   WorkspaceMember,
@@ -190,7 +196,7 @@ export class WorkspaceService {
 
   async createWorkspaceProject(
     workspaceId: string,
-    input: { projectId: string; name: string; project: unknown },
+    input: { projectId: string; name: string; project: unknown; origin?: "create" | "move-in" },
   ): Promise<WorkspaceResult<WorkspaceProjectSummary>> {
     try {
       return { ok: true, value: await this.provider.createWorkspaceProject(workspaceId, input) };
@@ -288,6 +294,125 @@ export class WorkspaceService {
       return { ok: true, value: undefined };
     } catch {
       return { ok: true, value: undefined };
+    }
+  }
+
+  // ---- Activity (Phase P15) ----
+
+  async recordActivityEvent(input: {
+    workspaceId: string;
+    projectId?: string | null;
+    type: WorkspaceActivityType;
+    metadata?: WorkspaceActivityMetadata;
+  }): Promise<WorkspaceResult<void>> {
+    try {
+      await this.provider.recordActivityEvent(input);
+      return { ok: true, value: undefined };
+    } catch (err) {
+      return { ok: false, error: toWorkspaceError(err) };
+    }
+  }
+
+  async listActivity(input: {
+    workspaceId: string;
+    before?: ActivityCursor | null;
+    limit?: number;
+    filter?: string;
+  }): Promise<WorkspaceResult<{ events: WorkspaceActivityEvent[]; nextCursor: ActivityCursor | null }>> {
+    try {
+      return { ok: true, value: await this.provider.listActivity(input) };
+    } catch (err) {
+      return { ok: false, error: toWorkspaceError(err) };
+    }
+  }
+
+  // ---- Project version history (Phase P15) ----
+
+  async listProjectVersions(
+    workspaceId: string,
+    projectId: string,
+  ): Promise<WorkspaceResult<ProjectVersionMeta[]>> {
+    try {
+      return {
+        ok: true,
+        value: await this.provider.listProjectVersions(workspaceId, projectId),
+      };
+    } catch (err) {
+      return { ok: false, error: toWorkspaceError(err) };
+    }
+  }
+
+  async fetchProjectVersion(
+    workspaceId: string,
+    projectId: string,
+    versionId: string,
+  ): Promise<WorkspaceResult<ProjectVersionFull>> {
+    try {
+      return {
+        ok: true,
+        value: await this.provider.fetchProjectVersion(workspaceId, projectId, versionId),
+      };
+    } catch (err) {
+      return { ok: false, error: toWorkspaceError(err) };
+    }
+  }
+
+  async createManualVersion(
+    workspaceId: string,
+    projectId: string,
+    label?: string,
+  ): Promise<WorkspaceResult<ProjectVersionMeta>> {
+    try {
+      return {
+        ok: true,
+        value: await this.provider.createManualVersion(workspaceId, projectId, label),
+      };
+    } catch (err) {
+      return { ok: false, error: toWorkspaceError(err) };
+    }
+  }
+
+  async restoreProjectVersion(
+    workspaceId: string,
+    projectId: string,
+    versionId: string,
+    expectedRevision: number,
+  ): Promise<WorkspaceResult<{ revision: number }>> {
+    try {
+      return {
+        ok: true,
+        value: await this.provider.restoreProjectVersion(
+          workspaceId,
+          projectId,
+          versionId,
+          expectedRevision,
+        ),
+      };
+    } catch (err) {
+      return { ok: false, error: toWorkspaceError(err) };
+    }
+  }
+
+  async copyProjectFromVersion(
+    workspaceId: string,
+    projectId: string,
+    versionId: string,
+    newProjectId: string,
+    name: string,
+  ): Promise<WorkspaceResult<WorkspaceProjectSummary>> {
+    try {
+      return {
+        ok: true,
+        value: await this.provider.copyProjectFromVersion(
+          workspaceId,
+          projectId,
+          versionId,
+          newProjectId,
+          name,
+        ),
+      };
+    } catch (err) {
+      return { ok: false, error: toWorkspaceError(err) };
     }
   }
 }

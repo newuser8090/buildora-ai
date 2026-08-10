@@ -401,6 +401,55 @@ export class ProjectController {
   }
 
   // -----------------------------------------------------------------------
+  // Create Project From Payload (Phase P15 — personal copy from a version)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Create a PERSONAL project from an existing validated Project payload with
+   * a fresh project identity (new project id + timestamps; the payload's
+   * internal page/section ids are preserved — they are project-local). Used by
+   * "Create copy from version" → personal. No collaboration metadata is ever
+   * part of the payload, so nothing extra needs stripping.
+   */
+  async createProjectFromPayload(
+    payload: Project,
+    name: string,
+  ): Promise<ProjectTransitionResult<{ projectId: string }>> {
+    const prep = await this._prepareForProjectTransition();
+    if (!prep.success) return prep as ProjectTransitionResult<{ projectId: string }>;
+
+    const now = new Date().toISOString();
+    const project: Project = {
+      ...JSON.parse(JSON.stringify(payload)),
+      id: generateProjectId(),
+      name: name.trim(),
+      createdAt: now,
+      updatedAt: now,
+    };
+    const revision = INITIAL_REVISION;
+
+    return this._runTransition<{ projectId: string }>(async () => {
+      const saveResult = await this.adapter.saveProject({ project, revision });
+      if (!saveResult.success) {
+        return { success: false, code: "PROJECT_CREATE_FAILED", error: saveResult.error };
+      }
+      const activeResult = await this.adapter.setActiveProjectId(project.id);
+      if (!activeResult.success) {
+        return { success: false, code: "ACTIVE_PROJECT_UPDATE_FAILED", error: activeResult.error };
+      }
+      this._suppressNextDirty = true;
+      useEditorStore.getState().hydrateProject(project, revision);
+      useEditorStore.getState().setLastSavedAt(new Date().toISOString());
+      this._createCoordinator();
+      this._subscribeCoordinator();
+      this._subscribeStore();
+      this._hydrated = true;
+      this._scheduleThumbnailAfterSave();
+      return { success: true, data: { projectId: project.id } };
+    });
+  }
+
+  // -----------------------------------------------------------------------
   // Open Project
   // -----------------------------------------------------------------------
 

@@ -19,6 +19,7 @@ import {
   LayoutTemplate,
   Keyboard,
   History,
+  Clock,
   Bot,
   Share2,
 } from "lucide-react";
@@ -38,6 +39,8 @@ import { EXPORT_SITE_EVENT } from "@/features/guided-builder/constants";
 import { CloudSyncStatusControl } from "@/features/cloud-sync/components/CloudSyncStatusControl";
 import { AccountMenu } from "@/features/auth/components/AccountMenu";
 import { useWorkspaceAccessStore } from "@/features/workspaces/store/workspace-access-store";
+import { useWorkspaceHistoryUiStore } from "@/features/workspaces/store/workspace-history-ui-store";
+import { PresenceIndicator } from "@/features/workspaces/components/PresenceIndicator";
 import { usePreviewStore } from "@/features/preview/store/preview-store";
 import { useLaunchCenterStore } from "@/features/launch-readiness/store/launch-center-store";
 import { useSiteSettingsUiStore } from "@/features/site-settings/store/site-settings-ui-store";
@@ -84,6 +87,9 @@ export function TopNav() {
   const wsName = useWorkspaceAccessStore((s) => s.workspaceName);
   const wsLeaseHolder = useWorkspaceAccessStore((s) => s.leaseHolderName);
   const isWsReadOnly = wsAccess.mode === "readonly";
+
+  // Phase P15 — version history entry point (workspace projects only).
+  const openVersionHistory = () => useWorkspaceHistoryUiStore.getState().openDialog("versions");
 
   // Phase P8: keep the Publish button honest — "Publish updates" when the
   // project has unpublished changes; it always opens the Launch Center.
@@ -310,6 +316,9 @@ export function TopNav() {
             )}
           </div>
         )}
+
+        {/* Phase P15 — live presence (only while a workspace project is open) */}
+        {wsName && <PresenceIndicator />}
       </div>
 
       {/* ---- Spacer ---- */}
@@ -514,6 +523,20 @@ export function TopNav() {
         >
           <History className="h-4 w-4" />
         </button>
+
+        {/* Phase P15 — version history (workspace projects only) */}
+        {wsName && (
+          <button
+            data-testid="topnav-history-button"
+            onClick={openVersionHistory}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
+            title="Version history"
+            aria-label="Version history"
+            type="button"
+          >
+            <Clock className="h-4 w-4" />
+          </button>
+        )}
 
         <button
           data-testid="topnav-site-settings-button"
