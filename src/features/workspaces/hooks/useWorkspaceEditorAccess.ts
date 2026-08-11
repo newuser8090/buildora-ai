@@ -1,18 +1,23 @@
 "use client";
 
 // ---------------------------------------------------------------------------
-// Team Workspaces & Controlled Collaboration (Phase P14) — useWorkspaceEditorAccess
+// Team Workspaces & Controlled Collaboration (Phase P14/P16) — useWorkspaceEditorAccess
 //
-// Mounted once in EditorShell. Owns the full workspace editor session:
+// Mounted once in EditorShell. Owns the workspace editor ACCESS session:
 //   1. detects whether the active project is a workspace project (local cache
 //      metadata, scoped by user + workspace + project)
 //   2. fetches the SERVER-authoritative project and re-hydrates the editor
 //      through the controller (fresh copy in IndexedDB, suppressed dirty)
-//   3. resolves the current user's role + the edit lease
-//   4. holds/renews the lease (heartbeat) while editable
-//   5. pushes debounced server saves with optimistic concurrency
-//   6. detects authorization loss / stale revisions / offline and transitions
-//      to a safe read-only state
+//   3. resolves the current user's role
+//   4. sets the editor access boundary (editable for editor/owner, read-only
+//      for viewers / offline / unauthorized)
+//
+// Phase P16 — SIMULTANEOUS EDITING: editors/owners no longer hold an exclusive
+// edit lease. The exclusive lease gates nothing for ordinary collaborative
+// editing; multiple editors edit at once, and the collaboration session
+// (useCollaborationSession) owns realtime sync + durable checkpoints. The P14
+// lease endpoints remain for backward compatibility and are reused by the
+// maintenance lock (version restore / import), which is owned by the session.
 //
 // Personal projects resolve to "editable" with no lease, exactly as before.
 // The store starts each project open in a transient read-only "not-loaded"
@@ -24,12 +29,7 @@ import { useEditorStore } from "@/features/editor/store/editor-store";
 import { getProjectController } from "@/features/persistence/services/project-controller";
 import type { ProjectPersistenceAdapter } from "@/features/persistence/types";
 import { useAuth } from "@/features/auth/useAuth";
-import { recordPerf } from "@/features/perf/perf-instrumentation";
 import { toWorkspaceError } from "../errors";
-import {
-  EDIT_LEASE_HEARTBEAT_MS,
-  WORKSPACE_SAVE_DEBOUNCE_MS,
-} from "../constants";
 import {
   getWorkspaceCacheMeta,
   setWorkspaceCacheMeta,
@@ -37,8 +37,6 @@ import {
 import { getWorkspaceProvider } from "../services/workspace-service";
 import { useWorkspaceAccessStore } from "../store/workspace-access-store";
 import type {
-  LeaseAcquireResult,
-  ProjectEditLease,
   Workspace,
   WorkspaceError,
   WorkspaceProjectFull,
@@ -79,186 +77,25 @@ export function useWorkspaceEditorAccess(): void {
 
   // Refs to keep per-project session state.
   const processedRef = useRef<string | null>(null);
-  const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const leaseRef = useRef<ProjectEditLease | null>(null);
-  const serverRevisionRef = useRef<number | null>(null);
   const activeSessionRef = useRef<{ projectId: string; workspaceId: string } | null>(null);
-  const dirtyArmedRef = useRef(false);
   const unsubStoreRef = useRef<(() => void) | null>(null);
 
-  // -------------------------------------------------------------------------
-  // Cleanup helpers
-  // -------------------------------------------------------------------------
-
   const clearTimers = useCallback(() => {
-    if (heartbeatRef.current) {
-      clearInterval(heartbeatRef.current);
-      heartbeatRef.current = null;
-    }
-    if (saveTimerRef.current) {
-      clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
     if (unsubStoreRef.current) {
       unsubStoreRef.current();
       unsubStoreRef.current = null;
     }
   }, []);
 
-  const resetSession = useCallback(async () => {
-    // Capture the lease synchronously and clear every ref BEFORE any await so
-    // a StrictMode re-run (setup → cleanup → setup) sees a clean slate and
-    // re-registers its own cleanup instead of discarding it.
-    const lease = leaseRef.current;
+  const resetSession = useCallback(() => {
+    // Capture everything synchronously BEFORE any await so a StrictMode re-run
+    // (setup → cleanup → setup) sees a clean slate. The collab session's own
+    // stop() resets the collab UI store, so nothing more is needed here.
     clearTimers();
-    leaseRef.current = null;
-    serverRevisionRef.current = null;
     activeSessionRef.current = null;
-    dirtyArmedRef.current = false;
     processedRef.current = null;
     useWorkspaceAccessStore.getState().reset();
-    if (!lease) return;
-    const provider = getWorkspaceProvider();
-    if (!provider) return;
-    try {
-      await provider.releaseEditLease(lease.leaseId);
-    } catch {
-      // Best-effort — an expired/released lease is fine.
-    }
   }, [clearTimers]);
-
-  // -------------------------------------------------------------------------
-  // Heartbeat
-  // -------------------------------------------------------------------------
-
-  const startHeartbeat = useCallback(() => {
-    clearTimers();
-    heartbeatRef.current = setInterval(async () => {
-      const lease = leaseRef.current;
-      if (!lease) return;
-      const provider = getWorkspaceProvider();
-      if (!provider) return;
-      try {
-        const renewed = await provider.heartbeatEditLease(lease.leaseId);
-        leaseRef.current = renewed;
-      } catch {
-        // Authorization loss while open → safe read-only transition (member
-        // removal / role change / lease expiry) without waiting for a reload.
-        clearTimers();
-        leaseRef.current = null;
-        useWorkspaceAccessStore.getState().setLease(null);
-        useWorkspaceAccessStore.getState().setAccess({
-          mode: "readonly",
-          reason: "unauthorized",
-        });
-      }
-    }, EDIT_LEASE_HEARTBEAT_MS);
-  }, [clearTimers]);
-
-  // -------------------------------------------------------------------------
-  // Server save (optimistic concurrency)
-  // -------------------------------------------------------------------------
-
-  const pushServerSave = useCallback(async () => {
-    const session = activeSessionRef.current;
-    if (!session) return;
-    const store = useEditorStore.getState();
-    if (!store.project || store.project.id !== session.projectId) return;
-    const expectedRevision = serverRevisionRef.current;
-    if (expectedRevision === null) return;
-
-    const provider = getWorkspaceProvider();
-    if (!provider) return;
-
-    let summary;
-    try {
-      summary = await provider.saveWorkspaceProject({
-        workspaceId: session.workspaceId,
-        projectId: store.project.id,
-        project: store.project,
-        expectedRevision,
-      });
-    } catch (err) {
-      const error: WorkspaceError = toWorkspaceError(err);
-      if (error.code === "STALE_REVISION") {
-        useWorkspaceAccessStore.getState().setSaveConflict({
-          kind: "stale-revision",
-          currentRevision: store.revision,
-          serverRevision: expectedRevision,
-        });
-        return;
-      }
-      if (
-        error.code === "PERMISSION_DENIED" ||
-        error.code === "LEASE_INVALID" ||
-        error.code === "SESSION_EXPIRED"
-      ) {
-        // Authorization loss while open → safe read-only transition.
-        clearTimers();
-        leaseRef.current = null;
-        useWorkspaceAccessStore.getState().setLease(null);
-        useWorkspaceAccessStore.getState().setAccess({
-          mode: "readonly",
-          reason: "unauthorized",
-        });
-        return;
-      }
-      if (error.code === "NETWORK_FAILED" || error.code === "OFFLINE") {
-        useWorkspaceAccessStore.getState().setOffline(true);
-      }
-      return;
-    }
-
-    serverRevisionRef.current = summary.revision;
-    const accessStore = useWorkspaceAccessStore.getState();
-    accessStore.setWorkspaceContext({
-      workspaceId: session.workspaceId,
-      workspaceName: accessStore.workspaceName,
-      role: accessStore.role,
-      serverRevision: summary.revision,
-    });
-    recordPerf("workspace_project_saved", 0, { count: 1 });
-
-    // Keep the device cache metadata fresh so reopens are accurate.
-    const adapter = controllerAdapter();
-    if (adapter && user?.id) {
-      void setWorkspaceCacheMeta(adapter, store.project.id, {
-        workspaceId: session.workspaceId,
-        userId: user.id,
-        serverRevision: summary.revision,
-        serverUpdatedAt: new Date().toISOString(),
-      });
-    }
-  }, [user, clearTimers]);
-
-  const subscribeToSaves = useCallback(() => {
-    if (unsubStoreRef.current) {
-      unsubStoreRef.current();
-      unsubStoreRef.current = null;
-    }
-    unsubStoreRef.current = useEditorStore.subscribe((state) => {
-      const session = activeSessionRef.current;
-      if (!session) return;
-      if (state.project.id !== session.projectId) return;
-
-      // Arm on the first real edit (dirty), then debounce-push once.
-      if (state.isDirty) {
-        if (!dirtyArmedRef.current) {
-          dirtyArmedRef.current = true;
-          if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-          saveTimerRef.current = setTimeout(() => {
-            saveTimerRef.current = null;
-            dirtyArmedRef.current = false;
-            void pushServerSave();
-          }, WORKSPACE_SAVE_DEBOUNCE_MS);
-        }
-        return;
-      }
-      // Clean (markSaved) → re-arm for the next edit.
-      dirtyArmedRef.current = false;
-    });
-  }, [pushServerSave]);
 
   // -------------------------------------------------------------------------
   // Access resolution for the active project
@@ -313,7 +150,8 @@ export function useWorkspaceEditorAccess(): void {
 
       if (!full) {
         if (fetchError?.code === "NETWORK_FAILED" || fetchError?.code === "OFFLINE") {
-          // Offline: open the local cache read-only (honest copy).
+          // Offline: open the local cache read-only (honest copy). The
+          // collaboration session does not start while offline.
           store.setWorkspaceContext({
             workspaceId,
             workspaceName: workspace?.name ?? null,
@@ -346,9 +184,7 @@ export function useWorkspaceEditorAccess(): void {
         await controller.discardAndOpenProject(projectId).catch(() => undefined);
       }
 
-      serverRevisionRef.current = full.revision;
       activeSessionRef.current = { projectId, workspaceId };
-      dirtyArmedRef.current = false;
 
       const role = workspace?.memberRole ?? "viewer";
       store.setWorkspaceContext({
@@ -364,56 +200,27 @@ export function useWorkspaceEditorAccess(): void {
         return;
       }
 
-      // Editor/owner: resolve the lease.
-      let lease: ProjectEditLease | null = null;
-      try {
-        lease = await provider.getEditLease(workspaceId, projectId);
-      } catch {
-        lease = null;
-      }
-      if (lease && lease.userId === user.id) {
-        leaseRef.current = lease;
-        store.setLease(lease);
-        store.setAccess({ mode: "editable" });
-        startHeartbeat();
-        subscribeToSaves();
-        return;
-      }
-      if (lease && lease.userId !== user.id) {
-        store.setLease(null);
-        store.setLeaseHolderName(holderNameOf(lease));
-        store.setAccess({ mode: "readonly", reason: "being-edited" });
-        return;
-      }
-
-      let acquired: LeaseAcquireResult | null = null;
-      try {
-        acquired = await provider.acquireEditLease(workspaceId, projectId);
-      } catch {
-        acquired = null;
-      }
-      if (acquired && acquired.ok) {
-        leaseRef.current = acquired.lease;
-        store.setLease(acquired.lease);
-        store.setAccess({ mode: "editable" });
-        recordPerf("workspace_lease_acquired", 0, { count: 1 });
-        startHeartbeat();
-        subscribeToSaves();
-        return;
-      }
-      if (acquired && !acquired.ok && acquired.code === "LEASE_HELD") {
-        store.setLease(null);
-        store.setLeaseHolderName(holderNameOf(acquired.lease));
-        store.setAccess({ mode: "readonly", reason: "being-edited" });
-        recordPerf("workspace_lease_blocked", 0, { count: 1 });
-        return;
-      }
-
-      // Lease acquisition failed (offline/permission) → read-only.
+      // Editor/owner — Phase P16: editable WITHOUT an exclusive lease. The
+      // collaboration session (mounted in EditorShell) joins the room, applies
+      // realtime updates, and owns durable checkpoints. Viewer keeps live
+      // read-only via the same session.
+      store.setAccess({ mode: "editable" });
       store.setLease(null);
-      store.setAccess({ mode: "readonly", reason: "unauthorized" });
+      store.setLeaseHolderName(null);
+      store.setOffline(false);
+
+      // Keep the device cache metadata fresh so reopens are accurate.
+      const cacheAdapter = controllerAdapter();
+      if (cacheAdapter && user?.id) {
+        void setWorkspaceCacheMeta(cacheAdapter, projectId, {
+          workspaceId,
+          userId: user.id,
+          serverRevision: full.revision,
+          serverUpdatedAt: new Date().toISOString(),
+        });
+      }
     },
-    [startHeartbeat, subscribeToSaves, user],
+    [user],
   );
 
   // -------------------------------------------------------------------------
@@ -426,7 +233,7 @@ export function useWorkspaceEditorAccess(): void {
     // Account switch / sign-out: reset everything (no remote deletion).
     if (status !== "signed-in" || !user) {
       if (processedRef.current !== null) {
-        void resetSession();
+        resetSession();
       }
       return;
     }
@@ -434,46 +241,24 @@ export function useWorkspaceEditorAccess(): void {
     // Resolve the project once per id. NOTE: the cleanup below must be
     // returned on EVERY run of this branch — a run that returns early after
     // the guard would replace the previously-registered cleanup with none,
-    // so unmounting the editor would never release the edit lease (React
-    // only runs the cleanup of the last effect run).
+    // so unmounting the editor would never release resources (React only
+    // runs the cleanup of the last effect run).
     if (processedRef.current !== activeProjectId) {
       processedRef.current = activeProjectId;
       void resolveAccess(activeProjectId);
     }
 
     return () => {
-      // Project switch / unmount: release the lease best-effort and reset.
-      void resetSession();
+      // Project switch / unmount: reset the access session. The collab
+      // session (useCollaborationSession) tears itself down independently.
+      resetSession();
     };
   }, [activeProjectId, isHydrated, status, user, resolveAccess, resetSession]);
 
   // Sign-out while mounted (AuthProvider changes status → cleanup above).
   useEffect(() => {
     if (status === "signed-out") {
-      void resetSession();
+      resetSession();
     }
   }, [status, resetSession]);
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Best-effort display name for a lease holder (same-workspace member). */
-function holderNameOf(lease: ProjectEditLease): string {
-  // Lease holder emails are only surfaced to members of the same workspace
-  // (server-populated). Fall back to a friendly generic label.
-  return lease.holderEmail ? emailToName(lease.holderEmail) : "another teammate";
-}
-
-function emailToName(email: string): string {
-  const local = email.split("@")[0] ?? "";
-  if (!local) return "another teammate";
-  const parts = local.split(/[._-]+/).filter(Boolean);
-  if (parts.length === 0) return local;
-  return parts
-    .slice(0, 2)
-    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
-    .join(" ");
-}
-

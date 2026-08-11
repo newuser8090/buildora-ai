@@ -13,28 +13,45 @@ import {
   fetchWorkspaceProject,
   saveWorkspaceProject,
   listWorkspaces,
-  waitForLeaseReleased,
+  mockToken,
   uniqueSuffix,
 } from "./helpers/workspaces";
+import {
+  openHeroInspector,
+  headlineTextarea,
+  subheadlineTextarea,
+  waitForCollabStatus,
+} from "./helpers/collab";
 
 // ---------------------------------------------------------------------------
-// Phase P14 — E2E: edit lease coordination
+// Phase P14→P16 — E2E: edit coordination under simultaneous editing
+//
+// Phase P16 removed the EXCLUSIVE ordinary edit lease: multiple owner/editor
+// members now edit the same workspace project at the same time, and the
+// collaboration session owns realtime sync + durable checkpoints. The P14
+// lease endpoints remain for backward compatibility and are reused as the
+// OWNER-ONLY maintenance lock (version restore / import coordination).
 //
 // Deterministic flow (two browser contexts = two accounts):
-//   1. A opens the workspace project → acquires an active edit lease
-//   2. B opens the same project → sees an honest "currently being edited"
-//      read-only state (blocked, not fake presence)
-//   3. B cannot mutate through the UI (read-only session)
-//   4. A exits the editor → releases the lease (best-effort, deterministic
-//      mock backend)
-//   5. B retries from the blocker → acquires the lease → becomes editable
-//   6. B's save persists (revision bumps)
-//   7. A newer server revision is pushed → B's stale save is rejected with a
-//      safe conflict UX instead of a silent overwrite
+//   1. A (owner) opens the project → editable (no lease acquisition needed)
+//   2. B (editor) opens the SAME project simultaneously → ALSO editable
+//      (no "being edited" blocker — the P16 behavior)
+//   3. A and B edit different fields concurrently → both changes persist and
+//      the server revision bumps (no last-write-wins overwrite)
+//   4. wire-level optimistic concurrency is retained: a direct stale save
+//      with an old expectedRevision is rejected with STALE_REVISION
+//   5. the maintenance lock is OWNER-ONLY: an editor cannot acquire it, and a
+//      second owner gets LOCKED while the first holds it (restore exclusivity)
+//   6. runtime audit clean
 // ---------------------------------------------------------------------------
 
-test.describe("Workspace edit lease", () => {
-  test("lease blocks concurrent editing, hands over safely, and rejects stale saves", async ({
+async function authHeaders(page: import("@playwright/test").Page): Promise<Record<string, string>> {
+  const token = await mockToken(page);
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+test.describe("Workspace simultaneous editing", () => {
+  test("two editors edit at once with no blocker; stale saves rejected; owner-only maintenance lock", async ({
     browser,
   }) => {
     test.setTimeout(300_000);
@@ -65,102 +82,81 @@ test.describe("Workspace edit lease", () => {
     const listingB = await listWorkspaces(pageB);
     const wsId = [...listingB.owned, ...listingB.shared].find((w) => w.name === wsName)!.id;
 
-    // 1. A opens the project editable → acquires the lease.
+    // 1. A opens the project editable.
     await selectWorkspace(pageA, wsName);
     await openWorkspaceProjectFromDashboard(pageA, projectId);
     await expectEditingIndicator(pageA, "Editing");
+    await waitForCollabStatus(pageA, "collab-status-synced");
+    await openHeroInspector(pageA);
 
-    // 2. B opens the same project → blocked by A's active lease. The blocker
-    // is honest ("Currently being edited", names the holder).
+    // 2. B opens the SAME project while A is still in it → editable too
+    // (P16: no exclusive lease, no "being edited" blocker).
     await selectWorkspace(pageB, wsName);
     await openWorkspaceProjectFromDashboard(pageB, projectId);
-    await expect(pageB.locator('[data-testid="workspace-being-edited-dialog"]')).toBeVisible({
-      timeout: 20000,
-    });
-    await expect(pageB.locator('[data-testid="workspace-being-edited-dialog"]')).toContainText(
-      "Currently being edited",
-    );
-    // The holder's name is surfaced (same-workspace member, never a device id).
-    await expect(pageB.locator('[data-testid="workspace-being-edited-dialog"]')).toContainText(
-      "is editing this project right now",
-    );
-
-    // 3. B cannot mutate while blocked: the editor session is read-only.
-    // The TopNav indicator reflects the read-only state while the blocker is
-    // up (reason "being-edited" → "Being edited by …", never "Editing").
-    await expect(pageB.locator('[data-testid="workspace-editing-indicator"]')).toContainText(
-      "Being edited by",
-    );
-
-    // 4. A exits the editor → releases the lease (best-effort release).
-    await pageA.getByRole("button", { name: "Back to Dashboard" }).click();
-    await pageA.waitForURL(/\/$/, { timeout: 30000 });
-    await expect(pageA.locator('[data-testid="workspace-switcher"]')).toBeVisible({
-      timeout: 15000,
-    });
-    // Deterministic handover: wait until the server no longer holds A's lease
-    // (the release is best-effort, so assert the observable server state).
-    await waitForLeaseReleased(pageA, wsId, projectId);
-
-    // 5. B retries from the blocker → acquires the lease → becomes editable.
-    await pageB.locator('[data-testid="workspace-retry-lease"]').click();
     await expectEditingIndicator(pageB, "Editing");
-    await expect(pageB.locator('[data-testid="workspace-being-edited-dialog"]')).toBeHidden({
-      timeout: 15000,
-    });
+    await expect(
+      pageB.locator('[data-testid="workspace-being-edited-dialog"]'),
+    ).toHaveCount(0);
+    await waitForCollabStatus(pageB, "collab-status-synced");
+    await openHeroInspector(pageB);
 
-    // 6. B can now edit and save (revision bumps 1 → 2).
-    await expect(pageB.locator('[data-testid="preview-content"]')).toBeVisible({ timeout: 15000 });
-    await pageB.locator('[data-testid="section-wrapper"]').first().click();
-    await expect(pageB.locator('[data-testid="inspector-panel"]')).toBeVisible({ timeout: 10000 });
-    await pageB
-      .locator('[data-testid="inspector-panel"] textarea')
-      .first()
-      .fill("Lease handover edit");
+    // 3. Concurrent edits to DIFFERENT fields persist (no overwrite, no
+    // blocker). Both clients converge to the combined result.
+    const aText = `A headline ${uniqueSuffix().slice(-4)}`;
+    const bText = `B subheadline ${uniqueSuffix().slice(-4)}`;
+    await headlineTextarea(pageA).fill(aText);
+    await subheadlineTextarea(pageB).fill(bText);
+    await expect(headlineTextarea(pageA)).toHaveValue(aText, { timeout: 15000 });
+    await expect(headlineTextarea(pageB)).toHaveValue(aText, { timeout: 15000 });
+    await expect(subheadlineTextarea(pageA)).toHaveValue(bText, { timeout: 15000 });
+    await expect(subheadlineTextarea(pageB)).toHaveValue(bText, { timeout: 15000 });
+    // Both edits land on the server; the revision advanced.
     await expect
       .poll(
-        async () => (await fetchWorkspaceProject(pageA, wsId, projectId)).revision,
+        async () => {
+          const server = await fetchWorkspaceProject(pageA, wsId, projectId);
+          const raw = JSON.stringify(server.project);
+          return raw.includes(aText) && raw.includes(bText) && server.revision >= 2;
+        },
         { timeout: 30000, intervals: [500, 1000, 2000] },
       )
-      .toBeGreaterThanOrEqual(2);
+      .toBe(true);
 
-    // 7. Stale revision protection: A pushes a NEWER server revision while
-    // B's session still expects the older revision. B's next save must be
-    // rejected and surfaced as a safe conflict — never a silent overwrite.
-    const before = await fetchWorkspaceProject(pageA, wsId, projectId);
-    const newerProject = JSON.parse(JSON.stringify(before.project)) as { name: string };
-    newerProject.name = "Newer server version";
-    const pushed = await saveWorkspaceProject(pageA, {
+    // 4. Optimistic concurrency retained at the wire: a DIRECT stale save
+    // (old expectedRevision) is rejected — never a silent overwrite.
+    const current = await fetchWorkspaceProject(pageA, wsId, projectId);
+    const staleAttempt = await saveWorkspaceProject(pageA, {
       workspaceId: wsId,
       projectId,
-      project: newerProject,
-      expectedRevision: before.revision,
+      project: { ...(current.project as object), name: "stale overwrite" },
+      expectedRevision: current.revision - 1,
     });
-    expect(pushed.ok).toBe(true);
-
-    // B edits again → the debounced save carries B's now-stale expected
-    // revision → STALE_REVISION → safe conflict dialog. The hero section is
-    // still selected from the previous edit (SelectableSection switches its
-    // testid from "section-wrapper" to "selected-section"), so the inspector
-    // is already open — just edit the value directly.
-    await expect(pageB.locator('[data-testid="inspector-panel"]')).toBeVisible({ timeout: 10000 });
-    await pageB
-      .locator('[data-testid="inspector-panel"] textarea')
-      .first()
-      .fill("B's stale edit");
-    await expect(pageB.locator('[data-testid="workspace-save-conflict-dialog"]')).toBeVisible({
-      timeout: 20000,
-    });
-    await expect(pageB.locator('[data-testid="workspace-save-conflict-dialog"]')).toContainText(
-      "This project changed since you opened it",
-    );
-    // Safe choices, no silent overwrite path.
-    await expect(pageB.locator('[data-testid="workspace-reload-latest"]')).toBeVisible();
-    await expect(pageB.locator('[data-testid="workspace-save-personal-copy"]')).toBeVisible();
-    // The server copy was never overwritten by the stale save.
+    expect(staleAttempt.status).toBe(409);
+    expect(staleAttempt.code).toBe("STALE_REVISION");
     const after = await fetchWorkspaceProject(pageA, wsId, projectId);
-    expect((after.project as { name: string }).name).toBe("Newer server version");
-    expect(after.revision).toBe(before.revision + 1);
+    expect((after.project as { name: string }).name).not.toBe("stale overwrite");
+
+    // 5. Maintenance lock is OWNER-ONLY: an editor cannot acquire it.
+    const editorLock = await pageB.request.post(
+      `http://localhost:3000/api/collab/rooms/${wsId}/${projectId}/lock`,
+      { headers: await authHeaders(pageB) },
+    );
+    expect(editorLock.status()).toBe(403);
+    // Owner CAN acquire it; a second owner is refused while held (LOCKED).
+    const ownerLock = await pageA.request.post(
+      `http://localhost:3000/api/collab/rooms/${wsId}/${projectId}/lock`,
+      { headers: await authHeaders(pageA) },
+    );
+    expect(ownerLock.status()).toBe(200);
+    const secondLock = await pageA.request.post(
+      `http://localhost:3000/api/collab/rooms/${wsId}/${projectId}/lock`,
+      { headers: await authHeaders(pageA) },
+    );
+    expect(secondLock.status()).toBe(200); // same holder is idempotent
+    await pageA.request.post(
+      `http://localhost:3000/api/collab/rooms/${wsId}/${projectId}/unlock`,
+      { headers: await authHeaders(pageA) },
+    );
 
     assertRuntimeClean(auditA.state);
     assertRuntimeClean(auditB.state);

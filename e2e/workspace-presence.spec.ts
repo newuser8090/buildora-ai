@@ -15,13 +15,16 @@ import {
 import { getPresence } from "./helpers/p15";
 
 // ---------------------------------------------------------------------------
-// Phase P15 — E2E: workspace presence
+// Phase P15→P16 — E2E: workspace presence
+//
+// Phase P16 removed the exclusive ordinary edit lease, so BOTH editors are
+// simultaneously "editing" (mode is server-truthful, never self-claimed).
 //
 // Deterministic flow (three browser contexts = three accounts):
 //   1. A opens a workspace project → live presence: "You're editing"
-//   2. B (editor, blocked by A's lease) opens the same project → "You're
-//      viewing" (mode is server-truthful, never self-claimed)
-//   3. A sees B present; B sees A present as "editing" (lease-derived)
+//   2. B (editor) opens the SAME project while A is still in it → B is also
+//      "editing" (simultaneous editing — the P16 behavior)
+//   3. A sees B present as editing; B sees A present as editing
 //   4. A exits → best-effort leave → B observes A leave (bounded poll)
 //   5. Non-member C can read no presence (membership-gated, no leakage)
 //   6. runtime audit clean
@@ -59,8 +62,8 @@ test.describe("Workspace presence", () => {
     const listingB = await listWorkspaces(pageB);
     const wsId = [...listingB.owned, ...listingB.shared].find((w) => w.name === wsName)!.id;
 
-    // 1. A opens the project editable → presence session joins as "editing"
-    // (A holds the edit lease). The indicator shows self + the live status.
+    // 1. A opens the project editable → presence session joins as "editing".
+    // The indicator shows self + the live status.
     await selectWorkspace(pageA, wsName);
     await openWorkspaceProjectFromDashboard(pageA, projectId);
     await expect(pageA.locator('[data-testid="workspace-presence"]')).toBeVisible({
@@ -70,35 +73,43 @@ test.describe("Workspace presence", () => {
       timeout: 15000,
     });
 
-    // 2. B opens the same project → blocked by A's lease → presence mode is
-    // "viewing" (the client never claims editing; the lease decides).
+    // 2. B (editor) opens the SAME project while A is still in it → B is also
+    // "editing" (P16 simultaneous editing — no exclusive lease, so both
+    // editors show editing; the client never self-claims, the access boundary
+    // is server-resolved and both members hold editor role).
     await selectWorkspace(pageB, wsName);
     await openWorkspaceProjectFromDashboard(pageB, projectId);
     await expect(pageB.locator('[data-testid="workspace-presence"]')).toBeVisible({
       timeout: 20000,
     });
-    await expect(pageB.locator('[data-testid="presence-self"]')).toContainText("viewing", {
+    await expect(pageB.locator('[data-testid="presence-self"]')).toContainText("editing", {
       timeout: 15000,
     });
 
-    // 3. Cross-observation via the shared mock "cloud": A sees B (viewing),
-    // B sees A (editing — lease-derived, not self-claimed).
+    // 3. Cross-observation via the shared mock "cloud": A sees B (editing),
+    // B sees A (editing) — both members are editors editing simultaneously.
     const nameB = "Pres B"; // email `pres-b-…` → server display-name heuristic
     await expect(pageA.locator('[data-testid="presence-other"]').first()).toContainText(nameB, {
       timeout: 20000,
     });
+    await expect(pageA.locator('[data-testid="presence-other"]').first()).toContainText(
+      "is editing",
+      { timeout: 20000 },
+    );
     await expect(pageB.locator('[data-testid="presence-other"]').first()).toContainText(
       "is editing",
       { timeout: 20000 },
     );
 
     // The server list is membership-scoped and shows both sessions with the
-    // same display names the UI uses.
+    // same display names the UI uses; both are "editing" (simultaneous).
     const presenceForA = await getPresence(pageA, wsId);
     expect(presenceForA.ok).toBe(true);
     expect(presenceForA.sessions.length).toBeGreaterThanOrEqual(2);
     const names = presenceForA.sessions.map((s) => s.displayName);
     expect(names).toContain(nameB);
+    const modes = presenceForA.sessions.map((s) => s.mode);
+    expect(modes.every((m) => m === "editing" || m === "viewing")).toBe(true);
 
     // 4. A exits the editor → best-effort leave → B's bounded poll observes
     // A's departure (no stale "online" state after leaving).

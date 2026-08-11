@@ -17,6 +17,7 @@ import { useWorkspaceHistoryUiStore } from "../store/workspace-history-ui-store"
 import { useWorkspaceAccessStore } from "../store/workspace-access-store";
 import { useProjectVersionHistory } from "../hooks/useProjectVersionHistory";
 import { useEditorStore } from "@/features/editor/store/editor-store";
+import { getActiveCollabSession } from "@/features/collaboration/services/collab-session-registry";
 import { relativeTime } from "../utils/time";
 import { reasonLabel } from "./version-labels";
 
@@ -62,11 +63,27 @@ export function RestoreVersionDialog() {
     setBusy(true);
     setError(null);
     setStale(false);
-    const result = await restore(restoreVersion.id);
-    setBusy(false);
-    if (!result.ok) {
-      setError(result.error ?? "This version couldn't be restored.");
-      setStale(!!result.stale);
+    // Phase P16 — restore replaces the whole project: acquire the collaboration
+    // maintenance lock so concurrent realtime writes pause during the restore
+    // (the server resets the room; other clients rebase from the restored base).
+    const session = getActiveCollabSession();
+    try {
+      if (session) await session.acquireMaintenanceLock();
+      const result = await restore(restoreVersion.id);
+      if (session) await session.releaseMaintenanceLock();
+      setBusy(false);
+      if (!result.ok) {
+        setError(result.error ?? "This version couldn't be restored.");
+        setStale(!!result.stale);
+        return;
+      }
+    } catch (err) {
+      setBusy(false);
+      setError(
+        err && typeof err === "object" && "message" in err
+          ? String((err as { message: unknown }).message)
+          : "This version couldn't be restored right now.",
+      );
       return;
     }
     // Server content is authoritative — reload so the restored state hydrates.

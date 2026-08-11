@@ -42,6 +42,11 @@ import type { InlineFieldUpdateResult } from "@/features/inline-editing/types";
 import { blockTreeToSection } from "@/features/blocks/adapters/section-block-adapter";
 import type { BlockTree } from "@/features/blocks/types";
 import { isEditorWritable } from "@/features/workspaces/store/workspace-access-store";
+import {
+  beginRemoteProjection,
+  endRemoteProjection,
+  getCollabCommitHook,
+} from "@/features/collaboration/editor-commit-hook";
 
 // ---------------------------------------------------------------------------
 // Mutation result types
@@ -198,6 +203,13 @@ export interface EditorState {
 
   // Persistence actions
   hydrateProject: (project: Project, revision: number) => void;
+  /**
+   * Phase P16 — apply the projected collaborative document to the store.
+   * Remote/local CRDT projections land here: no history entry, no dirty flag,
+   * selection re-validated against the incoming document. Never called through
+   * withHistory (so it can't re-enter the commit hook).
+   */
+  applyRemoteProject: (project: Project) => void;
   setSaveStatus: (status: EditorState["saveStatus"]) => void;
   setDirty: (dirty: boolean) => void;
   setRevision: (revision: number) => void;
@@ -212,6 +224,13 @@ export interface EditorState {
   redo: () => void;
   canUndo: () => boolean;
   canRedo: () => boolean;
+
+  /**
+   * Phase P16 — reset the projected document state without touching
+   * persistence. Used when a collaborative session starts/stops so the
+   * editor reflects the canonical document exactly (no stale CRDT projection).
+   */
+  clearCollaborativeProjection: () => void;
 
   // Editing session (avoids per-keystroke history entries)
   beginEditSession: () => void;
@@ -260,9 +279,22 @@ function withHistory(
   state: EditorState,
   mutate: (project: Project) => void,
 ): Partial<EditorState> {
-  const snapshot = cloneProject(state.history.present);
   const updated = cloneProject(state.history.present);
   mutate(updated);
+
+  // Phase P16 — collaborative mode: route the mutation through the active
+  // collaboration session as ONE CRDT transaction (local origin → undo-scoped).
+  // The projection loop then writes the store back via applyRemoteProject, so
+  // no local history entry is created here (undo is CRDT-scoped, never another
+  // user's work). The session is only registered while the workspace session
+  // is editable; personal projects keep the existing history behavior exactly.
+  const hook = getCollabCommitHook();
+  if (hook) {
+    hook.applyLocalProject(updated);
+    return {};
+  }
+
+  const snapshot = cloneProject(state.history.present);
   return {
     project: updated,
     history: {
@@ -271,6 +303,23 @@ function withHistory(
       future: [],
     },
   };
+}
+
+/**
+ * Phase P16 — apply a local mutation that bypasses withHistory (the active
+ * inline `_editingSession` path). In collaborative mode the session is the
+ * sole commit boundary (one CRDT transaction per change); otherwise the store
+ * keeps the plain project write used by the editing session.
+ */
+function commitLocalProject(
+  updated: Project,
+): Partial<EditorState> {
+  const hook = getCollabCommitHook();
+  if (hook) {
+    hook.applyLocalProject(updated);
+    return {};
+  }
+  return { project: updated };
 }
 
 /** Map a structure-layer error into an EditorMutationResult. */
@@ -711,6 +760,56 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     });
   },
 
+  applyRemoteProject: (project) => {
+    const cloned = cloneProject(project);
+    if (!cloned.assets) cloned.assets = [];
+    const state = get();
+    // Re-validate selection against the incoming document — a remote
+    // deletion must never leave a dangling selected page/section.
+    let selectedPageId = state.selectedPageId;
+    if (selectedPageId && !cloned.pages.some((p) => p.id === selectedPageId)) {
+      selectedPageId = cloned.pages[0]?.id ?? null;
+    }
+    let selectedSectionId = state.selectedSectionId;
+    if (selectedSectionId) {
+      const sectionExists = cloned.pages
+        .flatMap((p) => p.sections)
+        .some((s) => s.id === selectedSectionId);
+      if (!sectionExists) selectedSectionId = null;
+    }
+    // Remote projection: the persistence controller must NOT treat this as a
+    // local edit (no revision bump / dirty / autosave) — the CRDT is synced.
+    beginRemoteProjection();
+    try {
+      set({
+        project: cloned,
+        history: {
+          // Keep the present projection as the history base so a subsequent
+          // local mutation diffs against the freshest collaborative state.
+          // Past/future stacks are deliberately NOT pushed by remote changes —
+          // collaborative undo is scoped through Yjs, never this stack.
+          ...state.history,
+          present: cloned,
+        },
+        selectedPageId,
+        selectedSectionId,
+      });
+    } finally {
+      endRemoteProjection();
+    }
+  },
+
+  clearCollaborativeProjection: () => {
+    const state = get();
+    set({
+      history: {
+        past: [],
+        present: cloneProject(state.project),
+        future: [],
+      },
+    });
+  },
+
   // ---- Editing session ----
 
   beginEditSession: () => {
@@ -723,6 +822,13 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     if (!isEditorWritable()) return;
     const { _editingSession, project, history } = get();
     if (!_editingSession) return;
+    // Phase P16 — in collaborative mode each keystroke already committed a
+    // CRDT transaction through the session; the session end is a UI-level
+    // boundary only, so no local history entry is created here.
+    if (getCollabCommitHook()) {
+      set({ _editingSession: null });
+      return;
+    }
     // Push the snapshot to past, set current project as present, clear future
     set({
       _editingSession: null,
@@ -738,6 +844,13 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     if (!isEditorWritable()) return;
     const { _editingSession } = get();
     if (!_editingSession) return;
+    // Phase P16 — restoring the pre-edit snapshot in collaborative mode would
+    // silently overwrite concurrent remote changes; the CRDT is authoritative.
+    // The session simply ends (keystrokes already committed incrementally).
+    if (getCollabCommitHook()) {
+      set({ _editingSession: null });
+      return;
+    }
     // Restore the snapshot
     set({
       _editingSession: null,
@@ -1000,7 +1113,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
           break;
         }
       }
-      set({ project: updated });
+      set(commitLocalProject(updated));
       return;
     }
     set(
@@ -1034,7 +1147,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
           break;
         }
       }
-      set({ project: updated });
+      set(commitLocalProject(updated));
       return;
     }
     set(
@@ -1070,7 +1183,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
           break;
         }
       }
-      set({ project: updated });
+      set(commitLocalProject(updated));
       return;
     }
     set(
@@ -1406,6 +1519,14 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
 
   undo: () => {
     if (!isEditorWritable()) return;
+    // Phase P16 — collaborative sessions own undo (Yjs UndoManager scoped to
+    // this client's local origin). Remote updates never enter this stack, so a
+    // local undo can never revert another collaborator's work.
+    const hook = getCollabCommitHook();
+    if (hook) {
+      hook.undo();
+      return;
+    }
     const { history } = get();
     if (history.past.length === 0) return;
     const previous = history.past[history.past.length - 1];
@@ -1422,6 +1543,11 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
 
   redo: () => {
     if (!isEditorWritable()) return;
+    const hook = getCollabCommitHook();
+    if (hook) {
+      hook.redo();
+      return;
+    }
     const { history } = get();
     if (history.future.length === 0) return;
     const next = history.future[0];
@@ -1436,6 +1562,14 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     });
   },
 
-  canUndo: () => get().history.past.length > 0,
-  canRedo: () => get().history.future.length > 0,
+  canUndo: () => {
+    const hook = getCollabCommitHook();
+    if (hook) return hook.canUndo();
+    return get().history.past.length > 0;
+  },
+  canRedo: () => {
+    const hook = getCollabCommitHook();
+    if (hook) return hook.canRedo();
+    return get().history.future.length > 0;
+  },
 }));

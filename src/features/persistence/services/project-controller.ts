@@ -20,6 +20,7 @@ import { scheduleThumbnailForSave, removeThumbnailForProject } from "@/features/
 import { lazyCopilotMemoryCleanup } from "@/features/ai-copilot/memory/services/lazy-cleanup";
 import { lazyShareCleanup } from "@/features/sharing/services/lazy-share-cleanup";
 import { AutosaveCoordinator } from "./autosave-coordinator";
+import { isRemoteProjection } from "@/features/collaboration/editor-commit-hook";
 import type {
   ProjectPersistenceAdapter,
   AutosaveCoordinator as AutosaveCoordinatorInterface,
@@ -983,6 +984,11 @@ export class ProjectController {
       previousProject = project;
 
       if (!this._hydrated) return;
+
+      // Phase P16 — CRDT projections (local apply + remote changes) write the
+      // store directly via applyRemoteProject; the collaborative session owns
+      // the durable checkpoint, so no revision bump / dirty / autosave here.
+      if (isRemoteProjection()) return;
 
       if (this._suppressNextDirty) {
         this._suppressNextDirty = false;

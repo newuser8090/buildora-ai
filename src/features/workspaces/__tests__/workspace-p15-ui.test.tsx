@@ -102,7 +102,7 @@ function version(partial: Partial<ProjectVersionMeta>): ProjectVersionMeta {
     revision: 1,
     createdBy: "user-a",
     createdByName: "A",
-    createdAt: "2026-08-10T00:00:00.000Z",
+    createdAt: new Date().toISOString(),
     reason: "autosave",
     contentHash: "h",
     ...partial,
@@ -311,7 +311,13 @@ describe("VersionHistoryDialog", () => {
       ok: true,
       value: [
         version({ id: "v-2", revision: 2, reason: "checkpoint", label: "Before redesign" }),
-        version({ id: "v-1", revision: 1, reason: "autosave", createdAt: "2026-08-05T00:00:00.000Z" }),
+        version({
+          id: "v-1",
+          revision: 1,
+          reason: "autosave",
+          // Definitely outside the Today bucket (dynamic — never a fixed date).
+          createdAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
+        }),
       ],
     });
     render(<VersionHistoryDialog />);

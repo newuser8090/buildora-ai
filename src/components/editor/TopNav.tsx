@@ -41,6 +41,7 @@ import { AccountMenu } from "@/features/auth/components/AccountMenu";
 import { useWorkspaceAccessStore } from "@/features/workspaces/store/workspace-access-store";
 import { useWorkspaceHistoryUiStore } from "@/features/workspaces/store/workspace-history-ui-store";
 import { PresenceIndicator } from "@/features/workspaces/components/PresenceIndicator";
+import { CollabStatusIndicator } from "@/features/collaboration/components/CollabStatusIndicator";
 import { usePreviewStore } from "@/features/preview/store/preview-store";
 import { useLaunchCenterStore } from "@/features/launch-readiness/store/launch-center-store";
 import { useSiteSettingsUiStore } from "@/features/site-settings/store/site-settings-ui-store";
@@ -319,6 +320,9 @@ export function TopNav() {
 
         {/* Phase P15 — live presence (only while a workspace project is open) */}
         {wsName && <PresenceIndicator />}
+
+        {/* Phase P16 — collaboration sync status + remote-change hint */}
+        {wsName && <CollabStatusIndicator />}
       </div>
 
       {/* ---- Spacer ---- */}

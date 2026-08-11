@@ -85,9 +85,10 @@ test.describe("Workspace version history", () => {
     // project.saved activity fires with the server-derived revision.
     await selectWorkspace(pageA, wsName);
     await openWorkspaceProjectFromDashboard(pageA, projectId);
-    // Wait for the editor session to resolve as editable (access + lease + a
+    // Wait for the editor session to resolve as editable (access resolution +
     // re-hydration of the server project) BEFORE editing — an edit made while
-    // access is still resolving would be discarded by the re-hydration.
+    // access is still resolving would be discarded by the re-hydration. (Phase
+    // P16: editors are editable without an exclusive lease.)
     await expectEditingIndicator(pageA, "Editing");
     await expect(pageA.locator('[data-testid="section-wrapper"]').first()).toBeVisible({
       timeout: 15000,
@@ -188,7 +189,9 @@ test.describe("Workspace version history", () => {
     });
     await pageA.locator('[data-testid="version-history-close"]').click();
 
-    // A leaves the editor → the lease is released so B can open editable.
+    // A leaves the editor. (Phase P16: no exclusive lease — B could even open
+    // editable while A is still here; A leaving is simply the deterministic
+    // handover this spec uses.)
     await pageA.getByRole("button", { name: "Back to Dashboard" }).click();
     await pageA.waitForURL(/\//, { timeout: 30000 });
     await expect(pageA.locator('[data-testid="workspace-switcher"]')).toBeVisible({

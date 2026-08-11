@@ -20,8 +20,6 @@ import {
   handleInviteMember,
   handleAcceptInvitation,
   handleCreateWorkspaceProject,
-  handleAcquireEditLease,
-  handleReleaseEditLease,
   handleJoinPresence,
   handleHeartbeatPresence,
   handleLeavePresence,
@@ -96,7 +94,9 @@ describe("presence — join/heartbeat/leave", () => {
     expect(list).toHaveLength(1);
     expect(list[0].sessionId).toBe("pres-session-1");
     expect(list[0].userId).toBe(state.workspaces.get(workspace.id)!.ownerId);
-    expect(list[0].mode).toBe("viewing"); // no lease yet
+    // Phase P16 — mode is role-derived: the owner with an active project
+    // session reports "editing" (no lease is needed for ordinary editing).
+    expect(list[0].mode).toBe("editing");
   });
 
   it("heartbeat refreshes the TTL (server clock)", () => {
@@ -154,11 +154,11 @@ describe("presence — join/heartbeat/leave", () => {
   });
 });
 
-describe("presence — viewing vs editing (lease-derived)", () => {
-  it("a session holding the active lease reports editing", () => {
+describe("presence — viewing vs editing (role-derived)", () => {
+  it("an owner with an active project session reports editing (no lease needed)", () => {
     const { tokenA, workspace, projectId } = setupMemberWorkspace();
     const state = getMockWorkspaceState();
-    handleAcquireEditLease(state, tokenA, workspace.id, projectId);
+    // Phase P16 — no exclusive lease is acquired for ordinary editing.
     handleJoinPresence(state, tokenA, {
       workspaceId: workspace.id,
       projectId,
@@ -168,11 +168,32 @@ describe("presence — viewing vs editing (lease-derived)", () => {
     expect(list[0].mode).toBe("editing");
   });
 
-  it("an editor without the lease reports viewing (never claims editing)", () => {
+  it("two editors in the same project both report editing (simultaneous)", () => {
     const { tokenA, tokenB, workspace, projectId } = setupMemberWorkspace();
     const state = getMockWorkspaceState();
-    // A holds the lease; B is an editor without it.
-    handleAcquireEditLease(state, tokenA, workspace.id, projectId);
+    // A (owner) and B (editor) are both in the project — P16 simultaneous
+    // editing means BOTH report "editing", never a lease-blocked "viewing".
+    handleJoinPresence(state, tokenA, {
+      workspaceId: workspace.id,
+      projectId,
+      sessionId: "pres-session-a",
+    });
+    handleJoinPresence(state, tokenB, {
+      workspaceId: workspace.id,
+      projectId,
+      sessionId: "pres-session-b",
+    });
+    const list = handleListWorkspacePresence(state, tokenB, workspace.id, projectId);
+    expect(list.find((p) => p.sessionId === "pres-session-a")!.mode).toBe("editing");
+    expect(list.find((p) => p.sessionId === "pres-session-b")!.mode).toBe("editing");
+  });
+
+  it("a viewer reports viewing (never claims editing)", () => {
+    const { tokenA, tokenB, workspace, projectId } = setupMemberWorkspace();
+    const state = getMockWorkspaceState();
+    // Downgrade B to viewer; B's presence re-joins as viewing.
+    const bUserId = getMockCloudState().sessions.get(tokenB)!;
+    handleChangeMemberRole(state, tokenA, workspace.id, bUserId, "viewer");
     handleJoinPresence(state, tokenB, {
       workspaceId: workspace.id,
       projectId,
@@ -180,20 +201,6 @@ describe("presence — viewing vs editing (lease-derived)", () => {
     });
     const list = handleListWorkspacePresence(state, tokenB, workspace.id, projectId);
     expect(list.find((p) => p.sessionId === "pres-session-b")!.mode).toBe("viewing");
-  });
-
-  it("losing the lease flips editing → viewing", () => {
-    const { tokenA, workspace, projectId } = setupMemberWorkspace();
-    const state = getMockWorkspaceState();
-    const lease = handleAcquireEditLease(state, tokenA, workspace.id, projectId);
-    handleJoinPresence(state, tokenA, {
-      workspaceId: workspace.id,
-      projectId,
-      sessionId: "pres-session-1",
-    });
-    expect(handleListWorkspacePresence(state, tokenA, workspace.id, projectId)[0].mode).toBe("editing");
-    handleReleaseEditLease(state, tokenA, lease.lease.leaseId);
-    expect(handleListWorkspacePresence(state, tokenA, workspace.id, projectId)[0].mode).toBe("viewing");
   });
 });
 
@@ -248,15 +255,16 @@ describe("presence — workspace scoping + membership", () => {
   it("downgrade to viewer ends the member's editing presence", () => {
     const { tokenA, tokenB, workspace, projectId } = setupMemberWorkspace();
     const state = getMockWorkspaceState();
-    handleAcquireEditLease(state, tokenB, workspace.id, projectId);
     handleJoinPresence(state, tokenB, {
       workspaceId: workspace.id,
       projectId,
       sessionId: "pres-b",
     });
+    expect(handleListWorkspacePresence(state, tokenA, workspace.id)).toHaveLength(1);
     const bUserId = getMockCloudState().sessions.get(tokenB)!;
     handleChangeMemberRole(state, tokenA, workspace.id, bUserId, "viewer");
-    // Leases are invalidated on downgrade → presence gone.
+    // Downgrade invalidates the editor's live editing presence (server-purged;
+    // a re-join as viewer would report "viewing").
     expect(handleListWorkspacePresence(state, tokenA, workspace.id)).toHaveLength(0);
   });
 

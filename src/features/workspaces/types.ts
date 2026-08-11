@@ -259,6 +259,7 @@ export type WorkspaceErrorCode =
   | "STALE_REVISION"
   | "LEASE_HELD"
   | "LEASE_INVALID"
+  | "LOCKED"
   | "PROJECT_NOT_FOUND"
   | "VERSION_NOT_FOUND"
   | "PAYLOAD_TOO_LARGE"

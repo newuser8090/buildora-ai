@@ -104,7 +104,9 @@ test.describe("Workspace collaboration", () => {
     // B's save succeeded via optimistic concurrency — revision is now 2.
     expect(afterSave.revision).toBe(2);
 
-    // B exits the editor and releases the lease so A can open the project.
+    // B exits the editor. (Phase P16: ordinary editing is no longer exclusive
+    // — the lease is null by default, so this wait is a harmless no-op that
+    // keeps the P14 helper contract exercised.)
     await pageB.getByRole("button", { name: "Back to Dashboard" }).click();
     await expect(pageB.locator('[data-testid="workspace-switcher"]')).toBeVisible({
       timeout: 30000,
