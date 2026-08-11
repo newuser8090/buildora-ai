@@ -20,6 +20,7 @@
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { getSupabaseClient } from "@/features/auth/supabase-client";
 import { makeWorkspaceError } from "../errors";
+import { logger } from "@/lib/logger";
 import type { WorkspacePresence, WorkspacePresenceMode } from "../types";
 import { emailToDisplayName } from "../utils/display-name";
 import type { PresenceJoinInput, PresenceProvider } from "./presence-provider";
@@ -37,6 +38,19 @@ interface ChannelEntry {
   channel: RealtimeChannel;
   callbacks: Set<(presence: WorkspacePresence[]) => void>;
   trackOnReady: (() => void) | null;
+  /**
+   * Project scope of the LAST join on this channel. Preserved across
+   * heartbeats (Phase P18 F1) — a heartbeat must never re-track with
+   * `projectId: null`, which would wipe the scope the user joined with and
+   * drop them from project-scoped presence. Mirrors the mock backend, which
+   * keeps the session's projectId until the next explicit join.
+   */
+  projectId: string | null;
+  /**
+   * First-seen join timestamp, preserved across heartbeats (mock parity:
+   * the mock's session keeps `joinedAt` and only refreshes the TTL).
+   */
+  joinedAt: string;
 }
 
 export class SupabasePresenceProvider implements PresenceProvider {
@@ -69,6 +83,8 @@ export class SupabasePresenceProvider implements PresenceProvider {
       channel,
       callbacks: new Set(),
       trackOnReady: null,
+      projectId: null,
+      joinedAt: "",
     };
     this.entries.set(workspaceId, entry);
 
@@ -104,14 +120,15 @@ export class SupabasePresenceProvider implements PresenceProvider {
   private payloadFor(
     user: { id: string; email: string },
     input: PresenceJoinInput,
+    entry: ChannelEntry,
   ): PresencePayload {
     return {
       sessionId: input.sessionId,
       userId: user.id,
       mode: input.mode,
       displayName: emailToDisplayName(user.email),
-      joinedAt: new Date().toISOString(),
-      projectId: input.projectId ?? null,
+      joinedAt: entry.joinedAt,
+      projectId: entry.projectId,
     };
   }
 
@@ -147,13 +164,37 @@ export class SupabasePresenceProvider implements PresenceProvider {
       p_workspace_id: input.workspaceId,
     });
     if (error) {
+      // Phase P18 (F2) — a presence gate rejection (removed member / expired
+      // session) is otherwise swallowed by the best-effort hook; log it so a
+      // production auth incident is diagnosable. The code is embedded in the
+      // message (survives production redaction) and is only ever a known
+      // short RPC code — never the raw message (which may embed internals).
+      const safeCode =
+        typeof error.code === "string" && error.code.length <= 24 ? error.code : "P0001";
+      logger.error("presence", `join gate rejected (${safeCode})`, {
+        workspaceId: input.workspaceId,
+      });
       throw makeWorkspaceError(
         "PERMISSION_DENIED",
         "You don't have access to that workspace.",
         error.code,
       );
     }
-    this.track(input.workspaceId, this.payloadFor(user, input));
+    // Remember the joined project scope on the channel entry (Phase P18 F1):
+    // heartbeats re-track the same fixed payload and must preserve it — the
+    // mock backend keeps projectId across heartbeats, and a re-track with
+    // `projectId: null` would silently drop the user from project-scoped
+    // presence after the first 10 s heartbeat.
+    const entry = this.entryFor(input.workspaceId);
+    entry.projectId = input.projectId ?? null;
+    // First join on this entry records the timestamp; later joins preserve it
+    // (mock parity: the mock keeps `joinedAt` for an existing session). The
+    // hook recreates the entry on every scope change, so a project switch
+    // still starts a fresh timestamp.
+    if (!entry.joinedAt) {
+      entry.joinedAt = new Date().toISOString();
+    }
+    this.track(input.workspaceId, this.payloadFor(user, input, entry));
   }
 
   async heartbeat(
@@ -166,14 +207,18 @@ export class SupabasePresenceProvider implements PresenceProvider {
     const entry = this.entries.get(workspaceId);
     if (!entry) return;
     // Re-track the fixed payload with the latest server-resolved mode
-    // (e.g. a lost lease flips editing → viewing).
+    // (e.g. a lost lease flips editing → viewing), PRESERVING the joined
+    // project scope and first-seen timestamp (Phase P18 F1 — parity with the
+    // mock, which never loses projectId/joinedAt on heartbeat). Defensive
+    // fallback: an entry that never saw a successful join carries no
+    // timestamp yet — default to now rather than tracking an empty one.
     this.track(workspaceId, {
       sessionId: _sessionId,
       userId: user.id,
       mode,
       displayName: emailToDisplayName(user.email),
-      joinedAt: new Date().toISOString(),
-      projectId: null,
+      joinedAt: entry.joinedAt || new Date().toISOString(),
+      projectId: entry.projectId,
     });
   }
 

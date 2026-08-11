@@ -43,6 +43,14 @@ const BENIGN_PATTERNS = [
   /Failed to load resource: the server responded with a status of 404/i,
   /Failed to load resource: the server responded with a status of 410/i,
   /Failed to load resource: the server responded with a status of 409/i,
+  // Phase P18 (F2) — the collaboration session deliberately logs an
+  // authorization-loss DIAGNOSTIC when a still-open editor is downgraded or
+  // removed: the permission tests trigger exactly this designed behavior
+  // (like the 403 responses above), and the app transitions to the honest
+  // read-only state. These are intentional records of a designed transition,
+  // never a crash or React error — the audit must not flag them.
+  /\[collab\] authorization lost while editing/i,
+  /\[collab\] transport authorization error/i,
   /next-dev\.js/i,
   /Download the React DevTools/i,
   /React DevTools/i,

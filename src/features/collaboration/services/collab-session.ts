@@ -53,6 +53,7 @@ import type {
 import type { CollabTransport } from "../transport/collab-transport";
 import { base64ToArray } from "../transport/mock-http-collab-transport";
 import { useCollabUiStore } from "../store/collab-ui-store";
+import { logger } from "@/lib/logger";
 
 const INIT_ORIGIN = "collab-init";
 
@@ -143,13 +144,22 @@ export class CollabSession {
         canSend: this.canSend,
         clientId: this.clientId,
       });
-    } catch {
+    } catch (err) {
       // Connect failed (server down / session expired). The commit hook was
       // registered BEFORE connect so the user could type during the join
       // window — leaving it registered would silently route every subsequent
       // store mutation into a DISCONNECTED session (no checkpoint, no dirty
       // flag, edits lost). Unregister it so the editor falls back to the
       // standard local persistence path and stays honest.
+      // Phase P18 (F2) — make the failure diagnosable: the previous code
+      // swallowed every connect error, so a production incident (auth
+      // expiry, RLS break, network) was invisible to operators.
+      // The code is embedded in the message (not only in `data`) so it
+      // survives the logger's production redaction (data is dropped in prod).
+      logger.error("collab", `room connect failed (${toWorkspaceError(err).code})`, {
+        workspaceId: this.room.workspaceId,
+        projectId: this.room.projectId,
+      });
       if (this.canSend) {
         setCollabCommitHook(null);
       }
@@ -370,6 +380,16 @@ export class CollabSession {
       error.code === "LEASE_INVALID" ||
       error.code === "SESSION_EXPIRED"
     ) {
+      // Phase P18 (F2) — authorization loss during live editing must be
+      // diagnosable (member removed / role downgraded while connected). Logged
+      // once per incident: the transport's onAuthError fires for the same
+      // auth loss, and a second log would just duplicate the record.
+      if (!this.authLost) {
+        logger.error("collab", `authorization lost while editing (${error.code})`, {
+          workspaceId: this.room.workspaceId,
+          projectId: this.room.projectId,
+        });
+      }
       this.setStatus("error");
       this.authLost = true;
       this.onAuthorizationLost?.();
@@ -422,6 +442,16 @@ export class CollabSession {
     });
     this.unsubAuthError = this.transport.onAuthError(() => {
       if (this.disposed) return;
+      // Phase P18 (F2) — transport-level auth failures (offline-queue flush
+      // rejected after permission loss) are otherwise silent. Logged only
+      // when this is the FIRST signal (handleSendFailure may have already
+      // recorded the same incident).
+      if (!this.authLost) {
+        logger.error("collab", "transport authorization error", {
+          workspaceId: this.room.workspaceId,
+          projectId: this.room.projectId,
+        });
+      }
       this.setStatus("error");
       this.authLost = true;
       this.onAuthorizationLost?.();
@@ -546,10 +576,29 @@ export class CollabSession {
             );
             expectedRevision = fresh.revision;
             continue;
-          } catch {
+          } catch (refetchErr) {
+            // Phase P18 (F2) — embed the code in the message so it survives
+            // the logger's production redaction (data is dropped in prod),
+            // consistent with every other collab diagnostic.
+            logger.error(
+              "collab",
+              `checkpoint retry: revision refetch failed (${toWorkspaceError(refetchErr).code})`,
+              {
+                workspaceId: this.room.workspaceId,
+                projectId: this.room.projectId,
+              },
+            );
             return false;
           }
         }
+        // Phase P18 (F2) — diagnose checkpoint failures (they are otherwise
+        // silent: the UI status flips but no record exists for an operator).
+        // The code is embedded in the message so it survives the logger's
+        // production redaction.
+        logger.error("collab", `checkpoint failed (${error.code})`, {
+          workspaceId: this.room.workspaceId,
+          projectId: this.room.projectId,
+        });
         if (
           error.code === "PERMISSION_DENIED" ||
           error.code === "LEASE_INVALID" ||
