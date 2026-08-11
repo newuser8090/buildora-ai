@@ -17,6 +17,7 @@
 // ---------------------------------------------------------------------------
 
 import type { Project } from "@/types/project";
+import { logger } from "@/lib/logger";
 import { ProjectSchema } from "@/features/generation/schemas/generation-plan-schema";
 import { generateExportProject } from "@/features/export/generators/project-generator";
 import { validateProjectForExport } from "@/features/export/validators/export-validator";
@@ -27,7 +28,11 @@ import type {
   PublishServiceResult,
   PublishingProvider,
 } from "../types";
-import { makePublishError, toPublishError } from "../errors";
+import {
+  makePublishError,
+  toPublishError,
+  type PublishErrorCode,
+} from "../errors";
 import { hashExportFiles, contentHashOfProject } from "./hash";
 import type { DeploymentStorageAdapter } from "../storage/deployment-adapter";
 
@@ -62,40 +67,39 @@ export class PublishService {
     const now = this.deps.now!;
     const createId = this.deps.createId!;
 
+    // Phase P19 (F3) — publishing is otherwise silent to operators. Every
+    // failure boundary logs a bounded diagnostic with the safe projectId and a
+    // bounded code (never the raw provider message, which may embed internals).
+    const fail = (code: PublishErrorCode, message: string) => {
+      logger.error("publish", `publish failed (${code})`, { projectId: project.id });
+      return { ok: false as const, error: makePublishError(code, message) };
+    };
+
     // 1. Provider availability
     const availability = await this.deps.provider.isAvailable();
     if (!availability.available) {
-      return {
-        ok: false,
-        error: makePublishError(
-          "PROVIDER_UNAVAILABLE",
-          availability.reason ?? "This publishing option isn't available right now.",
-        ),
-      };
+      return fail(
+        "PROVIDER_UNAVAILABLE",
+        availability.reason ?? "This publishing option isn't available right now.",
+      );
     }
 
     // 1b. Project structural validity
     const schema = ProjectSchema.safeParse(project);
     if (!schema.success) {
-      return {
-        ok: false,
-        error: makePublishError(
-          "PROJECT_INVALID",
-          "Your project has a structural problem that prevents publishing.",
-        ),
-      };
+      return fail(
+        "PROJECT_INVALID",
+        "Your project has a structural problem that prevents publishing.",
+      );
     }
 
     // 3. Export validation (blocking)
     const validation = validateProjectForExport(project);
     if (!validation.valid) {
-      return {
-        ok: false,
-        error: makePublishError(
-          "EXPORT_INVALID",
-          validation.errors[0] ?? "Your site has a problem that prevents publishing.",
-        ),
-      };
+      return fail(
+        "EXPORT_INVALID",
+        validation.errors[0] ?? "Your site has a problem that prevents publishing.",
+      );
     }
 
     // 4. Generate export (on a snapshot — never the live project)
@@ -103,13 +107,10 @@ export class PublishService {
     try {
       files = generateExportProject(project).files;
     } catch (err) {
-      return {
-        ok: false,
-        error: makePublishError(
-          "BUILD_FAILED",
-          err instanceof Error ? err.message : "Failed to prepare your site.",
-        ),
-      };
+      return fail(
+        "BUILD_FAILED",
+        err instanceof Error ? err.message : "Failed to prepare your site.",
+      );
     }
 
     // 5. Deterministic export hash + content hash
@@ -169,6 +170,10 @@ export class PublishService {
           completedAt: now(),
           errorCode: result.error?.code,
         });
+        const code: PublishErrorCode = result.error?.code ?? "DEPLOY_FAILED";
+        logger.error("publish", `publish failed (${code})`, {
+          projectId: project.id,
+        });
         return {
           ok: false,
           error: result.error ?? makePublishError("DEPLOY_FAILED", "Publishing failed."),
@@ -196,6 +201,9 @@ export class PublishService {
         status: aborted ? "cancelled" : "failed",
         completedAt: now(),
         errorCode: error.code,
+      });
+      logger.error("publish", `publish failed (${error.code})`, {
+        projectId: project.id,
       });
       return { ok: false, error };
     }

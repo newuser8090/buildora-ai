@@ -24,6 +24,7 @@
 // ---------------------------------------------------------------------------
 
 import { NextResponse } from "next/server";
+import { logger } from "@/lib/logger";
 import { getCloudEnvironment } from "@/features/cloud-sync/cloud-environment";
 import {
   MockWorkspaceError,
@@ -55,7 +56,15 @@ function errorResponse(err: unknown) {
       { status: err.status },
     );
   }
-  console.error("[collab-mock] unhandled error", err);
+  // Phase P19 (F2) — never log the raw error object (may embed stack traces /
+  // internals); record a bounded diagnostic through the structured logger,
+  // keeping only the error CLASS (constructor name) for diagnosability.
+  const errorName =
+    err instanceof Error ? err.constructor.name : typeof err;
+  logger.error("api", "mock collab route unhandled error (UNKNOWN)", {
+    code: "UNKNOWN",
+    errorName,
+  });
   return NextResponse.json(
     { ok: false, error: { code: "UNKNOWN", message: "Something went wrong on the collaboration service." } },
     { status: 500 },

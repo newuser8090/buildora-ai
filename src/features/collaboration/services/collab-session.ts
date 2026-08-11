@@ -159,6 +159,7 @@ export class CollabSession {
       logger.error("collab", `room connect failed (${toWorkspaceError(err).code})`, {
         workspaceId: this.room.workspaceId,
         projectId: this.room.projectId,
+        clientId: this.clientId,
       });
       if (this.canSend) {
         setCollabCommitHook(null);
@@ -388,6 +389,7 @@ export class CollabSession {
         logger.error("collab", `authorization lost while editing (${error.code})`, {
           workspaceId: this.room.workspaceId,
           projectId: this.room.projectId,
+          clientId: this.clientId,
         });
       }
       this.setStatus("error");
@@ -450,6 +452,7 @@ export class CollabSession {
         logger.error("collab", "transport authorization error", {
           workspaceId: this.room.workspaceId,
           projectId: this.room.projectId,
+          clientId: this.clientId,
         });
       }
       this.setStatus("error");
@@ -586,6 +589,7 @@ export class CollabSession {
               {
                 workspaceId: this.room.workspaceId,
                 projectId: this.room.projectId,
+                clientId: this.clientId,
               },
             );
             return false;
@@ -598,6 +602,7 @@ export class CollabSession {
         logger.error("collab", `checkpoint failed (${error.code})`, {
           workspaceId: this.room.workspaceId,
           projectId: this.room.projectId,
+          clientId: this.clientId,
         });
         if (
           error.code === "PERMISSION_DENIED" ||
