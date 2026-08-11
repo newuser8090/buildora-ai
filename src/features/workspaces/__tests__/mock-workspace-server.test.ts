@@ -41,6 +41,8 @@ import {
   handleReleaseEditLease,
   handleGetEditLease,
   handleRevokeLeasesForProject,
+  handleCollabJoin,
+  handleCollabSend,
 } from "../mock/mock-workspace-server";
 import { MOCK_PROJECT } from "@/features/editor/mock/mock-project";
 import type { Workspace } from "../types";
@@ -721,5 +723,29 @@ describe("edit leases", () => {
       () => handleFetchWorkspaceProject(state, token, ws.id, projectId),
       "NOT_FOUND",
     );
+  });
+
+  it("workspace deletion cascades collaboration rooms and send-rate state (Phase P21 F5)", () => {
+    const token = signUp("a@example.com");
+    const ws = createWorkspace(token);
+    const state = getMockWorkspaceState();
+    handleCreateWorkspaceProject(state, token, ws.id, {
+      projectId: "proj-1",
+      project: projectFor("proj-1"),
+    });
+    // Join + send to materialize the room and its send-rate bucket.
+    handleCollabJoin(state, token, ws.id, "proj-1");
+    handleCollabSend(state, token, ws.id, "proj-1", {
+      update: "aGVsbG8=", // valid base64 Yjs update
+      actorClientId: "client-a",
+    });
+    expect(state.collabRooms.size).toBe(1);
+    expect(state.collabSendAttempts.size).toBe(1);
+
+    handleDeleteWorkspace(state, token, ws.id);
+
+    // No leaked room / send-rate state for the deleted workspace.
+    expect(state.collabRooms.size).toBe(0);
+    expect(state.collabSendAttempts.size).toBe(0);
   });
 });

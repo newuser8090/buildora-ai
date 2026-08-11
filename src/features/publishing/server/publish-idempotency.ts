@@ -52,8 +52,32 @@ export function storeIdempotency(key: string, entry: IdempotencyEntry): void {
 // ---------------------------------------------------------------------------
 
 const deployAttempts = new Map<string, number[]>();
-const RATE_WINDOW_MS = 60_000;
+/** Window in ms — exported so the bounded-memory tests can roll time. */
+export const RATE_WINDOW_MS = 60_000;
 const RATE_MAX = 10; // deploys per project per minute
+/** Cap on tracked project keys — bounds memory on a long-lived instance. */
+const MAX_TRACKED_PROJECTS = 10_000;
+
+/**
+ * Phase P21 (F4) — bounded memory. The tracked-project map must never grow
+ * without bound on a warm long-lived instance (each DISTINCT projectId adds a
+ * key forever). Mirrors the generate-rate-limit sweep: evict keys whose
+ * entries are all outside the window, then drop the oldest keys as a bound.
+ */
+function boundDeployAttempts(now: number): void {
+  if (deployAttempts.size <= MAX_TRACKED_PROJECTS) return;
+  for (const [key, timestamps] of [...deployAttempts]) {
+    if (timestamps.every((t) => now - t >= RATE_WINDOW_MS)) {
+      deployAttempts.delete(key);
+    }
+  }
+  // Map preserves insertion order — the first iterator key is the oldest.
+  while (deployAttempts.size > MAX_TRACKED_PROJECTS) {
+    const oldestKey = deployAttempts.keys().next().value;
+    if (oldestKey === undefined) break;
+    deployAttempts.delete(oldestKey);
+  }
+}
 
 /** True when the project has exceeded the deploy rate limit. */
 export function deployRateLimited(projectId: string, now = Date.now()): boolean {
@@ -62,10 +86,12 @@ export function deployRateLimited(projectId: string, now = Date.now()): boolean 
   );
   if (timestamps.length >= RATE_MAX) {
     deployAttempts.set(projectId, timestamps);
+    boundDeployAttempts(now);
     return true;
   }
   timestamps.push(now);
   deployAttempts.set(projectId, timestamps);
+  boundDeployAttempts(now);
   return false;
 }
 

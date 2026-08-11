@@ -64,6 +64,15 @@ export interface CollabSessionOptions {
   transport: CollabTransport;
   /** Called when the session should surface an honest read-only transition. */
   onAuthorizationLost?: () => void;
+  /**
+   * Phase P21 (F2) — called on CONNECT failure with the mapped workspace error
+   * code. start() deliberately RESOLVES on connect failure (the editor falls
+   * back to local persistence), so the owning hook could never observe the
+   * failure through the promise — this callback lets it classify the code
+   * (authorization loss → read-only transition; transient → bounded reconnect;
+   * permanent → keep the local fallback).
+   */
+  onConnectError?: (code: string) => void;
 }
 
 export class CollabSession {
@@ -101,6 +110,7 @@ export class CollabSession {
   private unsubStatus: (() => void) | null = null;
   private unsubAuthError: (() => void) | null = null;
   private onAuthorizationLost?: () => void;
+  private onConnectError?: (code: string) => void;
   /**
    * Phase P17 (F2) — true while local changes have not yet been durably
    * checkpointed. Cleared on a successful checkpoint; drives the session-end
@@ -116,6 +126,7 @@ export class CollabSession {
     this.canSend = options.canSend;
     this.transport = options.transport;
     this.onAuthorizationLost = options.onAuthorizationLost;
+    this.onConnectError = options.onConnectError;
     this.localOrigin = localOrigin(options.clientId);
     this.doc = new Y.Doc();
     // Undo scoped to THIS client: only local-origin transactions are captured.
@@ -156,11 +167,17 @@ export class CollabSession {
       // expiry, RLS break, network) was invisible to operators.
       // The code is embedded in the message (not only in `data`) so it
       // survives the logger's production redaction (data is dropped in prod).
-      logger.error("collab", `room connect failed (${toWorkspaceError(err).code})`, {
+      const connectCode = toWorkspaceError(err).code;
+      logger.error("collab", `room connect failed (${connectCode})`, {
         workspaceId: this.room.workspaceId,
         projectId: this.room.projectId,
         clientId: this.clientId,
       });
+      // Phase P21 (F2) — surface the code to the owning hook so it can
+      // distinguish connect-time authorization loss (→ read-only) from a
+      // transient failure (→ bounded reconnect) — the promise never rejects
+      // on connect failure (the editor falls back to local persistence).
+      this.onConnectError?.(connectCode);
       if (this.canSend) {
         setCollabCommitHook(null);
       }
