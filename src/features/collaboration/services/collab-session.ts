@@ -77,6 +77,12 @@ export class CollabSession {
   private disposed = false;
   private connected = false;
   private checkpointTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * One checkpoint at a time — the debounce and the session-end checkpoint
+   * must never run two concurrent saves with the same expectedRevision (the
+   * loser would burn a STALE_REVISION refetch+retry for no change).
+   */
+  private inFlightCheckpoint: Promise<boolean> | null = null;
   private lastSeq = -1;
   private lastRemoteChangeAt = 0;
   /**
@@ -94,6 +100,14 @@ export class CollabSession {
   private unsubStatus: (() => void) | null = null;
   private unsubAuthError: (() => void) | null = null;
   private onAuthorizationLost?: () => void;
+  /**
+   * Phase P17 (F2) — true while local changes have not yet been durably
+   * checkpointed. Cleared on a successful checkpoint; drives the session-end
+   * checkpoint in stop().
+   */
+  private hasUncheckpointedLocalChanges = false;
+  /** Authorization was lost while connected — skip the session-end checkpoint. */
+  private authLost = false;
 
   constructor(options: CollabSessionOptions) {
     this.room = options.room;
@@ -139,6 +153,21 @@ export class CollabSession {
       if (this.canSend) {
         setCollabCommitHook(null);
       }
+      // Phase P17 (F2b) — pre-connect edits are already in the store (the
+      // projection loop applied them under the remote-projection flag), but
+      // they were never marked dirty or scheduled for autosave. Re-commit the
+      // pending state through the NORMAL store path so the standard local
+      // persistence persists it — otherwise reload/close silently drops the
+      // edits. (If access became read-only mid-connect — SESSION_EXPIRED /
+      // PERMISSION_DENIED — setProject no-ops: the edit stays visible in the
+      // store but is deliberately NOT persisted, matching the documented
+      // "changes after permission loss are never uploaded" rule.)
+      if (this.pendingLocalProject) {
+        const pending = this.pendingLocalProject;
+        useEditorStore.getState().setProject(pending);
+        useEditorStore.getState().setDirty(true);
+        this.pendingLocalProject = null;
+      }
       this.setStatus("error");
       return;
     }
@@ -175,6 +204,7 @@ export class CollabSession {
       this.applyProjection();
       useEditorStore.getState().setDirty(true);
       this.setStatus("syncing");
+      this.hasUncheckpointedLocalChanges = true;
       this.scheduleCheckpoint();
     } else {
       this.setStatus("synced");
@@ -215,9 +245,33 @@ export class CollabSession {
   /** Stop the session and unregister the commit hook. Idempotent. */
   async stop(): Promise<void> {
     if (this.disposed) return;
+    this.clearCheckpointTimer();
+    // Phase P17 (F2) — session-end checkpoint (architecture §25 lists "on
+    // session end" as a checkpoint trigger). Persist unsynced local changes
+    // durably BEFORE tearing down; skipped when nothing is unsynced (no noisy
+    // saves on scope churn / StrictMode double-mount) or when authorization
+    // was lost (the save would fail and the session is already read-only).
+    if (
+      this.connected &&
+      this.canSend &&
+      !this.authLost &&
+      this.hasUncheckpointedLocalChanges
+    ) {
+      try {
+        // A debounced checkpoint may already be in flight — wait for it (it
+        // saves the same state) rather than starting a duplicate that would
+        // STALE_REVISION-refetch and retry for nothing.
+        if (this.inFlightCheckpoint) {
+          await this.inFlightCheckpoint;
+        } else {
+          await this.checkpoint();
+        }
+      } catch {
+        // Best-effort — the room log still holds the updates for reload/rebase.
+      }
+    }
     this.disposed = true;
     this.connected = false;
-    this.clearCheckpointTimer();
     if (this.unsubDocUpdate) this.unsubDocUpdate();
     if (this.unsubObserve) this.unsubObserve();
     if (this.unsubMessage) this.unsubMessage();
@@ -265,6 +319,7 @@ export class CollabSession {
     if (this.connected) {
       useEditorStore.getState().setDirty(true);
       this.setStatus("syncing");
+      this.hasUncheckpointedLocalChanges = true;
       this.scheduleCheckpoint();
     } else {
       // Session still joining — remember the intended state so start() can
@@ -316,6 +371,7 @@ export class CollabSession {
       error.code === "SESSION_EXPIRED"
     ) {
       this.setStatus("error");
+      this.authLost = true;
       this.onAuthorizationLost?.();
       return;
     }
@@ -367,6 +423,7 @@ export class CollabSession {
     this.unsubAuthError = this.transport.onAuthError(() => {
       if (this.disposed) return;
       this.setStatus("error");
+      this.authLost = true;
       this.onAuthorizationLost?.();
     });
   }
@@ -429,7 +486,16 @@ export class CollabSession {
     return this.checkpoint();
   }
 
-  private async checkpoint(): Promise<boolean> {
+  private checkpoint(): Promise<boolean> {
+    // Single-flight: concurrent callers share one in-flight checkpoint.
+    if (this.inFlightCheckpoint) return this.inFlightCheckpoint;
+    this.inFlightCheckpoint = this.runCheckpoint().finally(() => {
+      this.inFlightCheckpoint = null;
+    });
+    return this.inFlightCheckpoint;
+  }
+
+  private async runCheckpoint(): Promise<boolean> {
     if (this.disposed || !this.canSend) return false;
     const access = useWorkspaceAccessStore.getState();
     if (!access.workspaceId || access.role === "viewer") return false;
@@ -460,6 +526,7 @@ export class CollabSession {
         });
         useEditorStore.getState().markSaved(new Date().toISOString());
         this.setStatus("synced");
+        this.hasUncheckpointedLocalChanges = false;
         // Keep the local IndexedDB cache fresh (recovery / offline open is
         // still honest) + cache metadata accurate for reopens.
         void this.refreshLocalCache(project, summary.revision);
@@ -488,6 +555,7 @@ export class CollabSession {
           error.code === "LEASE_INVALID" ||
           error.code === "SESSION_EXPIRED"
         ) {
+          this.authLost = true;
           this.onAuthorizationLost?.();
         } else if (error.code === "NETWORK_FAILED" || error.code === "OFFLINE") {
           this.setStatus("offline");
