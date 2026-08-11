@@ -28,7 +28,11 @@ import {
   makeWorkspaceError,
   type WorkspaceErrorCode,
 } from "@/features/workspaces/errors";
-import { COLLAB_MAX_UPDATE_BYTES } from "../types";
+import {
+  COLLAB_MAX_UPDATE_BYTES,
+  COLLAB_OFFLINE_QUEUE_MAX,
+  COLLAB_OFFLINE_QUEUE_MAX_BYTES,
+} from "../types";
 
 /** Codes the collab RPCs raise; recognized inside the generic error message. */
 const COLLAB_RPC_CODES: readonly string[] = [
@@ -79,6 +83,23 @@ export class SupabaseCollabTransport implements CollabTransport {
   private statusCbs = new Set<(p: CollabTransportPhase) => void>();
   private authErrorCbs = new Set<() => void>();
   private phase: CollabTransportPhase = "disconnected";
+  // Bounded offline queue (architecture §23/§32) — mirrors the mock transport
+  // so both paths behave identically offline: Yjs updates are idempotent, so
+  // flushing on reconnect merges safely with edits made while offline. Never
+  // grows unbounded — count + byte caps; excess offline edits are dropped and
+  // the session falls back to rebase-from-checkpoint on reconnect. Authorization
+  // errors are NEVER queued (they propagate and end the session).
+  private offlineQueue: Uint8Array[] = [];
+  private offlineQueueBytes = 0;
+  /**
+   * Bumped whenever the channel errors/closes. The async SUBSCRIBED handler
+   * captures the epoch when it STARTS and only claims "connected" when no
+   * newer close/error superseded it — a stale catch-up completion (its
+   * readDurable was in flight across a network drop) must never flip a
+   * genuinely-offline transport back to connected, which would silently skip
+   * the offline queue for subsequent sends.
+   */
+  private channelEpoch = 0;
 
   private client() {
     const client = getSupabaseClient();
@@ -197,9 +218,15 @@ export class SupabaseCollabTransport implements CollabTransport {
 
     channel.subscribe(async (status) => {
       if (this.disposed) return;
+      const epoch = this.channelEpoch;
       if (status === "SUBSCRIBED") {
-        // Catch up on anything missed between the durable read and subscribe.
         try {
+          // Came back online: flush queued local edits FIRST (idempotent),
+          // then catch up on anything missed — mirrors the mock transport's
+          // reconnect ordering (queue before room updates).
+          await this.flushOfflineQueue();
+          if (this.disposed) return;
+          // Catch up on anything missed between the durable read and subscribe.
           const durable = await this.readDurable(this.room!);
           if (durable.seq > this.seq) {
             const missed = await this.rpc<Array<{ seq: number; data: string; actorClientId?: string }>>(
@@ -221,8 +248,13 @@ export class SupabaseCollabTransport implements CollabTransport {
         } catch {
           // Best-effort catch-up; the next broadcast/checkpoint converges.
         }
-        this.setPhase("connected");
+        // Only claim connected when no CLOSED/error superseded this
+        // subscription while the catch-up was in flight.
+        if (this.channelEpoch === epoch) {
+          this.setPhase("connected");
+        }
       } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        this.channelEpoch += 1;
         this.setPhase("reconnecting");
         this.channel = null;
         // Rejoin the channel (deduped by the session's single transport).
@@ -230,6 +262,7 @@ export class SupabaseCollabTransport implements CollabTransport {
           this.openChannel(this.room);
         }
       } else if (status === "CLOSED") {
+        this.channelEpoch += 1;
         this.setPhase("offline");
       }
     });
@@ -244,10 +277,27 @@ export class SupabaseCollabTransport implements CollabTransport {
     if (update.byteLength > COLLAB_MAX_UPDATE_BYTES) {
       throw makeWorkspaceError("PAYLOAD_TOO_LARGE", "That change is too large to share.");
     }
+    if (this.phase === "offline") {
+      // Offline editing: queue locally (bounded). Yjs updates are idempotent,
+      // so a later flush never corrupts the merged state.
+      if (
+        this.offlineQueue.length < COLLAB_OFFLINE_QUEUE_MAX &&
+        this.offlineQueueBytes + update.byteLength <= COLLAB_OFFLINE_QUEUE_MAX_BYTES
+      ) {
+        this.offlineQueue.push(update);
+        this.offlineQueueBytes += update.byteLength;
+      }
+      return; // queued — status is already honest (offline)
+    }
+    await this.sendNow(update);
+  }
+
+  /** Core send path: RPC append + channel broadcast. */
+  private async sendNow(update: Uint8Array): Promise<void> {
     // Server validates editor/owner + room membership; actor is auth.uid().
     const seq = await this.rpc<number>("ws_collab_append_update", {
-      p_workspace_id: this.room.workspaceId,
-      p_project_id: this.room.projectId,
+      p_workspace_id: this.room!.workspaceId,
+      p_project_id: this.room!.projectId,
       p_update: arrayToBase64(update),
     });
     // Relay to the channel so other members see it live (server durable log
@@ -264,6 +314,45 @@ export class SupabaseCollabTransport implements CollabTransport {
       });
     }
     this.seq = Math.max(this.seq, seq);
+  }
+
+  /** Replay queued offline updates (idempotent Yjs merges) after reconnect. */
+  private async flushOfflineQueue(): Promise<void> {
+    if (this.offlineQueue.length === 0) return;
+    const queued = this.offlineQueue;
+    this.offlineQueue = [];
+    this.offlineQueueBytes = 0;
+    for (const update of queued) {
+      try {
+        await this.sendNow(update);
+      } catch (err) {
+        // Authorization loss while flushing is NOT transient — surface it so
+        // the session transitions to the honest read-only state (queued
+        // uploads after permission loss must never silently retry forever;
+        // the server rejects them regardless).
+        const code =
+          err && typeof err === "object" && "code" in err
+            ? String((err as { code: unknown }).code)
+            : "";
+        if (
+          code === "PERMISSION_DENIED" ||
+          code === "SESSION_EXPIRED" ||
+          code === "LEASE_INVALID"
+        ) {
+          this.fireAuthError();
+          return;
+        }
+        // Transient failure — re-queue (bounded); the next flush/send retries.
+        if (
+          this.offlineQueue.length < COLLAB_OFFLINE_QUEUE_MAX &&
+          this.offlineQueueBytes + update.byteLength <= COLLAB_OFFLINE_QUEUE_MAX_BYTES
+        ) {
+          this.offlineQueue.push(update);
+          this.offlineQueueBytes += update.byteLength;
+        }
+        break;
+      }
+    }
   }
 
   async checkpoint(seq: number, state?: Uint8Array): Promise<void> {

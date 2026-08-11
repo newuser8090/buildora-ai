@@ -5,7 +5,8 @@
 //   * join returns the durable base + frontier + canonical state
 //   * seed: first-writer-wins, editor/owner only, size-capped
 //   * send: editor/owner only, viewers/removed rejected, size-capped,
-//     maintenance lock pauses writes, bounded log
+//     maintenance lock pauses writes, never drops un-checkpointed updates
+//     (P17 F1), per-room flood rate limit (P17 F4)
 //   * poll: catch-up after a frontier, rebase when behind the pruned frontier
 //   * checkpoint: prunes the log + refreshes canonical state (bounded)
 //   * lock/unlock: owner-only maintenance lock
@@ -277,6 +278,56 @@ describe("collab send", () => {
       update: tinyUpdate(),
     });
     expect(after.seq).toBe(2);
+  });
+
+  it("never drops un-checkpointed updates (Phase P17 F1)", () => {
+    const { tokenEditor, workspace, projectId } = setupRoom();
+    const state = getMockWorkspaceState();
+    // Far more updates than the old retention cap (200), with NO checkpoint in
+    // between. The room must retain every one of them: a shift here would
+    // silently delete un-checkpointed updates without advancing the frontier,
+    // so laggards/late joiners would miss them with no rebase.
+    for (let i = 0; i < 250; i += 1) {
+      handleCollabSend(state, tokenEditor, workspace.id, projectId, {
+        update: tinyUpdate(),
+      });
+    }
+    // A client polling from the frontier receives EVERY update.
+    const polled = handleCollabPoll(state, tokenEditor, workspace.id, projectId, 0);
+    expect(polled.rebase).toBe(false);
+    expect(polled.updates).toHaveLength(250);
+    expect(polled.updates[0].seq).toBe(1);
+    expect(polled.updates[249].seq).toBe(250);
+    // A late joiner (frontier 0) also catches up on everything.
+    const joined = handleCollabJoin(state, tokenEditor, workspace.id, projectId);
+    expect(joined.checkpointSeq).toBe(0);
+    const joinPoll = handleCollabPoll(state, tokenEditor, workspace.id, projectId, joined.checkpointSeq);
+    expect(joinPoll.updates).toHaveLength(250);
+  });
+
+  it("rate-limits a flood of sends per room (Phase P17 F4)", () => {
+    const { tokenEditor, workspace, projectId } = setupRoom();
+    const state = getMockWorkspaceState();
+    // Burn the per-room send budget with a flood of tiny updates.
+    for (let i = 0; i < 2400; i += 1) {
+      handleCollabSend(state, tokenEditor, workspace.id, projectId, {
+        update: tinyUpdate(),
+      });
+    }
+    expectCode(
+      () => handleCollabSend(state, tokenEditor, workspace.id, projectId, { update: tinyUpdate() }),
+      "RATE_LIMITED",
+    );
+    // The budget is PER ROOM — another room in the same workspace is
+    // unaffected (a flood in one project must not starve the others).
+    const other = handleCreateWorkspaceProject(state, tokenEditor, workspace.id, {
+      projectId: "proj-2",
+      project: projectFor("proj-2"),
+    });
+    const res = handleCollabSend(state, tokenEditor, workspace.id, other.projectId, {
+      update: tinyUpdate(),
+    });
+    expect(res.seq).toBe(1);
   });
 });
 

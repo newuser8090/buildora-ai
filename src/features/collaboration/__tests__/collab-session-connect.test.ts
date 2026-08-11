@@ -288,8 +288,9 @@ describe("CollabSession connect-window edits", () => {
     useWorkspaceAccessStore.getState().setLease(null);
 
     const transport = new DeferredTransport();
+    const saveMock = vi.fn().mockResolvedValue({ revision: 1 });
     setWorkspaceProviderForTests({
-      saveWorkspaceProject: vi.fn().mockResolvedValue({ revision: 1 }),
+      saveWorkspaceProject: saveMock,
       fetchWorkspaceProject: vi.fn().mockResolvedValue({ revision: 1 }),
     } as never);
 
@@ -313,6 +314,100 @@ describe("CollabSession connect-window edits", () => {
       baseProject().pages[0].sections[0].props.heading,
     );
 
+    await session.stop();
+
+    // Nothing was unsynced → stop() makes no save call (no noisy session-end
+    // checkpoint on scope churn / StrictMode double-mount).
+    expect(saveMock).not.toHaveBeenCalled();
+    expect(transport.checkpointCalls).toHaveLength(0);
+  });
+
+  it("stop() checkpoints unsynced local changes before teardown (Phase P17 F2)", async () => {
+    useWorkspaceAccessStore.getState().setWorkspaceContext({
+      workspaceId: "ws-1",
+      workspaceName: "Acme",
+      role: "owner",
+      serverRevision: 1,
+    });
+    useWorkspaceAccessStore.getState().setAccess({ mode: "editable" });
+    useWorkspaceAccessStore.getState().setLease(null);
+
+    const saveMock = vi.fn().mockResolvedValue({ revision: 2 });
+    setWorkspaceProviderForTests({
+      saveWorkspaceProject: saveMock,
+      fetchWorkspaceProject: vi.fn().mockResolvedValue({ revision: 2 }),
+    } as never);
+
+    const transport = new DeferredTransport();
+    const session = new CollabSession({
+      room,
+      clientId: "client-a",
+      canSend: true,
+      transport,
+    });
+    const starting = session.start();
+    transport.finishConnect({
+      seq: 0,
+      checkpointSeq: 0,
+      base: JSON.parse(JSON.stringify(baseProject())) as Project,
+    } as unknown as CollabJoinResult);
+    await starting;
+
+    // Edit AFTER connect. The debounced checkpoint is 1500 ms — it must NOT
+    // fire within this test; stop() must flush the edit durably instead
+    // (architecture §25 lists "session end" as a checkpoint trigger).
+    const hook = getCollabCommitHook();
+    expect(hook).not.toBeNull();
+    const next = JSON.parse(JSON.stringify(baseProject())) as Project;
+    next.pages[0].sections[0].props.heading = "Edited then closed";
+    hook!.applyLocalProject(next);
+
+    expect(saveMock).not.toHaveBeenCalled(); // debounce hasn't fired
+
+    await session.stop();
+
+    // The session-end checkpoint flushed the edit durably.
+    expect(saveMock).toHaveBeenCalledTimes(1);
+    expect(transport.checkpointCalls.length).toBeGreaterThan(0);
+  });
+
+  it("connect failure with pre-connect edits falls back to local persistence (Phase P17 F2b)", async () => {
+    useWorkspaceAccessStore.getState().setWorkspaceContext({
+      workspaceId: "ws-1",
+      workspaceName: "Acme",
+      role: "owner",
+      serverRevision: 1,
+    });
+    useWorkspaceAccessStore.getState().setAccess({ mode: "editable" });
+    useWorkspaceAccessStore.getState().setLease(null);
+    useEditorStore.getState().setDirty(false);
+
+    const transport = new FailingTransport();
+    const session = new CollabSession({
+      room,
+      clientId: "client-a",
+      canSend: true,
+      transport,
+    });
+
+    const starting = session.start();
+    // Type during the (failing) connect window.
+    const hook = getCollabCommitHook();
+    expect(hook).not.toBeNull();
+    const next = JSON.parse(JSON.stringify(baseProject())) as Project;
+    next.pages[0].sections[0].props.heading = "Typed during connect";
+    hook!.applyLocalProject(next);
+
+    await expect(starting).resolves.toBeUndefined();
+
+    // Hook gone (standard persistence path) AND the store is dirty with the
+    // edit preserved — previously dirty stayed false, so no autosave ever ran
+    // and reload/close silently dropped the edit.
+    expect(getCollabCommitHook()).toBeNull();
+    expect(useEditorStore.getState().isDirty).toBe(true);
+    expect(useEditorStore.getState().project.pages[0].sections[0].props.heading).toBe(
+      "Typed during connect",
+    );
     await session.stop();
   });
 });

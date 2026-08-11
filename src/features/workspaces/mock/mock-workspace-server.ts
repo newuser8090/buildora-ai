@@ -143,6 +143,7 @@ export interface MockWorkspaceState {
   activity: Map<string, WorkspaceActivityEvent[]>; // workspaceId -> events, newest first (P15)
   versions: Map<string, MockProjectVersion[]>; // `${ws}:${pid}` -> versions, newest first (P15)
   collabRooms: Map<string, MockCollabRoom>; // `${ws}:${pid}` -> room (P16)
+  collabSendAttempts: Map<string, number[]>; // room key -> send timestamps (P17 rate limit)
 }
 
 export function createMockWorkspaceState(): MockWorkspaceState {
@@ -156,10 +157,15 @@ export function createMockWorkspaceState(): MockWorkspaceState {
     activity: new Map(),
     versions: new Map(),
     collabRooms: new Map(),
+    collabSendAttempts: new Map(),
   };
 }
 
-const MOCK_WORKSPACE_GLOBAL_KEY = "buildora.mockWorkspaceState.v1";
+// Bumped to v2 when the state SHAPE changed (Phase P17 added
+// collabSendAttempts): a dev server that hot-recompiled a newer module over an
+// older globalThis state would otherwise hand the new handlers a stale shape
+// (e.g. `collabSendAttempts` undefined) and every collab send would crash.
+const MOCK_WORKSPACE_GLOBAL_KEY = "buildora.mockWorkspaceState.v2";
 
 export function getMockWorkspaceState(): MockWorkspaceState {
   const g = globalThis as unknown as Record<string, unknown>;
@@ -1707,8 +1713,13 @@ export function handleRevokeLeasesForProject(
 // Phase P16 — collaboration rooms
 // ---------------------------------------------------------------------------
 
-const COLLAB_ROOM_MAX_UPDATES = 200;
 const COLLAB_ROOM_MAX_UPDATE_BYTES = 256 * 1024; // 256 KB (architecture §39)
+// Per-room send ceiling (Phase P17 — F4). Architecture §39 documents a mock
+// per-room rate limit; it is the DoS guard against a compromised editor
+// flooding the room log with tiny updates. Generous enough to never trip
+// legitimate typing / AI-plan bursts / E2E, tight enough to bound a flood.
+const COLLAB_ROOM_SEND_RATE_MAX = 2400; // per window
+const COLLAB_ROOM_SEND_RATE_WINDOW_MS = 60_000; // 60 s
 
 export interface CollabJoinResult {
   seq: number;
@@ -1867,6 +1878,19 @@ export function handleCollabSend(
   requireEditor(state, user, workspaceId);
   const room = getCollabRoom(state, workspaceId, projectId);
 
+  // Per-room send rate limit (Phase P17 — F4): a flood of tiny updates would
+  // otherwise grow the retained log and amplify poll work for every peer.
+  if (
+    rateLimited(
+      state.collabSendAttempts,
+      collabRoomKey(workspaceId, projectId),
+      COLLAB_ROOM_SEND_RATE_MAX,
+      COLLAB_ROOM_SEND_RATE_WINDOW_MS,
+    )
+  ) {
+    throw new MockWorkspaceError(429, "RATE_LIMITED", "Too many changes at once. Try again shortly.");
+  }
+
   // Maintenance lock (restore/import) pauses collaborative writes.
   if (room.lockHolder && room.lockHolder !== user.id) {
     throw new MockWorkspaceError(
@@ -1897,10 +1921,13 @@ export function handleCollabSend(
     actorClientId: typeof input.actorClientId === "string" ? input.actorClientId : "",
     at: nowIso(),
   });
-  if (room.updates.length > COLLAB_ROOM_MAX_UPDATES) {
-    // Bound growth: drop the oldest retained update (still after the frontier).
-    room.updates.shift();
-  }
+  // Phase P17 (F1) — the room NEVER drops an update that has not been durably
+  // checkpointed. A shift here silently deletes un-checkpointed updates
+  // WITHOUT advancing the frontier, so laggards and late joiners would miss
+  // them with no rebase (the exact divergence P16 exists to prevent). Growth
+  // is bounded the same way the Supabase path bounds it: prune ONLY at
+  // checkpoint (advanceCollabCheckpoint), which the 1.5 s checkpoint debounce
+  // makes small in practice. The per-room send ceiling above bounds floods.
   return { seq };
 }
 

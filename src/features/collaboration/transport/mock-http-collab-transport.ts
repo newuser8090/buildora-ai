@@ -234,7 +234,24 @@ export class MockHttpCollabTransport implements CollabTransport {
             },
           },
         );
-      } catch {
+      } catch (err) {
+        // Authorization loss while flushing is NOT transient — surface it so
+        // the session transitions to the honest read-only state (queued
+        // uploads after permission loss must never silently retry forever;
+        // the server rejects them regardless). Parity with the Supabase
+        // transport's flush (Phase P17 F3).
+        const code =
+          err && typeof err === "object" && "code" in err
+            ? String((err as { code: unknown }).code)
+            : "";
+        if (
+          code === "PERMISSION_DENIED" ||
+          code === "SESSION_EXPIRED" ||
+          code === "LEASE_INVALID"
+        ) {
+          this.fireAuthError();
+          return;
+        }
         // Re-queue on failure (bounded); the next reconnect retries.
         if (
           this.offlineQueue.length < COLLAB_OFFLINE_QUEUE_MAX &&
