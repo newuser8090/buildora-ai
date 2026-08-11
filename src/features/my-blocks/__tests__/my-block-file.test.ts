@@ -214,15 +214,25 @@ describe("buildBlocksFile", () => {
     expect(serialized).not.toContain("local-alpha");
   });
 
-  it("is deterministic across two builds", () => {
+  it("is deterministic across two builds (content + ordering; export moment is a live stamp)", () => {
     const records = [
       makeRecord({ name: "Zebra" }),
       makeRecord({ name: "Alpha" }),
       makeRecord({ name: "Beta" }),
     ];
-    const a = JSON.stringify(buildBlocksFile(records));
-    const b = JSON.stringify(buildBlocksFile([...records].reverse()));
-    expect(a).toBe(b);
+    const a = buildBlocksFile(records);
+    const b = buildBlocksFile([...records].reverse());
+    // exportedAt is the LIVE export moment (ms resolution) — two builds that
+    // straddle a millisecond boundary legitimately differ there. The
+    // determinism contract covers content + ordering, not the timestamp.
+    // Strip it before comparing, then assert it is present and valid on both.
+    const { exportedAt: exportedAtA, ...aRest } = a;
+    const { exportedAt: exportedAtB, ...bRest } = b;
+    expect(JSON.stringify(aRest)).toBe(JSON.stringify(bRest));
+    expect(typeof exportedAtA).toBe("string");
+    expect(Number.isNaN(Date.parse(exportedAtA))).toBe(false);
+    expect(typeof exportedAtB).toBe("string");
+    expect(Number.isNaN(Date.parse(exportedAtB))).toBe(false);
   });
 
   it("produces a schema-valid payload with optional collections by index", () => {

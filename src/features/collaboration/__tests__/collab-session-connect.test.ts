@@ -403,6 +403,17 @@ describe("CollabSession connect-window edits", () => {
           ([tag, message]) => tag === "collab" && message.includes("connect failed"),
         ),
       ).toBe(true);
+      // Phase P19 (F4) — the diagnostic carries the session's clientId so a
+      // single tab's connect → checkpoint → auth-loss chain is correlatable.
+      const connectCall = errorSpy.mock.calls.find(
+        (c) => c[0] === "collab" && String(c[1]).includes("connect failed"),
+      );
+      expect(connectCall).toBeDefined();
+      expect(connectCall![2]).toMatchObject({
+        workspaceId: "ws-1",
+        projectId: "proj-1",
+        clientId: "client-a",
+      });
     } finally {
       errorSpy.mockRestore();
       await session.stop();

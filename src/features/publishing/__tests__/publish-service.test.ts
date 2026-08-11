@@ -2,7 +2,8 @@
 // Publishing — PublishService pipeline tests (Phase P7)
 // ---------------------------------------------------------------------------
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { logger } from "@/lib/logger";
 import { PublishService } from "../services/publish-service";
 import { MockPublishingProvider } from "../providers/mock-provider";
 import type { DeploymentRecord, PublishProgressEvent, PublishingProvider } from "../types";
@@ -226,6 +227,80 @@ describe("PublishService — success path", () => {
 });
 
 describe("PublishService — failure & cancel", () => {
+  it("logs a bounded diagnostic with the safe projectId on provider failure (P19 F3)", async () => {
+    const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => undefined);
+    try {
+      const storage = new MemoryStore();
+      const failing = new MockPublishingProvider({
+        durations: { checking: 0, preparing: 0, building: 0, publishing: 0, live: 0 },
+        failAt: "building",
+        failCode: "BUILD_FAILED",
+      });
+      const service = setup(failing, storage);
+      const result = await service.publish(
+        { project: makeProject({ id: "proj-9" }), revision: 1, providerId: "mock" },
+        () => {},
+      );
+      expect(result.ok).toBe(false);
+
+      // The diagnostic records the bounded code + safe identifier — never the
+      // raw provider message (which may embed internals).
+      expect(errorSpy).toHaveBeenCalled();
+      const call = errorSpy.mock.calls.find(([tag, message]) => {
+        return tag === "publish" && String(message).includes("BUILD_FAILED");
+      });
+      expect(call).toBeDefined();
+      expect(call![2]).toEqual({ projectId: "proj-9" });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("logs validation-gate failures with the bounded code (P19 F3)", async () => {
+    const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => undefined);
+    try {
+      const service = setup(fastProvider(), new MemoryStore());
+      await service.publish(
+        { project: { id: "broken-1" } as unknown as Project, revision: 1, providerId: "mock" },
+        () => {},
+      );
+      const call = errorSpy.mock.calls.find(([tag, message]) => {
+        return tag === "publish" && String(message).includes("PROJECT_INVALID");
+      });
+      expect(call).toBeDefined();
+      expect(call![2]).toEqual({ projectId: "broken-1" });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("logs cancelled publishes distinctly without leaking internals (P19 F3)", async () => {
+    const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => undefined);
+    try {
+      const storage = new MemoryStore();
+      const provider = new MockPublishingProvider({
+        durations: { checking: 0, preparing: 0, building: 50, publishing: 0, live: 0 },
+      });
+      const service = setup(provider, storage);
+      const controller = new AbortController();
+      const promise = service.publish(
+        { project: makeProject({ id: "proj-cancel" }), revision: 1, providerId: "mock" },
+        () => {},
+        controller.signal,
+      );
+      setTimeout(() => controller.abort(), 5);
+      const result = await promise;
+      expect(result.ok).toBe(false);
+      const call = errorSpy.mock.calls.find(([tag, message]) => {
+        return tag === "publish" && String(message).includes("CANCELLED");
+      });
+      expect(call).toBeDefined();
+      expect(call![2]).toEqual({ projectId: "proj-cancel" });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it("persists a failed deployment when the provider fails", async () => {
     const storage = new MemoryStore();
     const failing = new MockPublishingProvider({
