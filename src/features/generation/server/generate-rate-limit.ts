@@ -26,6 +26,8 @@
 
 const RATE_WINDOW_MS = 60_000;
 const RATE_MAX = 60; // requests per client per minute
+/** Window in whole seconds — used for the 429 `Retry-After` header. */
+export const RATE_WINDOW_SECONDS = RATE_WINDOW_MS / 1000;
 /** Cap on tracked client keys — bounds memory on a long-lived instance. */
 const MAX_TRACKED_CLIENTS = 10_000;
 

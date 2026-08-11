@@ -32,7 +32,42 @@ import {
   clientKeyForRequest,
   generateRateLimitEnabled,
   isTestForceLocalHeader,
+  RATE_WINDOW_SECONDS,
 } from "@/features/generation/server/generate-rate-limit";
+
+// ---------------------------------------------------------------------------
+// Bounded diagnostic tokens (Phase P21 F3)
+//
+// The message channel is logged VERBATIM (even in production), so it must
+// never carry raw provider/fetch error text (URLs, request echoes, provider
+// internals). Only bounded identifiers are embedded: a ProviderError code
+// (MISSING_API_KEY / PROVIDER_TIMEOUT / …) or a JS identifier (constructor
+// name / typeof) — matching the P18/P19 "static template + bounded code"
+// convention used by every other failure boundary.
+// ---------------------------------------------------------------------------
+
+/**
+ * Bounded error token for diagnostics — never the raw error message.
+ * Prefers an uppercase ProviderError code; falls back to the error's
+ * constructor name / typeof (JS identifiers, hence bounded + non-sensitive).
+ * Exported so the production path is unit-testable (route-private otherwise).
+ */
+export function boundedErrorToken(err: unknown): string {
+  if (err && typeof err === "object" && "code" in err) {
+    const code = (err as { code?: unknown }).code;
+    if (typeof code === "string" && /^[A-Z0-9_]{1,64}$/.test(code)) {
+      return code;
+    }
+  }
+  const name =
+    err instanceof Error && err.name
+      ? err.name
+      : err !== null && typeof err === "object" &&
+          (err as { constructor?: { name?: string } }).constructor?.name
+        ? (err as { constructor: { name: string } }).constructor.name
+        : typeof err;
+  return /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/.test(name) ? name : "UNKNOWN";
+}
 
 // ---------------------------------------------------------------------------
 // Request validation schema
@@ -153,7 +188,9 @@ export async function POST(request: Request) {
           success: false,
           error: { code: "RATE_LIMITED", message: "Too many requests. Try again shortly." },
         },
-        { status: 429 },
+        // Phase P21 (F3) — standard operational hint so clients/operators know
+        // when the window resets (matches the fixed-window length).
+        { status: 429, headers: { "Retry-After": String(RATE_WINDOW_SECONDS) } },
       );
     }
 
@@ -238,10 +275,14 @@ export async function POST(request: Request) {
           `Gemini success (${Date.now() - startTime}ms) — ${geminiResult.plan.sections.length} sections`,
         );
       } catch (geminiError) {
-        // 3b. Fallback to rule-based
-        logger.warn(
+        // 3b. Fallback to rule-based. Phase P21 (F3) — this failure is logged
+        // at ERROR level (previously warn, which is DEV-ONLY) so a paid-
+        // provider outage is visible to operators in production, and only a
+        // BOUNDED code is embedded (never the raw provider message, which can
+        // carry URLs / request echoes / provider internals).
+        logger.error(
           "API",
-          `Gemini failed, falling back to rule-based: ${(geminiError as Error)?.message}`,
+          `Gemini failed, falling back to rule-based (${boundedErrorToken(geminiError)})`,
         );
         source = "rule-based";
 
@@ -293,7 +334,10 @@ export async function POST(request: Request) {
       warnings,
     });
   } catch (err) {
-    logger.error("API", "Unexpected error", (err as Error)?.message);
+    // Phase P21 (F3) — embed a bounded error-class token in the message so
+    // the failure class survives production redaction (the previous raw
+    // message string was dropped in production and dev-only otherwise).
+    logger.error("API", `unexpected error (${boundedErrorToken(err)})`);
 
     return NextResponse.json(
       {

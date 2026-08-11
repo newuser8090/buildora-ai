@@ -18,7 +18,7 @@
 // Personal projects and read-only previews never create a session.
 // ---------------------------------------------------------------------------
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/features/auth/useAuth";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { useWorkspaceAccessStore } from "@/features/workspaces/store/workspace-access-store";
@@ -40,6 +40,38 @@ import type { CollabTestControls } from "../types";
 // ---------------------------------------------------------------------------
 
 const TEST_CONTROLS_KEY = "__buildoraCollabTestControls";
+
+// ---------------------------------------------------------------------------
+// Phase P21 (F2) — bounded reconnect after a TRANSIENT connect failure.
+//
+// Without this, a transient outage exactly at open (server restart / network
+// blip / provider recovery) stranded a dead session forever: the editor kept
+// working with local-only persistence (status bar "Saved" = IndexedDB), the
+// workspace copy stayed stale, and a reload re-fetched the SERVER copy —
+// silently discarding those local edits with no failure signal. The workspace
+// access hook treats the server copy as authoritative on every open.
+//
+// The reconnect is bounded (max attempts, increasing delay) so a prolonged
+// outage cannot cause a reconnect storm, and it only fires for codes that are
+// plausibly transient. Authorization loss at connect (PERMISSION_DENIED /
+// SESSION_EXPIRED) is NOT retried — it transitions to the honest read-only
+// state, matching the established auth-loss contract.
+// ---------------------------------------------------------------------------
+
+/** Codes that justify re-trying the room join (fresh transport each try). */
+const CONNECT_RETRYABLE_CODES: ReadonlySet<string> = new Set([
+  "NETWORK_FAILED",
+  "OFFLINE",
+  "RATE_LIMITED",
+  "MALFORMED_RESPONSE",
+  // Unknown/capped: a generic failure (e.g. a Supabase RPC error with an
+  // unmapped code during an outage) is retried a bounded number of times and
+  // then abandoned — the attempt budget bounds any hammering on a real bug.
+  "UNKNOWN",
+]);
+
+const MAX_CONNECT_RETRIES = 3;
+const CONNECT_RETRY_DELAYS_MS = [2_000, 4_000, 8_000];
 
 function exposeTestControls(controls: CollabTestControls | undefined): void {
   if (typeof window === "undefined") return;
@@ -73,6 +105,13 @@ export function useCollaborationSession(options?: {
   const sessionRef = useRef<CollabSession | null>(null);
   const scopeRef = useRef<string | null>(null);
   const clientIdRef = useRef<string>(newClientId());
+  // Retry bookkeeping (bounded): scope → attempt count, so a scope switch
+  // resets the budget and consecutive failures in the SAME scope share it.
+  const retryStateRef = useRef<{ scope: string; count: number } | null>(null);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Bumping this re-runs the effect, which re-creates the session after a
+  // transient connect failure (the editor-page controller-retry pattern).
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     const clearSession = () => {
@@ -83,6 +122,11 @@ export function useCollaborationSession(options?: {
       exposeTestControls(undefined);
       if (session) void session.stop();
     };
+    // Cancel any pending reconnect timer (scope change / unmount).
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
 
     // No session when: not signed in, no workspace project, access unresolved
     // (still loading), or offline. Personal projects and read-only previews
@@ -116,6 +160,56 @@ export function useCollaborationSession(options?: {
       exposeTestControls: options?.exposeTestControls,
     });
     exposeTestControls(transport.testControls);
+
+    // Phase P21 (F2) — classify a CONNECT failure by its code. start()
+    // resolves (the editor falls back to local persistence), so this is the
+    // only signal the hook gets. A failure from a session that was already
+    // torn down (unmount raced the join) is ignored.
+    const handleConnectFailure = (code: string) => {
+      if (sessionRef.current !== session) return;
+      if (
+        code === "PERMISSION_DENIED" ||
+        code === "SESSION_EXPIRED"
+      ) {
+        // Connect-time authorization loss (removed/downgraded member, stale
+        // session) → honest read-only; never retried (the server is the
+        // authority and would reject every re-join).
+        useWorkspaceAccessStore.getState().setAccess({
+          mode: "readonly",
+          reason: "unauthorized",
+        });
+        clearSession();
+        return;
+      }
+      if (CONNECT_RETRYABLE_CODES.has(code)) {
+        // Transient failure: tear the dead session down and retry with a
+        // bounded budget. Without this the editor stays local-only forever —
+        // and a reload then silently discards those edits because the
+        // workspace server copy is authoritative on reopen.
+        clearSession();
+        const prev = retryStateRef.current;
+        const attempt =
+          prev && prev.scope === scopeKey ? prev.count + 1 : 1;
+        retryStateRef.current = { scope: scopeKey, count: attempt };
+        if (attempt <= MAX_CONNECT_RETRIES) {
+          const delay =
+            CONNECT_RETRY_DELAYS_MS[
+              Math.min(attempt - 1, CONNECT_RETRY_DELAYS_MS.length - 1)
+            ];
+          retryTimerRef.current = setTimeout(() => {
+            retryTimerRef.current = null;
+            setRetryTick((t) => t + 1);
+          }, delay);
+        }
+        // Budget exhausted → keep the standard local fallback (collab status
+        // shows "error"; the room can still be re-entered on the next
+        // open/scope change).
+        return;
+      }
+      // Permanent failure (NOT_CONFIGURED / NOT_FOUND / …) → keep the local
+      // fallback; retrying cannot help.
+    };
+
     const session = new CollabSession({
       room: { workspaceId, projectId: activeProjectId },
       clientId: clientIdRef.current,
@@ -130,27 +224,21 @@ export function useCollaborationSession(options?: {
         });
         clearSession();
       },
+      onConnectError: handleConnectFailure,
     });
     sessionRef.current = session;
     scopeRef.current = scopeKey;
     registerCollabSession(session);
     void session.start().catch((err) => {
-      const error = toWorkspaceError(err);
-      if (
-        error.code === "PERMISSION_DENIED" ||
-        error.code === "SESSION_EXPIRED"
-      ) {
-        useWorkspaceAccessStore.getState().setAccess({
-          mode: "readonly",
-          reason: "unauthorized",
-        });
-        clearSession();
-      }
+      // Defensive: start() only rejects on unexpected (non-connect) throws;
+      // classify them with the same bounded logic.
+      handleConnectFailure(toWorkspaceError(err).code);
     });
 
     return clearSession;
     // `provider` is a stable singleton; the remaining deps describe the
-    // session scope exactly.
+    // session scope exactly (retryTick re-runs this effect after a bounded
+    // reconnect delay).
   }, [
     activeProjectId,
     isHydrated,
@@ -162,5 +250,6 @@ export function useCollaborationSession(options?: {
     loading,
     offline,
     options?.exposeTestControls,
+    retryTick,
   ]);
 }

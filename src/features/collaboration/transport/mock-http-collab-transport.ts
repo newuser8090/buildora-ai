@@ -160,9 +160,23 @@ export class MockHttpCollabTransport implements CollabTransport {
         seq: joined.checkpointSeq,
         ...(joined.state ? { state: joined.state } : {}),
       };
-    } catch {
+    } catch (err) {
+      // Phase P21 (F1) — PRESERVE the underlying workspace error (do not
+      // swallow it into a generic Error). roomFetch already maps failures to
+      // structured workspace errors (NETWORK_FAILED on fetch loss; the server
+      // code — PERMISSION_DENIED / SESSION_EXPIRED / NOT_FOUND / … — on an
+      // error envelope), and the session's connect diagnostics and the
+      // authorization-loss transition depend on that code:
+      //   - the P18/P19 diagnostic logs the REAL code (an operator can tell a
+      //     join-time PERMISSION_DENIED from a transient outage)
+      //   - useCollaborationSession distinguishes connect-time authorization
+      //     loss (→ honest read-only) from a transient failure (→ bounded
+      //     reconnect) — parity with the Supabase transport, which already
+      //     preserves the code (a stale join from a removed/downgraded member
+      //     is security-under-failure relevant: the editor must NOT keep
+      //     editing locally as if nothing happened)
       this.setPhase("error");
-      throw new Error("collab connect failed");
+      throw err;
     }
   }
 

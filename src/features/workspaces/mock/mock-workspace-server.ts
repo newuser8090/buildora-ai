@@ -1011,6 +1011,15 @@ export function handleDeleteWorkspace(
     if (key.startsWith(`${workspaceId}:`)) state.versions.delete(key);
   }
   state.activity.delete(workspaceId);
+  // Phase P21 (F5) — cascade the collaboration rooms + send-rate state too
+  // (P16/P17 state shaped like the others; without this a deleted workspace
+  // leaked room entries in the dev-server memory for its lifetime).
+  for (const key of [...state.collabRooms.keys()]) {
+    if (key.startsWith(`${workspaceId}:`)) state.collabRooms.delete(key);
+  }
+  for (const key of [...state.collabSendAttempts.keys()]) {
+    if (key.startsWith(`${workspaceId}:`)) state.collabSendAttempts.delete(key);
+  }
 }
 
 // ---------------------------------------------------------------------------
