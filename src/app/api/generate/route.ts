@@ -27,6 +27,12 @@ import { orchestrateInlineSuggestion } from "@/features/inline-editing/services/
 import { geminiInlineProvider } from "@/features/inline-editing/providers/gemini-inline-provider";
 import { ruleBasedInlineProvider } from "@/features/inline-editing/providers/rule-based-inline-provider";
 import type { Project } from "@/types/project";
+import {
+  generateRateLimited,
+  clientKeyForRequest,
+  generateRateLimitEnabled,
+  isTestForceLocalHeader,
+} from "@/features/generation/server/generate-rate-limit";
 
 // ---------------------------------------------------------------------------
 // Request validation schema
@@ -43,6 +49,13 @@ const MAX_PROMPT_LENGTH = 4000;
 const MAX_REQUEST_BYTES = 4 * 1024 * 1024;
 
 type ValidationResult = GenerateRequest | { kind: "invalid"; message: string };
+
+/**
+ * Test-only escape hatch: honors `x-buildora-force-local` in development /
+ * test only (Phase P20 — release hardening). Implementation lives in
+ * generate-rate-limit.ts (exported for unit-testing the production path).
+ */
+const forceLocalHeader = isTestForceLocalHeader;
 
 function validateRequest(body: unknown): ValidationResult {
   if (!body || typeof body !== "object") {
@@ -128,6 +141,22 @@ export async function POST(request: Request) {
   const startTime = Date.now();
 
   try {
+    // 0. Production rate limit (Phase P20 — release hardening). The generate
+    // route is the one production API surface that calls a PAID provider
+    // (Gemini) with a server-side key, and it is unauthenticated by design.
+    // Enforced in production only (dev/E2E is a local/testing surface and
+    // the matrix suite issues many requests); the ceiling is generous enough
+    // to never trip a human and tight enough to bound a flood.
+    if (generateRateLimitEnabled() && generateRateLimited(clientKeyForRequest(request))) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: { code: "RATE_LIMITED", message: "Too many requests. Try again shortly." },
+        },
+        { status: 429 },
+      );
+    }
+
     // 1. Parse and validate request (raw-text read so we can enforce a body cap)
     let body: unknown;
     try {
@@ -174,11 +203,9 @@ export async function POST(request: Request) {
 
     const prompt = validated.prompt;
 
-    // 2. Check force-local flag (server-only env var, never exposed to client)
-    // Test header x-buildora-force-local accepted for integration testing
     const forceLocal =
       process.env.BUILDORA_FORCE_LOCAL_GENERATION === "true" ||
-      request.headers.get("x-buildora-force-local") === "true";
+      forceLocalHeader(request);
 
     // 3. Select provider
     let source: "gemini" | "rule-based" = "gemini";
@@ -293,7 +320,7 @@ async function handleModify(
 ) {
   const forceLocal =
     process.env.BUILDORA_FORCE_LOCAL_GENERATION === "true" ||
-    request.headers.get("x-buildora-force-local") === "true";
+    forceLocalHeader(request);
 
   const { source, edits, warnings } = await orchestrateEdit(target, prompt, {
     gemini: geminiEditProvider,
@@ -326,7 +353,7 @@ async function handlePlanEdit(
 ) {
   const forceLocal =
     process.env.BUILDORA_FORCE_LOCAL_GENERATION === "true" ||
-    httpRequest.headers.get("x-buildora-force-local") === "true";
+    forceLocalHeader(httpRequest);
 
   const result = await orchestratePlan(
     {
@@ -381,7 +408,7 @@ async function handleInlineEdit(
 ) {
   const forceLocal =
     process.env.BUILDORA_FORCE_LOCAL_GENERATION === "true" ||
-    httpRequest.headers.get("x-buildora-force-local") === "true";
+    forceLocalHeader(httpRequest);
 
   const result = await orchestrateInlineSuggestion(
     {
