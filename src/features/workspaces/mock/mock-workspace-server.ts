@@ -87,6 +87,36 @@ interface MockPresenceSession {
   expiresAt: string;
 }
 
+// ---- Phase P16: collaboration rooms (in-memory realtime relay) ----
+//
+// One room per workspace project. Rooms carry the update log between the
+// durable checkpoint frontier and the live seq; the durable base is always the
+// current workspace project payload (the save path advances both). A client
+// that polls behind the pruned frontier is told to rebase from the base.
+
+interface MockCollabUpdate {
+  seq: number;
+  data: string; // base64-encoded Yjs update
+  actorClientId: string;
+  at: string;
+}
+
+interface MockCollabRoom {
+  workspaceId: string;
+  projectId: string;
+  seq: number;
+  checkpointSeq: number;
+  updates: MockCollabUpdate[];
+  /** Maintenance lock holder (version restore / import), userId or null. */
+  lockHolder: string | null;
+  /**
+   * Canonical shared Yjs state (base64) — set by the FIRST joiner's seed and
+   * refreshed at every durable checkpoint. Later joiners apply it via
+   * applyUpdate so every client shares identical structs (no duplication).
+   */
+  canonicalState: string | null;
+}
+
 // ---- Phase P15: project versions (durable, bounded) ----
 
 interface MockProjectVersion {
@@ -112,6 +142,7 @@ export interface MockWorkspaceState {
   presence: Map<string, MockPresenceSession>; // sessionId -> session (P15)
   activity: Map<string, WorkspaceActivityEvent[]>; // workspaceId -> events, newest first (P15)
   versions: Map<string, MockProjectVersion[]>; // `${ws}:${pid}` -> versions, newest first (P15)
+  collabRooms: Map<string, MockCollabRoom>; // `${ws}:${pid}` -> room (P16)
 }
 
 export function createMockWorkspaceState(): MockWorkspaceState {
@@ -124,6 +155,7 @@ export function createMockWorkspaceState(): MockWorkspaceState {
     presence: new Map(),
     activity: new Map(),
     versions: new Map(),
+    collabRooms: new Map(),
   };
 }
 
@@ -464,12 +496,16 @@ function presenceModeOf(
   state: MockWorkspaceState,
   session: MockPresenceSession,
 ): WorkspacePresence["mode"] {
-  // Mode is DERIVED from the edit lease — a client can never claim "editing".
+  // Phase P16 — SIMULTANEOUS EDITING: mode is DERIVED from the member's ROLE,
+  // never self-claimed. The P14 exclusive edit lease no longer gates ordinary
+  // editing (it is now the owner-only maintenance lock for restore/import), so
+  // a lease can no longer decide "editing". Editors/owners with an active
+  // presence session on the project are "editing"; viewers are "viewing".
   if (!session.projectId) return "viewing";
-  const lease = state.leases.get(projectKey(session.workspaceId, session.projectId));
-  if (lease && lease.userId === session.userId && isLeaseActive(lease)) {
-    return "editing";
-  }
+  const workspace = state.workspaces.get(session.workspaceId);
+  if (!workspace) return "viewing";
+  const role = roleOf(workspace, session.userId);
+  if (role === "owner" || role === "editor") return "editing";
   return "viewing";
 }
 
@@ -805,6 +841,16 @@ export function handleRestoreProjectVersion(
   project.name = JSON.parse(version.snapshot).name ?? project.name;
   project.revision += 1;
   project.updatedAt = nowIso();
+
+  // Phase P16 — restore replaces the whole project: reset the collaboration
+  // room so every connected client rebases from the restored durable base
+  // (never a silent partial-merge of stale updates). The canonical state is
+  // cleared too — otherwise a late joiner would apply the pre-restore structs.
+  const room = getCollabRoom(state, workspaceId, projectId);
+  room.seq += 1;
+  room.checkpointSeq = room.seq;
+  room.updates = [];
+  room.canonicalState = null;
 
   pushVersion(state, {
     workspaceId,
@@ -1383,6 +1429,8 @@ export function handleDeleteWorkspaceProject(
   // Phase P15: versions are removed with the project; presence sessions for
   // the project end; activity retains a safe metadata tombstone.
   state.versions.delete(versionKey(workspaceId, projectId));
+  // Phase P16: the collaboration room dies with the project.
+  state.collabRooms.delete(collabRoomKey(workspaceId, projectId));
   purgeProjectPresence(state, workspaceId, projectId);
   if (project) {
     pushActivity(state, user.id, workspaceId, projectId, "project.deleted", {
@@ -1652,5 +1700,297 @@ export function handleRevokeLeasesForProject(
     const allowed = workspace.ownerId === user.id || workspace.members.has(user.id);
     if (!allowed) continue;
     state.leases.delete(projectKey(lease.workspaceId, lease.projectId));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Phase P16 — collaboration rooms
+// ---------------------------------------------------------------------------
+
+const COLLAB_ROOM_MAX_UPDATES = 200;
+const COLLAB_ROOM_MAX_UPDATE_BYTES = 256 * 1024; // 256 KB (architecture §39)
+
+export interface CollabJoinResult {
+  seq: number;
+  checkpointSeq: number;
+  base: unknown;
+  /** Canonical shared Yjs state (base64) when the room already has one. */
+  state?: string;
+}
+
+export interface CollabSeedResult {
+  state: string | null;
+}
+
+export interface CollabPollResult {
+  seq: number;
+  checkpointSeq: number;
+  rebase: boolean;
+  base?: unknown;
+  updates: Array<{ seq: number; data: string; actorClientId?: string }>;
+}
+
+export interface CollabSendResult {
+  seq: number;
+}
+
+function collabRoomKey(workspaceId: string, projectId: string): string {
+  return `${workspaceId}:${projectId}`;
+}
+
+/** Get (or lazily create) the room for a workspace project. */
+function getCollabRoom(
+  state: MockWorkspaceState,
+  workspaceId: string,
+  projectId: string,
+): MockCollabRoom {
+  const key = collabRoomKey(workspaceId, projectId);
+  let room = state.collabRooms.get(key);
+  if (!room) {
+    room = {
+      workspaceId,
+      projectId,
+      seq: 0,
+      checkpointSeq: 0,
+      updates: [],
+      lockHolder: null,
+      canonicalState: null,
+    };
+    state.collabRooms.set(key, room);
+  }
+  return room;
+}
+
+/** The durable base for a room — always the current workspace project payload. */
+function collabRoomBase(
+  state: MockWorkspaceState,
+  workspaceId: string,
+  projectId: string,
+): unknown {
+  const project = requireProject(state, workspaceId, projectId);
+  return JSON.parse(project.payload) as unknown;
+}
+
+/**
+ * Advance the room's durable checkpoint frontier to `seq` and prune the
+ * retained update log below it (bounded growth — architecture §26).
+ */
+function advanceCollabCheckpoint(
+  state: MockWorkspaceState,
+  workspaceId: string,
+  projectId: string,
+  seq: number,
+): void {
+  const room = getCollabRoom(state, workspaceId, projectId);
+  if (seq > room.checkpointSeq) {
+    room.checkpointSeq = Math.min(seq, room.seq);
+  }
+  room.updates = room.updates.filter((u) => u.seq > room.checkpointSeq);
+}
+
+/** Join the room — returns the durable base + the room frontier it corresponds to. */
+export function handleCollabJoin(
+  state: MockWorkspaceState,
+  token: string | null,
+  workspaceId: string,
+  projectId: string,
+): CollabJoinResult {
+  const user = requireUser(token);
+  requireMember(state, user, workspaceId);
+  const room = getCollabRoom(state, workspaceId, projectId);
+  return {
+    seq: room.seq,
+    checkpointSeq: room.checkpointSeq,
+    base: collabRoomBase(state, workspaceId, projectId),
+    ...(room.canonicalState ? { state: room.canonicalState } : {}),
+  };
+}
+
+/** Decode a base64 string to bytes; null when malformed. */
+function tryBase64Decode(value: string): Uint8Array | null {
+  try {
+    const binary = atob(value);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Seed the room with the first joiner's init state (first writer wins). A
+ * client that loses the race receives the winner's state and re-applies it.
+ * Editors/owners only — a viewer must never poison canonical room state.
+ */
+export function handleCollabSeed(
+  state: MockWorkspaceState,
+  token: string | null,
+  workspaceId: string,
+  projectId: string,
+  input: { state?: unknown },
+): CollabSeedResult {
+  const user = requireUser(token);
+  requireEditor(state, user, workspaceId);
+  if (typeof input.state !== "string" || input.state.length === 0) {
+    throw new MockWorkspaceError(400, "PAYLOAD_INVALID", "That update isn't valid.");
+  }
+  // Size-cap the DECODED payload (base64 is 4/3 the binary size) — parity with
+  // the Supabase path's octet_length(bytea) check (architecture §39).
+  const bytes = tryBase64Decode(input.state);
+  if (bytes === null) {
+    throw new MockWorkspaceError(400, "PAYLOAD_INVALID", "That update isn't valid.");
+  }
+  if (bytes.byteLength > COLLAB_ROOM_MAX_UPDATE_BYTES) {
+    throw new MockWorkspaceError(413, "PAYLOAD_TOO_LARGE", "That state is too large to share.");
+  }
+  const room = getCollabRoom(state, workspaceId, projectId);
+  if (room.canonicalState) {
+    // Another client won the seed — tell this client to apply theirs.
+    return { state: room.canonicalState };
+  }
+  room.canonicalState = input.state;
+  return { state: null };
+}
+
+/** Relay one binary Yjs update from an editor/owner. Viewers/removed → 403. */
+export function handleCollabSend(
+  state: MockWorkspaceState,
+  token: string | null,
+  workspaceId: string,
+  projectId: string,
+  input: { update?: unknown; actorClientId?: unknown },
+): CollabSendResult {
+  const user = requireUser(token);
+  requireEditor(state, user, workspaceId);
+  const room = getCollabRoom(state, workspaceId, projectId);
+
+  // Maintenance lock (restore/import) pauses collaborative writes.
+  if (room.lockHolder && room.lockHolder !== user.id) {
+    throw new MockWorkspaceError(
+      409,
+      "LOCKED",
+      "This project is being updated by its owner right now.",
+    );
+  }
+
+  if (typeof input.update !== "string" || input.update.length === 0) {
+    throw new MockWorkspaceError(400, "PAYLOAD_INVALID", "That update isn't valid.");
+  }
+  // Size-cap the DECODED payload — parity with the Supabase path's
+  // octet_length(bytea) check (architecture §39).
+  const bytes = tryBase64Decode(input.update);
+  if (bytes === null) {
+    throw new MockWorkspaceError(400, "PAYLOAD_INVALID", "That update isn't valid.");
+  }
+  if (bytes.byteLength > COLLAB_ROOM_MAX_UPDATE_BYTES) {
+    throw new MockWorkspaceError(413, "PAYLOAD_TOO_LARGE", "That change is too large to share.");
+  }
+
+  room.seq += 1;
+  const seq = room.seq;
+  room.updates.push({
+    seq,
+    data: input.update,
+    actorClientId: typeof input.actorClientId === "string" ? input.actorClientId : "",
+    at: nowIso(),
+  });
+  if (room.updates.length > COLLAB_ROOM_MAX_UPDATES) {
+    // Bound growth: drop the oldest retained update (still after the frontier).
+    room.updates.shift();
+  }
+  return { seq };
+}
+
+/**
+ * Poll for updates after `afterSeq`. Falling behind the pruned frontier is
+ * reported as a rebase (the client re-inits from the durable base) — never a
+ * silent gap.
+ */
+export function handleCollabPoll(
+  state: MockWorkspaceState,
+  token: string | null,
+  workspaceId: string,
+  projectId: string,
+  afterSeqRaw: unknown,
+): CollabPollResult {
+  const user = requireUser(token);
+  requireMember(state, user, workspaceId);
+  const room = getCollabRoom(state, workspaceId, projectId);
+  const afterSeq = typeof afterSeqRaw === "number" ? afterSeqRaw : -1;
+
+  if (afterSeq < room.checkpointSeq) {
+    // Fell behind the durable frontier → rebase from the checkpoint.
+    return {
+      seq: room.seq,
+      checkpointSeq: room.checkpointSeq,
+      rebase: true,
+      base: collabRoomBase(state, workspaceId, projectId),
+      updates: [],
+    };
+  }
+  return {
+    seq: room.seq,
+    checkpointSeq: room.checkpointSeq,
+    rebase: false,
+    updates: room.updates
+      .filter((u) => u.seq > afterSeq)
+      .map((u) => ({ seq: u.seq, data: u.data, actorClientId: u.actorClientId })),
+  };
+}
+
+/** Prune the room's retained log after a durable save (P15 save path). */
+export function handleCollabCheckpoint(
+  state: MockWorkspaceState,
+  token: string | null,
+  workspaceId: string,
+  projectId: string,
+  input: { seq?: unknown; state?: unknown },
+): void {
+  const user = requireUser(token);
+  requireEditor(state, user, workspaceId);
+  const seq = typeof input.seq === "number" ? input.seq : -1;
+  // Refresh the canonical state BEFORE pruning (never prune then lose the
+  // snapshot a late joiner needs). Size-capped on the DECODED payload for
+  // parity with Supabase (architecture §39).
+  if (typeof input.state === "string" && input.state.length > 0) {
+    const bytes = tryBase64Decode(input.state);
+    if (bytes !== null && bytes.byteLength <= COLLAB_ROOM_MAX_UPDATE_BYTES) {
+      const room = getCollabRoom(state, workspaceId, projectId);
+      room.canonicalState = input.state;
+    }
+  }
+  advanceCollabCheckpoint(state, workspaceId, projectId, seq);
+}
+
+/** Owner-only maintenance lock (version restore / import coordination). */
+export function handleCollabLock(
+  state: MockWorkspaceState,
+  token: string | null,
+  workspaceId: string,
+  projectId: string,
+): void {
+  const user = requireUser(token);
+  requireOwner(state, user, workspaceId);
+  const room = getCollabRoom(state, workspaceId, projectId);
+  if (room.lockHolder && room.lockHolder !== user.id) {
+    throw new MockWorkspaceError(409, "LOCKED", "Another owner is updating this project right now.");
+  }
+  room.lockHolder = user.id;
+}
+
+export function handleCollabUnlock(
+  state: MockWorkspaceState,
+  token: string | null,
+  workspaceId: string,
+  projectId: string,
+): void {
+  const user = requireUser(token);
+  requireMember(state, user, workspaceId);
+  const room = getCollabRoom(state, workspaceId, projectId);
+  if (room.lockHolder === user.id) {
+    room.lockHolder = null;
   }
 }

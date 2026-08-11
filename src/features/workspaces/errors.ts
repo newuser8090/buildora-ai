@@ -134,6 +134,8 @@ export function workspaceErrorMessage(error: WorkspaceError): string {
       return "Someone else is currently editing this project.";
     case "LEASE_INVALID":
       return "Your editing session ended. Reconnect to keep editing.";
+    case "LOCKED":
+      return "This project is being updated by its owner right now — please try again shortly.";
     case "PROJECT_NOT_FOUND":
       return "That project could not be found.";
     case "VERSION_NOT_FOUND":

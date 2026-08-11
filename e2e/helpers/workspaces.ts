@@ -48,19 +48,22 @@ export async function openDashboardAndSignUp(page: Page, email: string): Promise
 
 /** Open the switcher menu and click "New workspace" → create a workspace. */
 export async function createWorkspace(page: Page, name: string): Promise<string> {
+  // P16 note: waits are 20s (not 10s) so a COLD webpack dev server's first
+  // on-demand compile of / + /api/workspaces (measured 6–14s on Windows) can
+  // never exceed the helper timeout. Timeout bumps only — no assertion changes.
   await page.locator('[data-testid="workspace-switcher"]').click();
   await page.getByRole("menuitem", { name: "New workspace", exact: true }).click();
   await expect(page.locator('[data-testid="workspace-settings-dialog"]')).toBeVisible({
-    timeout: 10000,
+    timeout: 20000,
   });
   await page.locator('[data-testid="workspace-create-name"]').fill(name);
   await page.locator('[data-testid="workspace-create-button"]').click();
   // Create closes the dialog and selects the new workspace.
   await expect(page.locator('[data-testid="workspace-settings-dialog"]')).toBeHidden({
-    timeout: 10000,
+    timeout: 20000,
   });
   await expect(page.locator('[data-testid="workspace-view-title"]')).toHaveText(name, {
-    timeout: 10000,
+    timeout: 20000,
   });
   return name;
 }

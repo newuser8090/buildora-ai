@@ -51,6 +51,9 @@ import { CollaborationDialogs } from "@/features/workspaces/components/Collabora
 import { useWorkspacePresence } from "@/features/workspaces/hooks/useWorkspacePresence";
 import { WorkspaceHistoryDialogs } from "@/features/workspaces/components/WorkspaceHistoryDialogs";
 
+// Phase P16 — real-time collaborative editing
+import { useCollaborationSession } from "@/features/collaboration/hooks/useCollaborationSession";
+
 // Phase P10 — AI Copilot panel. Lazy-loaded: normal editor interactions have
 // zero dependency on AI (opening/editing/saving work with the provider down).
 const CopilotPanel = dynamic(
@@ -367,6 +370,14 @@ function EditorShell() {
   // Phase P15 — live collaboration presence (joined while a workspace project
   // is open; heartbeated, left on unmount/switch/sign-out).
   useWorkspacePresence();
+
+  // Phase P16 — real-time collaborative editing session (starts when access
+  // resolves; editors/owners send, viewers receive live read-only). The mock
+  // transport only honors exposeTestControls (never Supabase); it gates the
+  // window bridge used by the deterministic reconnect E2E specs.
+  useCollaborationSession({
+    exposeTestControls: process.env.NODE_ENV !== "production",
+  });
 
   // Phase P12 — keeps shared projections fresh after edits (best-effort,
   // inert when no active shares exist or offline).
