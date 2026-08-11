@@ -19,6 +19,7 @@ import type {
 } from "../types";
 import type { Project } from "@/types/project";
 import { INITIAL_REVISION } from "../constants";
+import { logger } from "@/lib/logger";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -696,6 +697,31 @@ describe("ProjectController — failed-flush blocks transitions", () => {
     const stateMid = useEditorStore.getState();
     expect(stateMid.saveStatus).toBe("saved");
     await controller.shutdown();
+  });
+
+  it("a failed flush is logged for diagnostics (Phase P18 F2)", async () => {
+    const { controller } = await setupDirtyProject();
+
+    const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => undefined);
+    try {
+      const result = await controller.openProject("other-proj");
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.code).toBe("SAVE_BEFORE_TRANSITION_FAILED");
+      }
+
+      // A transition blocked by a failed flush was previously silent — the
+      // existing logger must record it so operators can diagnose persistence
+      // outages that freeze create/open/switch/delete.
+      expect(errorSpy).toHaveBeenCalled();
+      const calls = errorSpy.mock.calls.map((c) => [c[0], c[1]] as [string, string]);
+      expect(calls.some(([tag, message]) => tag === "persist" && message.includes("transition blocked"))).toBe(
+        true,
+      );
+    } finally {
+      errorSpy.mockRestore();
+      await controller.shutdown();
+    }
   });
 });
 

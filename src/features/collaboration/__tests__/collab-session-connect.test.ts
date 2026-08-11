@@ -29,6 +29,7 @@ import { setWorkspaceProviderForTests } from "@/features/workspaces/services/wor
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { getCollabCommitHook } from "../editor-commit-hook";
 import { MOCK_PROJECT } from "@/features/editor/mock/mock-project";
+import { logger } from "@/lib/logger";
 import type { Project } from "@/types/project";
 
 function baseProject(): Project {
@@ -369,6 +370,43 @@ describe("CollabSession connect-window edits", () => {
     // The session-end checkpoint flushed the edit durably.
     expect(saveMock).toHaveBeenCalledTimes(1);
     expect(transport.checkpointCalls.length).toBeGreaterThan(0);
+  });
+
+  it("a failed connect is logged for diagnostics (Phase P18 F2)", async () => {
+    useWorkspaceAccessStore.getState().setWorkspaceContext({
+      workspaceId: "ws-1",
+      workspaceName: "Acme",
+      role: "owner",
+      serverRevision: 1,
+    });
+    useWorkspaceAccessStore.getState().setAccess({ mode: "editable" });
+    useWorkspaceAccessStore.getState().setLease(null);
+
+    const transport = new FailingTransport();
+    const session = new CollabSession({
+      room,
+      clientId: "client-a",
+      canSend: true,
+      transport,
+    });
+
+    // REGRESSION (F2): a connect failure was previously swallowed with no
+    // record — a production incident (auth expiry / RLS break / network) was
+    // invisible to operators. The existing logger must record it.
+    const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => undefined);
+    try {
+      await session.start();
+      expect(errorSpy).toHaveBeenCalled();
+      const calls = errorSpy.mock.calls.map((c) => [c[0], c[1]] as [string, string]);
+      expect(
+        calls.some(
+          ([tag, message]) => tag === "collab" && message.includes("connect failed"),
+        ),
+      ).toBe(true);
+    } finally {
+      errorSpy.mockRestore();
+      await session.stop();
+    }
   });
 
   it("connect failure with pre-connect edits falls back to local persistence (Phase P17 F2b)", async () => {

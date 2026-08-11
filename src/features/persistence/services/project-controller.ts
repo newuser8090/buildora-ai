@@ -35,6 +35,7 @@ import { validateProjectName } from "@/features/projects/utils/validate-project-
 import { TemplateProjectFactory } from "@/features/templates/services/template-project-factory";
 import { registerDefaultTemplates } from "@/features/templates/registry/register-default-templates";
 import { recordPerf } from "@/features/perf/perf-instrumentation";
+import { logger } from "@/lib/logger";
 
 // ---------------------------------------------------------------------------
 // Controller
@@ -638,12 +639,20 @@ export class ProjectController {
           store.setSaveStatus("unsaved");
         }
       } else {
+        // Phase P18 (F2) — a failed explicit save must be diagnosable. The
+        // code is embedded in the message (survives production redaction).
+        logger.error("persist", `save failed (${result.error?.code ?? "UNKNOWN"})`, {
+          projectId: useEditorStore.getState().activeProjectId,
+        });
         useEditorStore.getState().setPersistenceError(result.error);
         useEditorStore.getState().setSaveStatus("error");
       }
       return result;
     } catch (err) {
       const error = toControllerError(err);
+      logger.error("persist", `save threw (${error.code})`, {
+        projectId: useEditorStore.getState().activeProjectId,
+      });
       useEditorStore.getState().setPersistenceError(error);
       useEditorStore.getState().setSaveStatus("error");
       return { success: false, error };
@@ -847,7 +856,14 @@ export class ProjectController {
     try {
       const result = await this.coordinator.flush();
       if (!result.success) {
-        // Flush failed — preserve current state
+        // Flush failed — preserve current state. Phase P18 (F2) — this
+        // blocks a create/open/switch/delete and must be diagnosable. The
+        // code is embedded in the message (survives production redaction).
+        logger.error(
+          "persist",
+          `transition blocked by failed flush (${result.error?.code ?? "UNKNOWN"})`,
+          { projectId: store.project.id },
+        );
         useEditorStore.getState().setPersistenceError(result.error);
         useEditorStore.getState().setSaveStatus("error");
         return {
@@ -942,6 +958,11 @@ export class ProjectController {
           break;
         }
         case "error":
+          // Phase P18 (F2) — autosave failures are otherwise invisible. The
+          // code is embedded in the message (survives production redaction).
+          logger.error("persist", `autosave failed (${state.error?.code ?? "UNKNOWN"})`, {
+            projectId: state.projectId,
+          });
           store.setPersistenceError(state.error ?? null);
           store.setSaveStatus("error");
           break;
