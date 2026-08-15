@@ -8,6 +8,7 @@ import {
   resolveInternalHref,
   type PageRoute,
 } from "@/features/routing/routes";
+import { buildValidatedCustomCodeSrcdoc } from "@/features/elements/custom-code/srcdoc";
 import type { OutputFile } from "../pipeline/types";
 
 // ---------------------------------------------------------------------------
@@ -216,7 +217,14 @@ export function generatePageFile(
     const info = SECTION_COMPONENTS[section.type];
     if (!info) continue;
 
-    const propsLines = serializePropsForComponent(section, manifest, routes);
+    // Phase P23-C — custom-block sections may carry OPT-IN custom code. The
+    // emitted tree keeps only the `enabled` flag (never the code text), and
+    // validated sandbox documents are passed separately via `srcdocs`, so the
+    // generated parent page contains no directly executable user code.
+    const serializableSection =
+      section.type === "custom-block" ? customBlockSectionForExport(section) : section;
+    const propsLines = serializePropsForComponent(serializableSection, manifest, routes);
+
     // Phase P22-G — custom-block sections carry typed NavTargets inside their
     // element trees. The exported CustomBlock needs the page route map to
     // resolve them to real exported routes (pageId → routeUrl).
@@ -224,7 +232,11 @@ export function generatePageFile(
       const routeMap = JSON.stringify(
         Object.fromEntries(routes.map((route) => [route.page.id, route.routeUrl])),
       );
-      rendered.push(`      <${info.componentName} key="${section.id}" ${propsLines} routes={${routeMap}} />`);
+      // Phase P23-C — srcdocs prop is omitted entirely when no custom-code
+      // element is enabled (projects without custom code stay unchanged).
+      const srcdocs = buildCustomCodeSrcdocsForSection(section);
+      const srcdocsAttr = srcdocs ? ` srcdocs={${serializeSrcdocsForExport(srcdocs)}}` : "";
+      rendered.push(`      <${info.componentName} key="${section.id}" ${propsLines} routes={${routeMap}}${srcdocsAttr} />`);
       continue;
     }
     rendered.push(`      <${info.componentName} key="${section.id}" ${propsLines} />`);
@@ -468,4 +480,98 @@ function resolveLinkFields(
 function jsonReplacer(_key: string, value: unknown): unknown {
   if (value === undefined) return null;
   return value;
+}
+
+// ---------------------------------------------------------------------------
+// Phase P23-C — custom-code srcdocs for custom-block sections
+//
+// The ONLY srcdoc construction path is buildValidatedCustomCodeSrcdoc (schema
+// validation → enabled === true → deterministic clamping → buildCustomCodeDocument).
+// The page module carries:
+//   - the tree with customCode reduced to { enabled: true } (never the code
+//     text) so the parent page holds no user code;
+//   - the validated srcdoc documents in a separate `srcdocs` prop, with every
+//     "<" escaped to its \u003c JSON escape so the module source contains no
+//     literal script/style sequence (the JS/JSON decoder restores the exact
+//     document, which only ever executes inside the sandboxed iframe).
+// ---------------------------------------------------------------------------
+
+/**
+ * Deep-copy a custom-block section for JSX serialization, reducing every
+ * node's customCode to its `enabled` flag. Enabled nodes keep `{ enabled:
+ * true }` (the generated NodeView requires the opt-in flag); disabled/absent
+ * customCode is dropped entirely so the emitted tree never carries code text.
+ * Non-custom-code fields are preserved byte-for-byte (shallow copy + JSON
+ * serialization keeps key order).
+ */
+function customBlockSectionForExport(section: BaseSection): BaseSection {
+  const props = section.props as Record<string, unknown>;
+  const rawTree = props.tree as
+    | { nodes?: Record<string, unknown> }
+    | undefined;
+  if (!rawTree || typeof rawTree !== "object" || !rawTree.nodes || typeof rawTree.nodes !== "object") {
+    return section;
+  }
+
+  const nodes: Record<string, unknown> = {};
+  for (const [id, node] of Object.entries(rawTree.nodes)) {
+    if (!node || typeof node !== "object" || Array.isArray(node)) {
+      nodes[id] = node;
+      continue;
+    }
+    const next: Record<string, unknown> = { ...(node as Record<string, unknown>) };
+    const customCode = (node as Record<string, unknown>).customCode;
+    if (customCode && typeof customCode === "object" && !Array.isArray(customCode)) {
+      if ((customCode as { enabled?: unknown }).enabled === true) {
+        next.customCode = { enabled: true };
+      } else {
+        delete next.customCode;
+      }
+    }
+    nodes[id] = next;
+  }
+
+  return {
+    ...section,
+    props: { ...props, tree: { ...rawTree, nodes } },
+  };
+}
+
+/**
+ * Build the `srcdocs` map (nodeId → validated srcdoc) for a custom-block
+ * section. One entry per node with EXPLICITLY ENABLED, schema-valid custom
+ * code; every document comes from the single authoritative builder. Returns
+ * null when no node qualifies (callers omit the srcdocs prop entirely).
+ */
+function buildCustomCodeSrcdocsForSection(
+  section: BaseSection,
+): Record<string, string> | null {
+  const props = section.props as Record<string, unknown> | undefined;
+  const tree = props?.tree as { nodes?: Record<string, unknown> } | undefined;
+  if (!tree || !tree.nodes || typeof tree.nodes !== "object") return null;
+
+  const srcdocs: Record<string, string> = {};
+  for (const [nodeId, node] of Object.entries(tree.nodes)) {
+    if (!node || typeof node !== "object" || Array.isArray(node)) continue;
+    const customCode = (node as Record<string, unknown>).customCode;
+    if (customCode === undefined || customCode === null) continue;
+    const srcdoc = buildValidatedCustomCodeSrcdoc(customCode);
+    if (srcdoc === null) continue;
+    srcdocs[nodeId] = srcdoc;
+  }
+  return Object.keys(srcdocs).length > 0 ? srcdocs : null;
+}
+
+/**
+ * Serialize the srcdocs map as a JSX expression literal. Every "<" in each
+ * document is escaped to its \u003c JSON escape, so the emitted module source
+ * contains no literal script/style sequence; JSON decoding restores the
+ * exact document at runtime (inside the sandboxed iframe only).
+ */
+function serializeSrcdocsForExport(srcdocs: Record<string, string>): string {
+  const entries = Object.entries(srcdocs).map(([nodeId, srcdoc]) => {
+    const encoded = JSON.stringify(srcdoc).replace(/</g, "\\u003c");
+    return `${JSON.stringify(nodeId)}:${encoded}`;
+  });
+  return `{${entries.join(",")}}`;
 }

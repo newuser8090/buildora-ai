@@ -20,6 +20,7 @@
 
 import {
   ELEMENT_MAX_CHILDREN,
+  ELEMENT_MAX_CUSTOM_CODE_LENGTH,
   ELEMENT_MAX_DEPTH,
   ELEMENT_MAX_NODES,
   ELEMENT_MAX_PROPS_KEYS,
@@ -60,23 +61,30 @@ function isUnsafeKey(key: string): boolean {
   );
 }
 
-function clampText(value: unknown): string | null {
+function clampText(value: unknown, cap: number): string | null {
   if (typeof value !== "string") return null;
-  return value.length > ELEMENT_MAX_TEXT_LENGTH
-    ? value.slice(0, ELEMENT_MAX_TEXT_LENGTH)
-    : value;
+  return value.length > cap ? value.slice(0, cap) : value;
 }
 
-/** Recursively sanitize arbitrary JSON (drop unsafe keys + unsafe values + cap text). */
-function sanitizeJson(value: unknown): unknown {
+/**
+ * Recursively sanitize arbitrary JSON (drop unsafe keys + unsafe values + cap
+ * text). `textCap` bounds every string; prose fields use the prose cap, while
+ * custom-code payloads (Phase P23) use their own 20k code cap so stored code
+ * survives normalization up to the schema boundary (the schema remains the
+ * enforcer). Booleans/numbers pass through untouched — `enabled` survives.
+ */
+function sanitizeJson(
+  value: unknown,
+  textCap: number = ELEMENT_MAX_TEXT_LENGTH,
+): unknown {
   if (Array.isArray(value)) {
-    return value.map(sanitizeJson).filter((item) => item !== undefined);
+    return value.map((item) => sanitizeJson(item, textCap)).filter((item) => item !== undefined);
   }
   if (isPlainObject(value)) {
     const out: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value)) {
       if (isUnsafeKey(key)) continue;
-      const cleaned = sanitizeJson(val);
+      const cleaned = sanitizeJson(val, textCap);
       if (cleaned === undefined) continue;
       out[key] = cleaned;
     }
@@ -86,7 +94,7 @@ function sanitizeJson(value: unknown): unknown {
     // Unsafe CSS values (javascript:/expression/…) are never part of the
     // model — drop the value entirely so the boundary stays clean.
     if (!isSafeElementCssValue(value)) return undefined;
-    return clampText(value) ?? "";
+    return clampText(value, textCap) ?? "";
   }
   return value;
 }
@@ -146,9 +154,16 @@ function buildElementNode(
   };
 
   // Carry element metadata through (schema-validated below; never trusted).
+  // Custom-code payloads use the code cap (20k), not the prose cap (4k), so
+  // authored code is not truncated below its schema limit during repair;
+  // `enabled` (a boolean) survives sanitizeJson untouched and legacy payloads
+  // without it default to false at schema parse.
   for (const key of ELEMENT_METADATA_KEYS) {
     if (raw[key] !== undefined && raw[key] !== null) {
-      candidate[key] = sanitizeJson(raw[key]);
+      candidate[key] =
+        key === "customCode"
+          ? sanitizeJson(raw[key], ELEMENT_MAX_CUSTOM_CODE_LENGTH)
+          : sanitizeJson(raw[key]);
     }
   }
 

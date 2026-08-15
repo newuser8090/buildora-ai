@@ -174,6 +174,12 @@ export interface ElementAccessibility {
 // ---------------------------------------------------------------------------
 
 export interface ElementCustomCode {
+  /**
+   * Opt-in execution flag (Phase P23). Custom code is INERT DATA until this
+   * is explicitly true — imported/legacy payloads stay disabled by default.
+   * Absent/false means the code is never emitted or run anywhere.
+   */
+  enabled?: boolean;
   css?: string;
   js?: string;
   html?: string;
@@ -283,6 +289,12 @@ export interface ElementDefinition {
     supportsAnimation?: boolean;
     supportsInteraction?: boolean;
     supportsBinding?: boolean;
+    /**
+     * Whether this element type may carry user-authored custom code (P23).
+     * Opt-in per registry definition — never broad. Only types with this flag
+     * are eligible for the custom-code authoring/emission surfaces.
+     */
+    supportsCustomCode?: boolean;
     /** Future single-renderer mapping key (P22-B). */
     rendererKey?: string;
   };
