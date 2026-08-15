@@ -14,6 +14,7 @@
 import {
   ElementAnimationSchema,
   ElementBindingSchema,
+  ElementCustomCodeSchema,
   ElementGeometrySchema,
   ElementInteractionSchema,
   ElementStyleTokensSchema,
@@ -24,6 +25,7 @@ import {
   setElementLocked,
   updateElementAccessibility,
   updateElementAnimation,
+  updateElementCustomCode,
   updateElementGeometry,
   updateElementInteraction,
   updateElementProps,
@@ -34,6 +36,7 @@ import type {
   ElementAccessibility,
   ElementAnimation,
   ElementBinding,
+  ElementCustomCode,
   ElementGeometry,
   ElementInteraction,
   ElementNode,
@@ -185,6 +188,21 @@ export function validateInspectorFieldValue(
         return {
           ok: false,
           error: parsed.error.issues[0]?.message ?? "Invalid binding.",
+        };
+      }
+      return { ok: true, value: parsed.data };
+    }
+    case "custom-code": {
+      // Phase P23-D — null/undefined clears custom code; otherwise the whole
+      // ElementCustomCode object must pass the shared schema boundary (which
+      // enforces per-field 20k + aggregate 48k caps and defaults `enabled` to
+      // false, so authored code stays inert until explicitly enabled).
+      if (raw === null || raw === undefined) return { ok: true, value: null };
+      const parsed = ElementCustomCodeSchema.safeParse(raw);
+      if (!parsed.success) {
+        return {
+          ok: false,
+          error: parsed.error.issues[0]?.message ?? "Invalid custom code.",
         };
       }
       return { ok: true, value: parsed.data };
@@ -432,6 +450,15 @@ export function applyInspectorFieldChange(
       tree,
       elementId,
       (normalized === null ? null : (normalized as ElementBinding)),
+    );
+  }
+  // Phase P23-D — whole-object custom code. null clears the field entirely;
+  // anything else is re-validated by the operation's schema boundary.
+  if (field.source === "customCode") {
+    return updateElementCustomCode(
+      tree,
+      elementId,
+      (normalized === null ? null : (normalized as ElementCustomCode)),
     );
   }
 

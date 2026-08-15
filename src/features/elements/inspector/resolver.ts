@@ -70,6 +70,9 @@ export function readRawFieldValue(node: ElementNode, field: InspectorFieldDef): 
     // Phase P22-J — whole-object data binding metadata.
     case "binding":
       return node.binding;
+    // Phase P23-D — whole-object custom code metadata.
+    case "customCode":
+      return node.customCode;
     default:
       return undefined;
   }

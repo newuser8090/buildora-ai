@@ -28,6 +28,7 @@ import { RadiusField, ShadowField, SpacingField } from "./controls/SurfaceFields
 import { AnimationField } from "./controls/AnimationField";
 import { InteractionField } from "./controls/InteractionField";
 import { BindingField } from "./controls/BindingField";
+import { CustomCodeField } from "./controls/CustomCodeField";
 
 export interface InspectorFieldProps {
   field: InspectorFieldDef;
@@ -189,6 +190,19 @@ export function InspectorField({
           value={resolved.value}
           node={node}
           collections={collections ?? []}
+          disabled={disabled}
+          onCommit={handleCommit}
+        />
+      );
+
+    // Phase P23-D — composite declarative custom code editor (leaf content
+    // blocks only). It authors the whole ElementCustomCode object and commits
+    // through the same validated path (null clears it entirely).
+    case "custom-code":
+      return (
+        <CustomCodeField
+          field={field}
+          value={resolved.value}
           disabled={disabled}
           onCommit={handleCommit}
         />

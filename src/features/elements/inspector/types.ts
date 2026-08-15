@@ -44,7 +44,11 @@ export type InspectorFieldKind =
   // Phase P22-J — the whole ElementBinding object (source/collectionId/path/
   // field) authored in a bespoke control and committed through the same
   // validated field path (source "binding" → updateElementBinding).
-  | "binding";
+  | "binding"
+  // Phase P23-D — the whole ElementCustomCode object (html/css/js) authored
+  // in a bespoke control (leaf content blocks only) and committed through the
+  // same validated field path (source "customCode" → updateElementCustomCode).
+  | "custom-code";
 
 // ---------------------------------------------------------------------------
 // Value source — where a field's value lives on the ElementNode
@@ -62,7 +66,9 @@ export type InspectorValueSource =
   /** Phase P22-G — the whole ElementInteraction object on the node. */
   | "interaction"
   /** Phase P22-J — the whole ElementBinding object on the node. */
-  | "binding";
+  | "binding"
+  /** Phase P23-D — the whole ElementCustomCode object on the node. */
+  | "customCode";
 
 export interface InspectorFieldOption {
   value: string;
@@ -118,7 +124,9 @@ export type InspectorSectionId =
   | "animation"
   | "interactions"
   // Phase P22-J — data binding (universal group).
-  | "data";
+  | "data"
+  // Phase P23-D — custom code (leaf content blocks only; never universal).
+  | "custom-code";
 
 export interface InspectorSectionDef {
   id: InspectorSectionId;

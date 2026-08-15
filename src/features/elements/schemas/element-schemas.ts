@@ -34,6 +34,8 @@ export const ELEMENT_MAX_VIEWPORT_KEYS = 2;
 export const ELEMENT_MAX_RESPONSIVE_BREAKPOINTS = 5;
 export const ELEMENT_MAX_STRING_LENGTH = 120;
 export const ELEMENT_MAX_CUSTOM_CODE_LENGTH = 20_000;
+/** Aggregate cap across css+js+html (bounds the emitted sandbox document). */
+export const ELEMENT_MAX_CUSTOM_CODE_TOTAL = 48_000;
 export const ELEMENT_MAX_ATTRIBUTES = 16;
 export const ELEMENT_MAX_GEOMETRY_VALUE = 10_000;
 export const ELEMENT_MAX_ANIMATION_DURATION = 60_000;
@@ -270,18 +272,30 @@ export const ElementAccessibilitySchema = z.object({
   focusable: z.boolean().optional(),
 });
 
-export const ElementCustomCodeSchema = z.object({
-  css: z.string().max(ELEMENT_MAX_CUSTOM_CODE_LENGTH).optional(),
-  js: z.string().max(ELEMENT_MAX_CUSTOM_CODE_LENGTH).optional(),
-  html: z.string().max(ELEMENT_MAX_CUSTOM_CODE_LENGTH).optional(),
-  attributes: z
-    .record(z.string().max(128), z.string().max(2048))
-    .refine(
-      (record) => Object.keys(record).length <= ELEMENT_MAX_ATTRIBUTES,
-      { message: "Too many custom attributes." },
-    )
-    .optional(),
-});
+export const ElementCustomCodeSchema = z
+  .object({
+    // Phase P23 — explicit opt-in. Custom code is inert data until enabled;
+    // absent/legacy payloads default to false (never executed anywhere).
+    enabled: z.boolean().default(false),
+    css: z.string().max(ELEMENT_MAX_CUSTOM_CODE_LENGTH).optional(),
+    js: z.string().max(ELEMENT_MAX_CUSTOM_CODE_LENGTH).optional(),
+    html: z.string().max(ELEMENT_MAX_CUSTOM_CODE_LENGTH).optional(),
+    attributes: z
+      .record(z.string().max(128), z.string().max(2048))
+      .refine(
+        (record) => Object.keys(record).length <= ELEMENT_MAX_ATTRIBUTES,
+        { message: "Too many custom attributes." },
+      )
+      .optional(),
+  })
+  .refine(
+    (value) =>
+      (value.css?.length ?? 0) +
+        (value.js?.length ?? 0) +
+        (value.html?.length ?? 0) <=
+      ELEMENT_MAX_CUSTOM_CODE_TOTAL,
+    { message: "Custom code exceeds the total size limit." },
+  );
 
 // ---------------------------------------------------------------------------
 // Node / tree schemas

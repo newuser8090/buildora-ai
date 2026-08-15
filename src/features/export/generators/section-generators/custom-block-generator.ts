@@ -25,6 +25,7 @@
 // ---------------------------------------------------------------------------
 
 import type { OutputFile } from "../../pipeline/types";
+import { SANDBOX_POLICY } from "@/features/elements/custom-code/sandbox-policy";
 
 export function generateCustomBlockComponent(): OutputFile {
   const content = `"use client";
@@ -63,6 +64,9 @@ export interface BlockNode {
     scroll?: { kind: string; animation?: Record<string, unknown> } | null;
     load?: Record<string, unknown> | null;
   } | null;
+  // Phase P23-C — custom-code opt-in flag (data only; the validated sandbox
+  // documents travel separately via the srcdocs prop).
+  customCode?: { enabled?: boolean };
   visible: boolean;
   locked: boolean;
   hidden: boolean;
@@ -79,6 +83,9 @@ export interface CustomBlockProps {
   // Phase P22-G — page route map (pageId → href) used to resolve typed
   // NavTargets; unknown page ids resolve inert (never a dead/unsafe link).
   routes?: Record<string, string>;
+  // Phase P23-C — validated sandbox documents for nodes with EXPLICITLY
+  // ENABLED custom code (nodeId → srcdoc). Absent when no node qualifies.
+  srcdocs?: Record<string, string>;
 }
 
 // ---- Safe URL policy (Buildora) ----
@@ -567,8 +574,42 @@ function IconGlyph() {
   );
 }
 
-function NodeView({ node, tree, width, routes }: { node: BlockNode; tree: BlockTree; width: number; routes: Record<string, string> }) {
+// Phase P23-C — the authoritative sandbox capability set (P23-B). The iframe
+// grants allow-scripts ONLY: an opaque origin and no navigation/popup/form
+// capabilities. Custom code runs ONLY inside this frame.
+const CUSTOM_CODE_SANDBOX = ${JSON.stringify(SANDBOX_POLICY)};
+
+// Phase P23-C — renders ONE validated custom-code srcdoc inside the
+// sandboxed iframe. The frame is the only surface where custom code may
+// execute; the srcdoc itself carries the internal sandbox CSP. The document
+// is delivered via srcDoc — never injected into the parent document.
+function CustomCodeFrame({ srcDoc }: { srcDoc: string }) {
+  return (
+    <iframe
+      sandbox={CUSTOM_CODE_SANDBOX}
+      srcDoc={srcDoc}
+      title="Custom code"
+      style={{ width: "100%", border: "none", display: "block" }}
+    />
+  );
+}
+
+function NodeView({ node, tree, width, routes, srcdocs }: { node: BlockNode; tree: BlockTree; width: number; routes: Record<string, string>; srcdocs: Record<string, string> }) {
   const css = blockStyle(node.style, node.responsive, node.viewport, width);
+
+  // Phase P23-C — a node with EXPLICITLY ENABLED custom code renders inside
+  // the sandboxed iframe, but only when BOTH conditions hold: the tree data
+  // opts in (enabled === true) AND a validated srcdoc for this node was
+  // computed at generation time (the srcdocs map). Data alone never executes
+  // here — without a matching srcdoc the node renders exactly as before.
+  const srcdoc = node.customCode?.enabled === true ? srcdocs[node.id] : undefined;
+  if (srcdoc) {
+    return (
+      <div data-block-id={node.id} style={{ width: "100%", ...css }}>
+        <CustomCodeFrame srcDoc={srcdoc} />
+      </div>
+    );
+  }
 
   // Phase P22-G — animation presentation (additive; nodes without animation
   // data render exactly as before).
@@ -600,7 +641,7 @@ function NodeView({ node, tree, width, routes }: { node: BlockNode; tree: BlockT
     .filter((child): child is BlockNode => !!child && child.visible !== false);
 
   const renderChildren = () =>
-    children.map((child) => <NodeView key={child.id} node={child} tree={tree} width={width} routes={routes} />);
+    children.map((child) => <NodeView key={child.id} node={child} tree={tree} width={width} routes={routes} srcdocs={srcdocs} />);
 
   const click = baResolveClick(node, tree, routes);
   const wrapContent = (elm: React.ReactNode): React.ReactNode => {
@@ -856,7 +897,7 @@ function useScrollReveal(
   }, [tree, active, containerRef]);
 }
 
-export function CustomBlock({ tree, name, routes = {} }: CustomBlockProps) {
+export function CustomBlock({ tree, name, routes = {}, srcdocs = {} }: CustomBlockProps) {
   const width = useViewportWidth();
   const presentation = useMemo(() => baTreePresentation(tree, routes), [tree, routes]);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -866,7 +907,7 @@ export function CustomBlock({ tree, name, routes = {} }: CustomBlockProps) {
   }
   const roots = tree.rootIds.map((id) => tree.nodes[id]).filter((node) => !!node && node.visible !== false);
   const content = roots.map((node) => (
-    <NodeView key={node.id} node={node} tree={tree} width={width} routes={routes} />
+    <NodeView key={node.id} node={node} tree={tree} width={width} routes={routes} srcdocs={srcdocs} />
   ));
   if (presentation.needsReveal) {
     return (

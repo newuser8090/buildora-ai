@@ -117,6 +117,9 @@ function cloneNode(node: ElementNode): ElementNode {
   if (node.a11y) cloned.a11y = { ...node.a11y };
   if (node.customCode) {
     cloned.customCode = {
+      // Phase P23 — preserve the explicit opt-in flag (absent/false stay
+      // disabled; only `enabled: true` is carried forward).
+      ...(node.customCode.enabled === true ? { enabled: true } : {}),
       ...(node.customCode.css ? { css: node.customCode.css } : {}),
       ...(node.customCode.js ? { js: node.customCode.js } : {}),
       ...(node.customCode.html ? { html: node.customCode.html } : {}),
@@ -748,7 +751,11 @@ export function updateElementCustomCode(
 ): ElementResult<ElementTree> {
   const nodeResult = requireNode(tree, elementId);
   if (!nodeResult.ok) return nodeResult;
-  if (code !== null) {
+  const next = cloneTree(tree);
+  const updated: ElementNode = { ...next.nodes[elementId] };
+  if (code === null) {
+    delete updated.customCode;
+  } else {
     const parsed = ElementCustomCodeSchema.safeParse(code);
     if (!parsed.success) {
       return metadataError(
@@ -756,11 +763,11 @@ export function updateElementCustomCode(
         parsed.error.issues[0]?.message ?? "Invalid custom code payload.",
       );
     }
+    // Phase P23 — store the SCHEMA-PARSED value (like the sibling metadata
+    // ops), so `enabled` is deterministically defaulted to false for legacy
+    // payloads and preserved as true when explicitly requested.
+    updated.customCode = parsed.data;
   }
-  const next = cloneTree(tree);
-  const updated: ElementNode = { ...next.nodes[elementId] };
-  if (code === null) delete updated.customCode;
-  else updated.customCode = code;
   next.nodes[elementId] = updated;
   return validateResult(next);
 }

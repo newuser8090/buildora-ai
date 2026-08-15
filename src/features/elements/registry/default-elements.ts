@@ -198,7 +198,13 @@ export const ELEMENT_ONLY_DEFINITIONS: ElementDefinition[] = [
     validateProps: schemaToValidateProps(CustomComponentElementPropsSchema),
     keywords: ["custom", "component", "advanced", "widget"],
     beginnerFriendly: false,
-    editor: { defaultLayout: "flow", supportsViewportOverrides: true, rendererKey: "custom-component" },
+    // Phase P23-D — custom-component is NOT a custom-code authoring vehicle:
+    // it is configured by data, never code, and stays unrelated to P23.
+    editor: {
+      defaultLayout: "flow",
+      supportsViewportOverrides: true,
+      rendererKey: "custom-component",
+    },
   }),
 ];
 

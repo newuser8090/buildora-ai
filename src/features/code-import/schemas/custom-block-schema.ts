@@ -22,6 +22,7 @@ import { ALL_BLOCK_TYPES } from "@/features/blocks/registry/default-blocks";
 import {
   ElementAnimationSchema,
   ElementBindingSchema,
+  ElementCustomCodeSchema,
   ElementInteractionSchema,
 } from "@/features/elements/schemas/element-schemas";
 import type { ImportedCodeLanguage } from "../types";
@@ -320,6 +321,13 @@ export const CustomBlockNodeSchema = z.object({
   // allow-listed — malformed payloads are rejected at the persistence
   // boundary (same posture as geometry/viewport).
   binding: ElementBindingSchema.optional(),
+  // Phase P23-C — OPTIONAL custom code on stored custom-block nodes (the
+  // P23-A model re-validated verbatim; INERT DATA until `enabled` is
+  // explicitly true — persistence never executes anything). Additive: old
+  // stored trees (without customCode) still validate; new trees may carry
+  // it. Bounded and allow-listed — malformed payloads are rejected at the
+  // persistence boundary (same posture as geometry/viewport/binding).
+  customCode: ElementCustomCodeSchema.optional(),
   props: z.custom<Record<string, unknown>>(
     (value) => {
       if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -375,17 +383,18 @@ export type ValidatedCustomBlockSectionProps = z.infer<typeof CustomBlockSection
 // Normalization / repair — malformed or legacy custom blocks
 // ---------------------------------------------------------------------------
 
-// Phase P22-B/P22-C/P22-G/P22-J — stored custom-block nodes MAY carry
+// Phase P22-B/P22-C/P22-G/P22-J/P23-C — stored custom-block nodes MAY carry
 // optional freeform geometry, Canva-first viewport overrides, declarative
-// animations and interactions, and data bindings (additive runtime fields
-// beyond the base BlockNode type). The intersection type keeps the normalizer
-// honest about what it preserves.
+// animations and interactions, data bindings, and custom code (additive
+// runtime fields beyond the base BlockNode type). The intersection type
+// keeps the normalizer honest about what it preserves.
 type StoredCustomBlockNode = BlockNode & {
   geometry?: z.infer<typeof NodeGeometrySchema>;
   viewport?: z.infer<typeof NodeViewportSchema>;
   animation?: z.infer<typeof ElementAnimationSchema>;
   interaction?: z.infer<typeof ElementInteractionSchema>;
   binding?: z.infer<typeof ElementBindingSchema>;
+  customCode?: z.infer<typeof ElementCustomCodeSchema>;
 };
 
 /**
@@ -473,6 +482,14 @@ export function normalizeCustomBlockTree(input: unknown): BlockTree | null {
     const parsedBinding =
       node.binding === undefined ? undefined : ElementBindingSchema.safeParse(node.binding);
 
+    // Phase P23-C — carry OPTIONAL custom code through repair, validated by
+    // the SHARED P23-A schema (per-field 20k + aggregate 48k caps enforced at
+    // parse); malformed payloads are DROPPED — inert data never weakens the
+    // boundary. Legacy payloads without `enabled` parse with enabled=false,
+    // so they stay inert on reload (never emitted anywhere).
+    const parsedCustomCode =
+      node.customCode === undefined ? undefined : ElementCustomCodeSchema.safeParse(node.customCode);
+
     nodes[id] = {
       id,
       type: node.type as BlockNode["type"],
@@ -483,6 +500,7 @@ export function normalizeCustomBlockTree(input: unknown): BlockTree | null {
       animation: parsedAnimation && parsedAnimation.success ? parsedAnimation.data : undefined,
       interaction: parsedInteraction && parsedInteraction.success ? parsedInteraction.data : undefined,
       binding: parsedBinding && parsedBinding.success ? parsedBinding.data : undefined,
+      customCode: parsedCustomCode && parsedCustomCode.success ? parsedCustomCode.data : undefined,
       props: sanitizeRecord(node.props, MAX_CUSTOM_BLOCK_PROPS_KEYS),
       style: sanitizeRecord(node.style, MAX_CUSTOM_BLOCK_STYLE_KEYS),
       responsive: {},

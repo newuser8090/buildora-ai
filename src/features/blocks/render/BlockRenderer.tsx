@@ -34,6 +34,7 @@ import {
   Globe,
   Menu,
   User,
+  Code2,
   type LucideIcon,
 } from "lucide-react";
 import type { BlockNode, BlockTree } from "../types";
@@ -45,7 +46,7 @@ import {
   resolveInteractionPresentation,
   type ResolvedClickAction,
 } from "@/features/elements/interactions/present";
-import type { ElementTree } from "@/features/elements/types";
+import type { ElementNode, ElementTree } from "@/features/elements/types";
 import { blockRegistry } from "../registry/block-registry";
 import { blockCss, styleTokensToCss } from "./block-style-to-css";
 import { applyBlockPresentation } from "./block-presentation";
@@ -473,6 +474,45 @@ function BlockNodeRenderer({
     if (css.borderRadius === undefined) {
       css.borderRadius = "6px";
     }
+  }
+
+  // Phase P23-D — a node with EXPLICITLY ENABLED custom code renders as an
+  // INERT placeholder in every editor/preview/thumbnail/share surface. Custom
+  // code only ever executes in the published site's sandboxed iframe (P23-C);
+  // this renderer NEVER mounts an iframe/srcDoc and NEVER executes user
+  // HTML/CSS/JS. Selection/click behavior is preserved through wrapProps, and
+  // the block's own styles keep the placeholder sized like the real node.
+  // Disabled custom code (or none) renders exactly as before. This check runs
+  // after every hook and after the hidden/visible early return, so hook call
+  // order stays unconditional.
+  if ((node as ElementNode).customCode?.enabled === true) {
+    return (
+      <div
+        {...wrapProps}
+        style={css}
+        data-testid="block-custom-code-placeholder"
+        title="Custom code runs only in the published site"
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "0.5rem",
+            minHeight: "3rem",
+            padding: "0.75rem",
+            border: "1px dashed var(--border, #e5e5e5)",
+            borderRadius: "0.5rem",
+            background: "var(--muted, #f5f5f5)",
+            color: "var(--muted-foreground, #737373)",
+            fontSize: "0.75rem",
+          }}
+        >
+          <Code2 className="h-3.5 w-3.5" aria-hidden="true" />
+          Custom code — previews only in the published site
+        </div>
+      </div>
+    );
   }
 
   const baseChildren = (renderChild: (child: BlockNode) => React.ReactNode) =>

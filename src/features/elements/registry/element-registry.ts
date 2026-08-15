@@ -24,6 +24,26 @@ import { isElementOnlyType } from "../types";
 import { schemaToValidateProps } from "./validate-props-helper";
 import { GenericElementPropsSchema } from "../schemas/element-props-schemas";
 
+// ---------------------------------------------------------------------------
+// Phase P23-D — the curated leaf-block types eligible for user-authored custom
+// code
+//
+// The capability is opt-in per registry definition and granted ONLY to these
+// seven leaf content blocks (no children, single visual unit). Containers,
+// composites, interactive/form blocks, navigation, and custom-component stay
+// ineligible — custom code is never a broad capability.
+// ---------------------------------------------------------------------------
+
+const CUSTOM_CODE_LEAF_TYPES = new Set<BlockType>([
+  "heading",
+  "paragraph",
+  "button",
+  "badge",
+  "image",
+  "video",
+  "icon",
+]);
+
 /** Map a Phase O block definition to its element definition (additive view). */
 function deriveElementDefinitionFromBlock(
   definition: BlockDefinition,
@@ -53,6 +73,8 @@ function deriveElementDefinitionFromBlock(
     editor: {
       defaultLayout: "flow",
       supportsViewportOverrides: true,
+      // Phase P23-D — leaf content blocks only (explicit, never broad).
+      supportsCustomCode: CUSTOM_CODE_LEAF_TYPES.has(definition.type),
       rendererKey: definition.type,
     },
   };
@@ -130,4 +152,17 @@ export const elementRegistry = new ElementRegistry();
 export function isRenderableElementType(type: string): boolean {
   if (isElementOnlyType(type)) return false;
   return elementRegistry.has(type);
+}
+
+/**
+ * True when an element type is explicitly allowed to carry user-authored
+ * custom code (Phase P23-D). Opt-in per registry definition — never broad:
+ * only types whose definition sets `editor.supportsCustomCode` qualify, and
+ * the flag is granted ONLY to the curated leaf content blocks (heading,
+ * paragraph, button, badge, image, video, icon). custom-component is NOT an
+ * authoring vehicle for custom code. Pure and deterministic — safe for
+ * server-side validation.
+ */
+export function elementSupportsCustomCode(type: ElementType): boolean {
+  return elementRegistry.get(type)?.editor?.supportsCustomCode === true;
 }

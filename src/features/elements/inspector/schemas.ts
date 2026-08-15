@@ -8,7 +8,7 @@
 // appearance/layout/spacing/advanced.
 // ---------------------------------------------------------------------------
 
-import { elementRegistry } from "../registry/element-registry";
+import { elementRegistry, elementSupportsCustomCode } from "../registry/element-registry";
 import type { ElementType } from "../types";
 import type { ElementDefinition } from "../types";
 import { capabilitiesForType, CONTAINER_CAPABLE_TYPES } from "./capabilities";
@@ -18,6 +18,7 @@ import {
   appearanceFields,
   bindingField,
   contentFields,
+  customCodeField,
   interactionField,
   layoutFields,
   spacingFields,
@@ -66,6 +67,13 @@ function buildSections(
   // Phase P22-J — data binding is a universal group (every element can carry
   // the declarative binding model).
   sections.push({ id: "data", label: "Data", fields: [bindingField()] });
+  // Phase P23-D — custom code is a LEAF-ONLY capability. The section exists
+  // only for types whose registry definition opts in (elementSupportsCustomCode
+  // → the curated leaf content blocks). Containers/composites/custom-component
+  // never see the section.
+  if (elementSupportsCustomCode(type)) {
+    sections.push({ id: "custom-code", label: "Custom Code", fields: [customCodeField()] });
+  }
   return sections;
 }
 

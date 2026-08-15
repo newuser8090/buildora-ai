@@ -435,6 +435,28 @@ export function bindingField(): InspectorFieldDef {
 }
 
 // ---------------------------------------------------------------------------
+// Phase P23-D — custom code (composite declarative control)
+//
+// The whole ElementCustomCode object (html/css/js) is authored in a bespoke
+// control and committed through the same validated field path (source
+// "customCode" → updateElementCustomCode). The field is only ever attached
+// to the curated leaf content blocks (schemas.ts gates on
+// elementSupportsCustomCode) — never broad. `enabled` defaults false, so
+// authored code stays inert until the user explicitly opts in.
+// ---------------------------------------------------------------------------
+
+export function customCodeField(): InspectorFieldDef {
+  return {
+    id: "customCode",
+    label: "Custom code",
+    kind: "custom-code",
+    source: "customCode",
+    key: "customCode",
+    hint: "Advanced HTML/CSS/JS — runs only in the published site",
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Advanced (positioning / visibility / lock)
 // ---------------------------------------------------------------------------
 
