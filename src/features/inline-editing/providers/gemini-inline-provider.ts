@@ -14,7 +14,7 @@ import {
   callGemini,
   sanitizePrompt,
 } from "@/features/generation/providers/gemini-generation-provider";
-import { ProviderError, ERROR_CODES } from "@/features/generation/providers/provider-errors";
+import { ProviderError, ERROR_CODES, isAbortOrTimeoutError } from "@/features/generation/providers/provider-errors";
 import { logger } from "@/lib/logger";
 import { InlineSuggestionPayloadSchema } from "../schemas/inline-schemas";
 import type {
@@ -137,8 +137,8 @@ function classifyInlineError(err: unknown): ProviderError {
   if (msg.includes("401") || msg.includes("403") || msg.includes("API_KEY")) {
     return new ProviderError(ERROR_CODES.PROVIDER_AUTH, "Authentication failed");
   }
-  if ((err as Error)?.name === "AbortError") {
-    return new ProviderError(ERROR_CODES.PROVIDER_TIMEOUT, "Request timed out", true);
+  if (isAbortOrTimeoutError(err)) {
+    return new ProviderError(ERROR_CODES.PROVIDER_TIMEOUT, "Request timed out");
   }
   return new ProviderError(
     ERROR_CODES.PROVIDER_NETWORK,

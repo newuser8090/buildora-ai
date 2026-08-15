@@ -10,7 +10,7 @@ import {
   callGemini,
   sanitizePrompt,
 } from "./gemini-generation-provider";
-import { ProviderError, ERROR_CODES } from "./provider-errors";
+import { ProviderError, ERROR_CODES, isAbortOrTimeoutError } from "./provider-errors";
 import { normalizeSectionProps } from "../normalizers/link-normalizer";
 import { logger } from "@/lib/logger";
 import { EditResultSchema } from "@/features/ai-editing/schemas/edit-schemas";
@@ -159,8 +159,8 @@ function classifyEditError(err: unknown): ProviderError {
   if (msg.includes("401") || msg.includes("403") || msg.includes("API_KEY")) {
     return new ProviderError(ERROR_CODES.PROVIDER_AUTH, "Authentication failed");
   }
-  if ((err as Error)?.name === "AbortError") {
-    return new ProviderError(ERROR_CODES.PROVIDER_TIMEOUT, "Request timed out", true);
+  if (isAbortOrTimeoutError(err)) {
+    return new ProviderError(ERROR_CODES.PROVIDER_TIMEOUT, "Request timed out");
   }
   return new ProviderError(
     ERROR_CODES.PROVIDER_NETWORK,

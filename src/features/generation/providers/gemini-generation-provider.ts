@@ -8,7 +8,7 @@ import {
   normalizeSectionProps as normalizeSectionComprehensively,
   logNormalizationWarning,
 } from "../normalizers/link-normalizer";
-import { ProviderError, ERROR_CODES } from "./provider-errors";
+import { ProviderError, ERROR_CODES, isAbortOrTimeoutError } from "./provider-errors";
 import { validateSlug } from "@/features/routing/routes";
 import { getSiteTemplatePages } from "../templates/site-templates";
 import { logger } from "@/lib/logger";
@@ -29,7 +29,16 @@ import type {
 // ---------------------------------------------------------------------------
 
 const MAX_PROMPT_LENGTH = 4000;
-const PROVIDER_TIMEOUT_MS = 30_000;
+
+/**
+ * Hard cap on a single Gemini attempt. Enforced BOTH at the SDK level
+ * (config.httpOptions.timeout — the SDK aborts the underlying fetch) AND via
+ * the caller's AbortController (config.abortSignal). 20s + the rule-based
+ * fallback stays comfortably inside the /api/generate client budget (~30s),
+ * and a timeout is NOT retried (see attempt), so the worst case is one
+ * bounded attempt followed by the deterministic fallback.
+ */
+const PROVIDER_TIMEOUT_MS = 20_000;
 
 // ---------------------------------------------------------------------------
 // System instruction
@@ -234,14 +243,21 @@ function ensureRequiredSections(
 
 /**
  * Perform a single Gemini content-generation call and return the parsed JSON.
- * Shared by the create and edit providers; the edit provider supplies its own
- * system instruction.
+ * Shared by ALL Gemini providers (create/site, edit, plan, inline).
+ *
+ * Every call gets a REAL request timeout via the SDK's supported
+ * `config.httpOptions.timeout` mechanism — the SDK aborts the underlying
+ * fetch after PROVIDER_TIMEOUT_MS (so even callers that pass no signal get a
+ * hard cap). Callers that manage their own budget pass `signal` and it is
+ * forwarded as `config.abortSignal`, giving a second abort path that rejects
+ * with an AbortError.
  */
 export async function callGemini(
   sanitized: string,
   model: string,
   apiKey: string,
   systemInstruction: string = SYSTEM_INSTRUCTION,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const client = new GoogleGenAI({ apiKey });
 
@@ -252,6 +268,12 @@ export async function callGemini(
       systemInstruction,
       temperature: 0.7,
       maxOutputTokens: 4096,
+      // Phase P22-timeout — a REAL timeout: the SDK aborts the fetch after
+      // PROVIDER_TIMEOUT_MS. Previously this was dead code (the AbortController
+      // signal was never forwarded), so a slow/hung Gemini held the request
+      // open indefinitely and the rule-based fallback was never reached.
+      httpOptions: { timeout: PROVIDER_TIMEOUT_MS },
+      ...(signal ? { abortSignal: signal } : {}),
     },
   });
 
@@ -470,6 +492,8 @@ export const geminiProvider: GenerationProvider = {
           model,
           apiKey,
           input.mode === "site" ? SITE_SYSTEM_INSTRUCTION : undefined,
+          // Forward the signal so the 20s budget actually cancels the request.
+          controller.signal,
         );
 
         // Phase P22-I — site mode builds a validated multi-page site plan.
@@ -509,6 +533,16 @@ export const geminiProvider: GenerationProvider = {
         logger.info("GeminiProvider", `Success in ${duration}ms — ${sections.length} sections`);
 
         return { plan, source: "gemini", warnings };
+      } catch (err) {
+        // Timeouts/aborts are NOT retryable: a retry would double the wait
+        // (20s + 20s) and push the route past the client's ~30s budget while
+        // the deterministic rule-based fallback is ready immediately. Other
+        // retryable failures (rate limit, network) still flow to the retry
+        // below.
+        if (isAbortOrTimeoutError(err)) {
+          throw new ProviderError(ERROR_CODES.PROVIDER_TIMEOUT, "Request timed out");
+        }
+        throw err;
       } finally {
         clearTimeout(timeoutId);
       }
@@ -539,8 +573,10 @@ export const geminiProvider: GenerationProvider = {
       if (msg.includes("401") || msg.includes("403") || msg.includes("API_KEY")) {
         throw new ProviderError(ERROR_CODES.PROVIDER_AUTH, "Authentication failed");
       }
-      if ((err as Error)?.name === "AbortError") {
-        throw new ProviderError(ERROR_CODES.PROVIDER_TIMEOUT, "Request timed out", true);
+      if (isAbortOrTimeoutError(err)) {
+        // Belt-and-braces: any abort/timeout that surfaces unclassified is
+        // still a hard, NON-retryable failure (see attempt's catch).
+        throw new ProviderError(ERROR_CODES.PROVIDER_TIMEOUT, "Request timed out");
       }
 
       throw new ProviderError(
