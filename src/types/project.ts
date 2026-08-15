@@ -2,6 +2,8 @@ import type { BaseSection } from "./section";
 import type { Theme } from "./theme";
 import type { Asset } from "@/features/assets/types";
 import type { SiteSettings } from "@/features/site-settings/types";
+import type { ResponsiveDecision } from "@/features/elements/responsive/types";
+import type { Collection } from "@/features/elements/collections/types";
 
 // ---------------------------------------------------------------------------
 // Project
@@ -18,6 +20,19 @@ export interface Project {
   updatedAt: string;
   /** Phase P7 — optional site-wide settings (name, SEO, social, favicon). */
   siteSettings?: SiteSettings;
+  /**
+   * Phase P22-F — optional persisted responsive decisions (proposals the user
+   * accepted or dismissed). Bounded and validated at every boundary; user
+   * decisions always outrank AI suggestions and suppress re-suggestion.
+   */
+  responsiveDecisions?: ResponsiveDecision[];
+  /**
+   * Phase P22-J — optional durable collection DEFINITIONS (id/name/fields)
+   * used by element data bindings. Runtime records are provider-layer data
+   * (never stored on the document). Old projects without collections load
+   * unchanged.
+   */
+  collections?: Collection[];
 }
 
 // ---------------------------------------------------------------------------

@@ -13,6 +13,8 @@ import {
   renamePageInList,
   deletePageFromList,
   movePageToIndex,
+  setHomePageInList,
+  homePageId,
   createPageId,
   sanitizePageMeta,
 } from "./page-structure";
@@ -319,6 +321,103 @@ describe("deletePageFromList", () => {
     const pages = makePages();
     deletePageFromList(pages, "page-2");
     expect(pages).toHaveLength(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// homePageId
+// ---------------------------------------------------------------------------
+
+describe("homePageId", () => {
+  it("returns the first page as the homepage", () => {
+    expect(homePageId(makePages())).toBe("page-1");
+  });
+
+  it("returns null for an empty project", () => {
+    expect(homePageId([])).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// setHomePageInList
+// ---------------------------------------------------------------------------
+
+describe("setHomePageInList", () => {
+  it("moves a page to the front and gives it the root slug", () => {
+    const result = setHomePageInList(makePages(), "page-2");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.changed).toBe(true);
+    expect(result.value.pages.map((p) => p.id)).toEqual([
+      "page-2",
+      "page-1",
+      "page-3",
+    ]);
+    // The new homepage owns the root route.
+    expect(result.value.pages[0].slug).toBe("/");
+  });
+
+  it("re-slugs the displaced former homepage to a unique non-root slug", () => {
+    const result = setHomePageInList(makePages(), "page-2");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The former homepage (Home, slug "/") can no longer own the root.
+    const displaced = result.value.pages[1];
+    expect(displaced.id).toBe("page-1");
+    expect(displaced.slug).toBe("/home");
+    // The untouched page keeps its slug.
+    expect(result.value.pages[2].slug).toBe("/contact");
+  });
+
+  it("avoids slug collisions for the displaced page", () => {
+    const pages = [
+      makePage(),
+      makePage({ id: "page-2", title: "About", slug: "/about" }),
+      makePage({ id: "page-3", title: "Home", slug: "/home" }),
+    ];
+    const result = setHomePageInList(pages, "page-2");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // page-3 already owns "/home" → the displaced page gets "/home-2".
+    expect(result.value.pages[1].id).toBe("page-1");
+    expect(result.value.pages[1].slug).toBe("/home-2");
+  });
+
+  it("preserves page identity and content", () => {
+    const result = setHomePageInList(makePages(), "page-2");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const about = result.value.pages[0];
+    expect(about.id).toBe("page-2");
+    expect(about.title).toBe("About");
+    expect(about.sections).toHaveLength(1);
+    // Content is preserved (fixture pages all share hero-1).
+    expect(about.sections[0]).toEqual(makePages()[1].sections[0]);
+  });
+
+  it("is a no-op when the page is already the homepage", () => {
+    const result = setHomePageInList(makePages(), "page-1");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.changed).toBe(false);
+  });
+
+  it("is a no-op in a single-page project", () => {
+    const result = setHomePageInList([makePage()], "page-1");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.changed).toBe(false);
+  });
+
+  it("fails with PAGE_NOT_FOUND for an unknown page", () => {
+    const result = setHomePageInList(makePages(), "missing");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("PAGE_NOT_FOUND");
+  });
+
+  it("does not mutate the input array", () => {
+    const pages = makePages();
+    setHomePageInList(pages, "page-2");
+    expect(pages.map((p) => p.id)).toEqual(["page-1", "page-2", "page-3"]);
+    expect(pages[0].slug).toBe("/");
   });
 });
 

@@ -6,6 +6,7 @@ import { Textarea } from "@/components/ui/Textarea";
 import { Field } from "@/components/ui/Field";
 import { SharedSectionControls } from "./SharedSectionControls";
 import { InspectorAssetField } from "@/features/assets/components/InspectorAssetField";
+import { NavigateToPicker } from "@/features/editor/components/NavigateToPicker";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import type { BaseSection, CtaSectionProps } from "@/types/section";
 
@@ -19,6 +20,7 @@ export function CtaInspector({
   onUpdateStyles: (styles: Record<string, unknown>) => void;
 }) {
   const props = section.props as unknown as CtaSectionProps;
+  const pages = useEditorStore((s) => s.project.pages);
   const beginEditSession = useEditorStore((s) => s.beginEditSession);
   const commitEditSession = useEditorStore((s) => s.commitEditSession);
 
@@ -84,13 +86,21 @@ export function CtaInspector({
       </Field>
 
       <Field label="Button href">
-        <Input
-          value={props.ctaHref ?? "#"}
-          onFocus={handleFocus}
-          onBlur={handleBlur}
-          onKeyDown={handleKeyDown}
-          onChange={(e) => update({ ctaHref: e.target.value || "#" })}
-        />
+        <div className="flex items-center gap-2">
+          <Input
+            value={props.ctaHref ?? "#"}
+            onFocus={handleFocus}
+            onBlur={handleBlur}
+            onKeyDown={handleKeyDown}
+            onChange={(e) => update({ ctaHref: e.target.value || "#" })}
+            className="min-w-0 flex-1"
+          />
+          <NavigateToPicker
+            pages={pages}
+            value={props.ctaHref ?? "#"}
+            onChange={(href) => update({ ctaHref: href })}
+          />
+        </div>
       </Field>
 
       <SharedSectionControls

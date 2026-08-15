@@ -13,6 +13,10 @@ import {
   Layers,
   SlidersHorizontal,
   Boxes,
+  LayoutGrid,
+  Database,
+  ChevronsLeft,
+  ChevronsRight,
 } from "lucide-react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
@@ -23,7 +27,14 @@ import { useGuidedBuilderStore } from "@/features/guided-builder/store/guided-bu
 import { GuidedPanel } from "@/features/guided-builder/components/GuidedPanel";
 import { GuidedInspector } from "@/features/guided-builder/components/GuidedInspector";
 import { BlockEditorPanel } from "@/features/blocks/components/BlockEditorPanel";
+import { ElementInspectorPanel } from "@/features/inspector/components/ElementInspectorPanel";
+import { ElementLibrary } from "@/features/library/components/ElementLibrary";
+import { DataPanel } from "@/features/integrations/components/DataPanel";
+import { CUSTOM_BLOCK_SECTION_TYPE } from "@/features/code-import/schemas/custom-block-schema";
 import type { BaseSection } from "@/types/section";
+// Phase P22-K — collapsible/resizable shell chrome (UI-only, no project state).
+import { MAX_PANEL_WIDTH, MIN_PANEL_WIDTH } from "@/features/editor/ui/editor-ui-prefs";
+import { ResizeHandle } from "./ResizeHandle";
 
 // ---------------------------------------------------------------------------
 // General properties (shown when no section is selected)
@@ -136,12 +147,15 @@ function InspectorPanel({ guided }: { guided: boolean }) {
   const updateSectionStyles = useEditorStore((s) => s.updateSectionStyles);
   const clearSelection = useEditorStore((s) => s.clearSelection);
 
-  // Find the selected section across all pages
+  // Find the selected section across all pages (tracking its page for the
+  // element inspector's commit path).
   let selectedSection = null;
+  let selectedPageId = "";
   for (const page of project.pages) {
     const found = page.sections.find((s) => s.id === selectedSectionId);
     if (found) {
       selectedSection = found;
+      selectedPageId = page.id;
       break;
     }
   }
@@ -173,6 +187,7 @@ function InspectorPanel({ guided }: { guided: boolean }) {
       <div className="flex-1 overflow-y-auto" data-testid="inspector-panel">
         <InspectorSlot
           section={selectedSection}
+          pageId={selectedPageId}
           guided={guided}
           onUpdateProps={(props) =>
             updateSectionProps(selectedSection.id, props)
@@ -194,11 +209,13 @@ function InspectorPanel({ guided }: { guided: boolean }) {
 
 function InspectorSlot({
   section,
+  pageId,
   guided,
   onUpdateProps,
   onUpdateStyles,
 }: {
   section: BaseSection;
+  pageId: string;
   guided: boolean;
   onUpdateProps: (props: Record<string, unknown>) => void;
   onUpdateStyles: (styles: Record<string, unknown>) => void;
@@ -216,6 +233,13 @@ function InspectorSlot({
         onUpdateStyles={onUpdateStyles}
       />
     );
+  }
+
+  // Phase P22-C: custom-block sections carry fully editable + durable element
+  // trees, so they use the universal element inspector. Regular sections keep
+  // their section-specific inspectors (existing E2E surface preserved).
+  if (section.type === CUSTOM_BLOCK_SECTION_TYPE) {
+    return <ElementInspectorPanel pageId={pageId} sectionId={section.id} />;
   }
 
   if (!InspectorComponent || !isRegistered) {
@@ -244,13 +268,16 @@ function InspectorSlot({
 // ---------------------------------------------------------------------------
 
 interface TabDefinition {
-  id: "structure" | "design" | "blocks";
+  id: "structure" | "elements" | "data" | "design" | "blocks";
   label: string;
   icon: typeof Layers;
 }
 
 const TABS: TabDefinition[] = [
   { id: "structure", label: "Structure", icon: Layers },
+  { id: "elements", label: "Elements", icon: LayoutGrid },
+  // Phase P22-J — data integrations + collection management.
+  { id: "data", label: "Data", icon: Database },
   { id: "blocks", label: "Blocks", icon: Boxes },
   { id: "design", label: "Design", icon: SlidersHorizontal },
 ];
@@ -310,17 +337,88 @@ function TabList() {
 export function RightSidebar() {
   const selectedSectionId = useEditorStore((s) => s.selectedSectionId);
   const tab = useEditorUiStore((s) => s.rightSidebarTab);
+  const rightCollapsed = useEditorUiStore((s) => s.rightPanelCollapsed);
+  const rightWidth = useEditorUiStore((s) => s.rightPanelWidth);
+  const setRightCollapsed = useEditorUiStore((s) => s.setRightPanelCollapsed);
+  const setRightWidth = useEditorUiStore((s) => s.setRightPanelWidth);
+  const [rightDragging, setRightDragging] = useState(false);
   const experienceMode = useGuidedBuilderStore((s) => s.experienceMode);
   const guidedHydrated = useGuidedBuilderStore((s) => s.hydrated);
   const guided = guidedHydrated && experienceMode === "guided";
 
+  if (rightCollapsed) {
+    return (
+      <>
+        <aside
+          data-testid="right-sidebar-rail"
+          className="flex w-12 flex-shrink-0 flex-col items-center gap-4 border-l border-border bg-secondary py-3"
+          aria-label="Editor sidebar (collapsed)"
+        >
+          <button
+            type="button"
+            data-testid="collapse-right-panel"
+            aria-expanded="false"
+            aria-controls="editor-sidebar"
+            aria-label="Expand editor sidebar"
+            title="Expand editor sidebar"
+            onClick={() => setRightCollapsed(false)}
+            className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/10 text-accent transition-colors hover:bg-accent/20 focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            <ChevronsLeft className="h-4 w-4" />
+          </button>
+          <span
+            aria-hidden="true"
+            className="text-[10px] font-medium uppercase tracking-[0.2em] text-text-dim/60 [writing-mode:vertical-rl]"
+          >
+            Panels
+          </span>
+        </aside>
+      </>
+    );
+  }
+
   return (
-    <aside
-      className="flex w-[300px] flex-shrink-0 min-h-0 flex-col border-l border-border bg-secondary"
-      aria-label="Editor sidebar"
-    >
-      {/* ---- Tabs ---- */}
-      <TabList />
+    <>
+      <ResizeHandle
+        testId="resize-right-handle"
+        label="Resize editor sidebar"
+        value={rightWidth}
+        min={MIN_PANEL_WIDTH}
+        max={MAX_PANEL_WIDTH}
+        multiplier={-1}
+        onChange={setRightWidth}
+        onDraggingChange={setRightDragging}
+      />
+      <aside
+        id="editor-sidebar"
+        className={cn(
+          "flex min-h-0 flex-shrink-0 flex-col border-l border-border bg-secondary transition-[width] duration-200 ease-out",
+          rightDragging && "transition-none",
+        )}
+        style={{ width: rightWidth }}
+        aria-label="Editor sidebar"
+      >
+        {/* ---- Collapse header ---- */}
+        <div className="flex h-8 flex-shrink-0 items-center justify-between border-b border-border px-3">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-text-dim/70">
+            Panels
+          </span>
+          <button
+            type="button"
+            data-testid="collapse-right-panel"
+            aria-expanded="true"
+            aria-controls="editor-sidebar"
+            aria-label="Collapse editor sidebar"
+            title="Collapse editor sidebar"
+            onClick={() => setRightCollapsed(true)}
+            className="flex h-6 w-6 items-center justify-center rounded-md text-text-dim transition-colors hover:bg-card hover:text-text-primary focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            <ChevronsRight className="h-3.5 w-3.5" />
+          </button>
+        </div>
+
+        {/* ---- Tabs ---- */}
+        <TabList />
 
       {/* ---- Panels ---- */}
       {tab === "structure" ? (
@@ -334,6 +432,28 @@ export function RightSidebar() {
           {/* Phase N: guided journey / readiness / coach above the structure */}
           {guided && <GuidedPanel />}
           <PageStructurePanel />
+        </div>
+      ) : tab === "elements" ? (
+        <div
+          role="tabpanel"
+          id="right-panel-elements"
+          aria-labelledby="right-tab-elements"
+          data-testid="elements-panel"
+          className="flex min-h-0 flex-1 flex-col"
+        >
+          {/* Phase P22-D — discover + insert elements from the registry */}
+          <ElementLibrary />
+        </div>
+      ) : tab === "data" ? (
+        <div
+          role="tabpanel"
+          id="right-panel-data"
+          aria-labelledby="right-tab-data"
+          data-testid="data-panel"
+          className="flex min-h-0 flex-1 flex-col"
+        >
+          {/* Phase P22-J — connect integrations + manage collections */}
+          <DataPanel />
         </div>
       ) : tab === "blocks" ? (
         <div
@@ -374,6 +494,7 @@ export function RightSidebar() {
           </div>
         </div>
       )}
-    </aside>
+      </aside>
+    </>
   );
 }

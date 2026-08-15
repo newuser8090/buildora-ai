@@ -248,6 +248,44 @@ describe("PageTabs reordering", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Set as homepage
+// ---------------------------------------------------------------------------
+
+describe("PageTabs set as homepage", () => {
+  it("moves the page to the front and gives it the root slug", () => {
+    renderTabs();
+    openMenu("page-2");
+    fireEvent.click(screen.getByTestId("page-action-set-home"));
+
+    const state = useEditorStore.getState();
+    expect(state.project.pages.map((p) => p.id)).toEqual([
+      "page-2",
+      "page-1",
+      "page-3",
+    ]);
+    expect(state.project.pages[0].slug).toBe("/");
+    expect(state.project.pages[1].slug).toBe("/home");
+  });
+
+  it("disables the action for the current homepage", () => {
+    renderTabs();
+    openMenu("page-1");
+    const action = screen.getByTestId("page-action-set-home");
+    expect((action as HTMLButtonElement).disabled).toBe(true);
+    expect(action.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("shows the home indicator only on the first page tab", () => {
+    renderTabs();
+    const homeTab = screen.getByTestId("page-tab-page-1");
+    const aboutTab = screen.getByTestId("page-tab-page-2");
+    // The Home lucide icon (House) marks the homepage tab only.
+    expect(homeTab.querySelector('svg.lucide-house')).toBeTruthy();
+    expect(aboutTab.querySelector('svg.lucide-house')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Deleting
 // ---------------------------------------------------------------------------
 

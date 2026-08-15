@@ -16,6 +16,9 @@
 
 import type { BaseSection } from "@/types/section";
 import type { Page, PageMeta, Project } from "@/types/project";
+import type { ElementAnimation } from "@/features/elements/animation/types";
+import type { ElementInteraction } from "@/features/elements/interaction/types";
+import type { ElementStyleTokens } from "@/features/elements/types";
 
 // ---------------------------------------------------------------------------
 // Scopes — what the user wants edited
@@ -24,7 +27,9 @@ import type { Page, PageMeta, Project } from "@/types/project";
 export type AiEditScope =
   | { type: "section"; pageId: string; sectionId: string }
   | { type: "page"; pageId: string }
-  | { type: "project" };
+  | { type: "project" }
+  /** Phase P22-H — element scope (custom-block element trees only). */
+  | { type: "element"; pageId: string; sectionId: string; elementId: string };
 
 /**
  * Explicit user-facing scope pick. "current-section"/"current-page" resolve
@@ -45,6 +50,8 @@ export function scopeLabel(scope: AiEditScope): string {
       return "current page";
     case "project":
       return "entire website";
+    case "element":
+      return "selected element";
   }
 }
 
@@ -75,7 +82,19 @@ export type AiEditOperationType =
   | "rename-page"
   | "delete-page"
   | "move-page"
-  | "update-page-meta";
+  | "update-page-meta"
+  // Phase P22-H — element-scoped operations (custom-block element trees).
+  // All element ops execute through the existing applyElementOperation engine
+  // and materialize/fold through sectionToElementTree / elementTreeToSection.
+  | "update-element-props"
+  | "update-element-style"
+  | "update-element-responsive"
+  | "update-element-animation"
+  | "update-element-interaction"
+  | "insert-element"
+  | "delete-element"
+  | "duplicate-element"
+  | "set-element-visibility";
 
 export type AiEditRisk = "low" | "medium" | "high";
 
@@ -190,6 +209,107 @@ export interface UpdatePageMetaOperation extends AiEditOperationBase {
   meta: PageMeta;
 }
 
+// ---------------------------------------------------------------------------
+// Element operations (Phase P22-H) — custom-block element trees only
+//
+// Every element op is a TARGETED patch or structural change executed through
+// the existing element ops engine (applyElementOperation). AI/rule-based
+// output never fabricates arbitrary subtree JSON: insert ops supply only the
+// registered renderable type + bounded content, and canonical defaults come
+// from the element registry/factory.
+// ---------------------------------------------------------------------------
+
+/** The Canva-first responsive surface P22-F edits (viewport overrides). */
+export type ElementPlanBreakpoint = "tablet" | "mobile";
+
+export interface UpdateElementPropsOperation extends AiEditOperationBase {
+  type: "update-element-props";
+  pageId: string;
+  sectionId: string;
+  elementId: string;
+  /** Patch MERGED over the current node props (preserves hrefs/assets). */
+  props: Record<string, unknown>;
+}
+
+export interface UpdateElementStyleOperation extends AiEditOperationBase {
+  type: "update-element-style";
+  pageId: string;
+  sectionId: string;
+  elementId: string;
+  /** Style tokens merged over the current node style (validated + bounded). */
+  style: ElementStyleTokens;
+}
+
+export interface UpdateElementResponsiveOperation extends AiEditOperationBase {
+  type: "update-element-responsive";
+  pageId: string;
+  sectionId: string;
+  elementId: string;
+  /** The viewport override surface (P22-F model). */
+  breakpoint: ElementPlanBreakpoint;
+  /** Style overrides written into node.viewport[breakpoint]. */
+  style: ElementStyleTokens;
+}
+
+export interface UpdateElementAnimationOperation extends AiEditOperationBase {
+  type: "update-element-animation";
+  pageId: string;
+  sectionId: string;
+  elementId: string;
+  /** Whole-object replacement; null clears the field. */
+  animation: ElementAnimation | null;
+}
+
+export interface UpdateElementInteractionOperation extends AiEditOperationBase {
+  type: "update-element-interaction";
+  pageId: string;
+  sectionId: string;
+  elementId: string;
+  /** Whole-object replacement; null clears the field. */
+  interaction: ElementInteraction | null;
+}
+
+export interface InsertElementOperation extends AiEditOperationBase {
+  type: "insert-element";
+  pageId: string;
+  sectionId: string;
+  /**
+   * Parent element id — must be a container node in the section tree.
+   * Defaults to the section root when absent.
+   */
+  parentElementId?: string;
+  /** A REGISTERED RENDERABLE block type (element-only types rejected). */
+  elementType: string;
+  /** Optional child index inside the parent (default: append). */
+  index?: number;
+  /** Bounded content patch merged over the registry defaults. */
+  props?: Record<string, unknown>;
+  /** Bounded style patch merged over the registry defaults. */
+  style?: ElementStyleTokens;
+}
+
+export interface DeleteElementOperation extends AiEditOperationBase {
+  type: "delete-element";
+  pageId: string;
+  sectionId: string;
+  elementId: string;
+}
+
+export interface DuplicateElementOperation extends AiEditOperationBase {
+  type: "duplicate-element";
+  pageId: string;
+  sectionId: string;
+  elementId: string;
+}
+
+export interface SetElementVisibilityOperation extends AiEditOperationBase {
+  type: "set-element-visibility";
+  pageId: string;
+  sectionId: string;
+  elementId: string;
+  visible: boolean;
+}
+
 export type AiEditOperation =
   | UpdateSectionPropsOperation
   | UpdateSectionStylesOperation
@@ -202,7 +322,16 @@ export type AiEditOperation =
   | RenamePageOperation
   | DeletePageOperation
   | MovePageOperation
-  | UpdatePageMetaOperation;
+  | UpdatePageMetaOperation
+  | UpdateElementPropsOperation
+  | UpdateElementStyleOperation
+  | UpdateElementResponsiveOperation
+  | UpdateElementAnimationOperation
+  | UpdateElementInteractionOperation
+  | InsertElementOperation
+  | DeleteElementOperation
+  | DuplicateElementOperation
+  | SetElementVisibilityOperation;
 
 // ---------------------------------------------------------------------------
 // Plan
@@ -310,7 +439,9 @@ export type AiEditDiffKind =
   | "structure"
   | "visibility"
   | "metadata"
-  | "page";
+  | "page"
+  // Phase P22-H — element-scoped diffs
+  | "element";
 
 export interface AiEditDiffField {
   key: string;

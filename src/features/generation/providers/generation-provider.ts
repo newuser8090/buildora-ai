@@ -20,7 +20,7 @@ export const SUPPORTED_SECTION_TYPES = [
 
 export interface GenerationProviderInput {
   prompt: string;
-  mode?: "create" | "modify";
+  mode?: "create" | "modify" | "site";
   currentProjectSummary?: object;
 }
 

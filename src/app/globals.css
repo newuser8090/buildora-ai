@@ -101,10 +101,18 @@ body {
 ::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 999px;
+}::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: var(--text-dim);
+/* ------------------------------------------------------------------ */
+/*  Editor shell (Phase P22-K) — resizable panel dividers             */
+/* ------------------------------------------------------------------ */
+
+.editor-panel-handle {
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 /* ------------------------------------------------------------------ */

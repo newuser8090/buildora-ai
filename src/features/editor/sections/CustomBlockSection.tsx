@@ -25,6 +25,7 @@ import { rootIdOf } from "@/features/blocks/engine/tree-traversal";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { useInlineEditPageId } from "@/features/inline-editing/context/InlineEditPageContext";
 import { useMyBlocksUiStore } from "@/features/my-blocks/store/my-blocks-ui-store";
+import { useDataIntegrationStore } from "@/features/integrations/store/data-integration-store";
 
 const VIEWPORT_WIDTHS: Record<string, number> = {
   desktop: 1440,
@@ -35,6 +36,11 @@ const VIEWPORT_WIDTHS: Record<string, number> = {
 export function CustomBlockSection({ section }: { section: BaseSection }) {
   const pageId = useInlineEditPageId();
   const viewport = useEditorStore((s) => s.viewport);
+  const pages = useEditorStore((s) => s.project.pages);
+  // Phase P22-J — durable collection definitions + runtime records so bound
+  // elements resolve against real (mock/Supabase) data in the canvas preview.
+  const collections = useEditorStore((s) => s.project.collections);
+  const integrationRecords = useDataIntegrationStore((s) => s.records);
   const selectedBlockId = useBlockEditorStore((s) => s.selectedBlockId);
   const selectBlock = useBlockEditorStore((s) => s.selectBlock);
   const selectSection = useEditorStore((s) => s.selectSection);
@@ -88,6 +94,9 @@ export function CustomBlockSection({ section }: { section: BaseSection }) {
         viewportWidth={VIEWPORT_WIDTHS[viewport] ?? 1440}
         selectedBlockId={selectedBlockId}
         editable={interactive}
+        pages={pages}
+        collections={collections}
+        records={integrationRecords}
         onSelectBlock={
           interactive
             ? (nodeId) => {

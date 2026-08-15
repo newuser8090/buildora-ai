@@ -58,7 +58,15 @@ export function styleTokensToCss(style: Record<string, unknown>): CssStyle {
       if (!isSafeCssValue(value)) continue;
       out[key] = value;
     } else if (typeof value === "number" && Number.isFinite(value)) {
-      out[key] = value;
+      // Phase P22-C — the universal inspector's opacity control stores a
+      // beginner-friendly 0-100 value; CSS opacity is 0-1. Centralized
+      // normalization keeps canvas, thumbnails and export in agreement.
+      // 0-1 values (existing trees / imported styles) pass through untouched.
+      if (key === "opacity" && value > 1) {
+        out[key] = value / 100;
+      } else {
+        out[key] = value;
+      }
     }
   }
   return out;

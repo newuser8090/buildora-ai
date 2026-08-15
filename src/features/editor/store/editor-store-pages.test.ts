@@ -326,6 +326,113 @@ describe("movePage", () => {
 });
 
 // ---------------------------------------------------------------------------
+// setHomePage
+// ---------------------------------------------------------------------------
+
+describe("setHomePage", () => {
+  function initThreePages() {
+    useEditorStore.getState().initProject(
+      makeProject({
+        pages: [
+          {
+            id: "page-1",
+            title: "Home",
+            slug: "/",
+            sections: [
+              { id: "hero-1", type: "hero", order: 1, visible: true, props: {}, styles: {} },
+            ],
+          },
+          {
+            id: "page-2",
+            title: "About",
+            slug: "/about",
+            sections: [
+              { id: "hero-2", type: "hero", order: 1, visible: true, props: {}, styles: {} },
+            ],
+          },
+          {
+            id: "page-3",
+            title: "Contact",
+            slug: "/contact",
+            sections: [
+              { id: "hero-3", type: "hero", order: 1, visible: true, props: {}, styles: {} },
+            ],
+          },
+        ],
+      }),
+    );
+  }
+
+  it("moves the page to the front and re-derives slugs", () => {
+    initThreePages();
+    const result = useEditorStore.getState().setHomePage("page-2");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const pages = useEditorStore.getState().project.pages;
+    expect(pages.map((p) => p.id)).toEqual(["page-2", "page-1", "page-3"]);
+    // The new homepage owns the root route.
+    expect(pages[0].slug).toBe("/");
+    // The displaced former homepage gets a unique non-root slug.
+    expect(pages[1].slug).toBe("/home");
+    // Untouched page keeps its slug.
+    expect(pages[2].slug).toBe("/contact");
+  });
+
+  it("is a no-op when the page is already the homepage", () => {
+    initThreePages();
+    const before = useEditorStore.getState().history.past.length;
+    const result = useEditorStore.getState().setHomePage("page-1");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.changed).toBe(false);
+    expect(useEditorStore.getState().history.past.length).toBe(before);
+    expect(pageIds()).toEqual(["page-1", "page-2", "page-3"]);
+  });
+
+  it("fails with PAGE_NOT_FOUND for an unknown page", () => {
+    initThreePages();
+    const result = useEditorStore.getState().setHomePage("missing");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("PAGE_NOT_FOUND");
+  });
+
+  it("preserves selection while the page stays selected", () => {
+    initThreePages();
+    useEditorStore.getState().selectPage("page-2");
+    useEditorStore.getState().setHomePage("page-2");
+    const state = useEditorStore.getState();
+    expect(state.selectedPageId).toBe("page-2");
+    // Section selection is untouched by page reordering.
+    expect(state.selectedSectionId).toBeNull();
+  });
+
+  it("creates one history entry; undo restores order and slugs, redo re-applies", () => {
+    initThreePages();
+    useEditorStore.getState().setHomePage("page-2");
+    expect(useEditorStore.getState().history.past).toHaveLength(1);
+
+    useEditorStore.getState().undo();
+    const undone = useEditorStore.getState().project.pages;
+    expect(undone.map((p) => p.id)).toEqual(["page-1", "page-2", "page-3"]);
+    expect(undone.map((p) => p.slug)).toEqual(["/", "/about", "/contact"]);
+
+    useEditorStore.getState().redo();
+    const redone = useEditorStore.getState().project.pages;
+    expect(redone.map((p) => p.id)).toEqual(["page-2", "page-1", "page-3"]);
+    expect(redone.map((p) => p.slug)).toEqual(["/", "/home", "/contact"]);
+  });
+
+  it("keeps the project schema-valid after the change", () => {
+    initThreePages();
+    useEditorStore.getState().setHomePage("page-3");
+    const validation = ProjectSchema.safeParse(
+      useEditorStore.getState().project,
+    );
+    expect(validation.success).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // selectPage
 // ---------------------------------------------------------------------------
 

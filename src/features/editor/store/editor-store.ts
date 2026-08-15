@@ -25,6 +25,7 @@ import {
   renamePageInList,
   resolveUniqueSlug,
   sanitizePageMeta,
+  setHomePageInList,
   type PageMetaInput,
   type PageStructureError,
 } from "./page-structure";
@@ -41,6 +42,40 @@ import type { EditableFieldDescriptor } from "@/features/inline-editing/types";
 import type { InlineFieldUpdateResult } from "@/features/inline-editing/types";
 import { blockTreeToSection } from "@/features/blocks/adapters/section-block-adapter";
 import type { BlockTree } from "@/features/blocks/types";
+import {
+  elementTreeToSection,
+  sectionToElementTree,
+} from "@/features/elements/adapters/section-element-adapter";
+import { applyElementOperation } from "@/features/elements/engine/element-operations";
+import {
+  ElementAnimationSchema,
+  ElementInteractionSchema,
+} from "@/features/elements/schemas/element-schemas";
+import type {
+  ElementAnimation,
+  ElementInteraction,
+  ElementTree,
+} from "@/features/elements/types";
+import type { ResponsiveDecision } from "@/features/elements/responsive/types";
+import {
+  ResponsiveDecisionSchema,
+  applyResponsibleDecision,
+  recordResponsiveDecision,
+} from "@/features/elements/responsive/decisions";
+import type {
+  CollectionField,
+  CollectionFieldType,
+} from "@/features/elements/collections/types";
+import {
+  addCollectionToList,
+  addFieldToList,
+  deleteCollectionFromList,
+  removeFieldFromList,
+  renameCollectionInList,
+  renameFieldInList,
+  setFieldTypeInList,
+  type CollectionStructureError,
+} from "./collection-structure";
 import { isEditorWritable } from "@/features/workspaces/store/workspace-access-store";
 import {
   beginRemoteProjection,
@@ -65,7 +100,15 @@ export type EditorMutationErrorCode =
   | "CANNOT_DELETE_LAST_PAGE"
   | "INVALID_PAGE_TITLE"
   | "NO_OP"
-  | "INVALID_TREE";
+  | "INVALID_TREE"
+  // Phase P22-J — collection definition errors
+  | "COLLECTION_NOT_FOUND"
+  | "COLLECTION_NAME_INVALID"
+  | "COLLECTION_LIMIT"
+  | "COLLECTION_FIELD_NOT_FOUND"
+  | "COLLECTION_FIELD_NAME_INVALID"
+  | "COLLECTION_FIELD_LIMIT"
+  | "COLLECTION_FIELD_TYPE_INVALID";
 
 export interface EditorMutationError {
   code: EditorMutationErrorCode;
@@ -155,6 +198,12 @@ export interface EditorState {
   renamePage: (pageId: string, title: string) => EditorMutationResult;
   deletePage: (pageId: string) => EditorMutationResult;
   movePage: (pageId: string, targetIndex: number) => EditorMutationResult;
+  /**
+   * Phase P22-E — make a page the homepage (move it to the front under the
+   * documented `pages[0]` policy, resolving slug ownership). One history
+   * entry; a no-op when the page is already home.
+   */
+  setHomePage: (pageId: string) => EditorMutationResult;
   updatePageMeta: (pageId: string, meta: PageMetaInput) => EditorMutationResult;
 
   // Phase P7 — site-wide settings (name, SEO, social, favicon)
@@ -257,6 +306,66 @@ export interface EditorState {
     sectionId: string,
     tree: BlockTree,
   ) => EditorMutationResult;
+
+  // Element tree commit (Phase P22-B) — fold an element tree back into a
+  // section through the element adapter as ONE atomic history entry. This is
+  // the mutation boundary for canvas manipulation (move/resize/rotate/align/
+  // layering/clipboard/delete) — the same withHistory path as every other
+  // durable edit, so undo/redo and collaboration behave identically.
+  commitElementTree: (
+    pageId: string,
+    sectionId: string,
+    tree: ElementTree,
+  ) => EditorMutationResult;
+
+  // Phase P22-G — declarative element animations + interactions. Each update
+  // validates through the shared P22-A schema boundary, applies ONE element op
+  // to the freshest tree, and commits through commitElementTree as ONE atomic
+  // history entry (undo/redo + collab behave like every other durable edit).
+  // Passing null clears the property; identical values are a no-op (no entry).
+  updateElementAnimation: (
+    pageId: string,
+    sectionId: string,
+    elementId: string,
+    animation: ElementAnimation | null,
+  ) => EditorMutationResult;
+  updateElementInteraction: (
+    pageId: string,
+    sectionId: string,
+    elementId: string,
+    interaction: ElementInteraction | null,
+  ) => EditorMutationResult;
+
+  // Phase P22-J — durable collection definitions (data binding). Each action
+  // runs through the pure collection-structure helpers and commits as ONE
+  // withHistory entry (undo/redo + collab behave like every other durable
+  // edit). A no-op (unchanged content) skips history.
+  addCollection: (name: string, fields?: CollectionField[]) => EditorMutationResult;
+  renameCollection: (collectionId: string, name: string) => EditorMutationResult;
+  deleteCollection: (collectionId: string) => EditorMutationResult;
+  addCollectionField: (
+    collectionId: string,
+    fieldName: string,
+    fieldType: CollectionFieldType,
+  ) => EditorMutationResult;
+  removeCollectionField: (collectionId: string, fieldId: string) => EditorMutationResult;
+  renameCollectionField: (collectionId: string, fieldId: string, name: string) => EditorMutationResult;
+  setCollectionFieldType: (
+    collectionId: string,
+    fieldId: string,
+    fieldType: CollectionFieldType,
+  ) => EditorMutationResult;
+
+  // Responsive engine (Phase P22-F) — proposals are NEVER auto-applied.
+  // Accept = ONE atomic history entry folding the applied viewport override
+  // AND recording the decision; Dismiss = ONE entry recording the user
+  // rejection (user override wins, persisted — never re-suggested).
+  acceptResponsiveDecision: (
+    pageId: string,
+    sectionId: string,
+    decision: ResponsiveDecision,
+  ) => EditorMutationResult;
+  rejectResponsiveDecision: (decision: ResponsiveDecision) => EditorMutationResult;
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +438,11 @@ function mapStructureError(error: StructureError): EditorMutationResult {
 
 /** Map a page-structure-layer error into an EditorMutationResult. */
 function mapPageStructureError(error: PageStructureError): EditorMutationResult {
+  return { ok: false, error: { code: error.code, message: error.message } };
+}
+
+/** Map a collection-structure-layer error into an EditorMutationResult. */
+function mapCollectionStructureError(error: CollectionStructureError): EditorMutationResult {
   return { ok: false, error: { code: error.code, message: error.message } };
 }
 
@@ -533,6 +647,22 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     if (!isEditorWritable()) return readonlyDenied();
     const state = get();
     const result = movePageToIndex(state.project.pages, pageId, targetIndex);
+    if (!result.ok) return mapPageStructureError(result.error);
+    if (!result.value.changed) return { ok: true, changed: false };
+
+    set(
+      withHistory(state, (project) => {
+        project.pages = result.value.pages;
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
+    return { ok: true, changed: true };
+  },
+
+  setHomePage: (pageId) => {
+    if (!isEditorWritable()) return readonlyDenied();
+    const state = get();
+    const result = setHomePageInList(state.project.pages, pageId);
     if (!result.ok) return mapPageStructureError(result.error);
     if (!result.value.changed) return { ok: true, changed: false };
 
@@ -1096,6 +1226,453 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       }),
     );
 
+    return { ok: true, changed: true };
+  },
+
+  // ---- Element tree commit (Phase P22-B) ----
+  //
+  // The canvas manipulation layer folds its element tree back into the target
+  // section through the P22-A element adapter (which validates bindings AND
+  // the resulting section schema) as ONE history entry. Custom-block sections
+  // persist the whole tree (including element geometry); regular sections fold
+  // their bound fields. A no-op (identical props) skips history.
+
+  commitElementTree: (pageId, sectionId, tree) => {
+    if (!isEditorWritable()) return readonlyDenied();
+    const state = get();
+    const page = state.project.pages.find((p) => p.id === pageId);
+    if (!page) {
+      return {
+        ok: false,
+        error: { code: "PAGE_NOT_FOUND", message: `Page "${pageId}" does not exist.` },
+      };
+    }
+    const section = page.sections.find((s) => s.id === sectionId);
+    if (!section) {
+      return {
+        ok: false,
+        error: { code: "SECTION_NOT_FOUND", message: `Section "${sectionId}" does not exist.` },
+      };
+    }
+
+    const folded = elementTreeToSection(tree, section);
+    if (!folded.ok) {
+      return {
+        ok: false,
+        error: { code: "INVALID_TREE", message: folded.error.message },
+      };
+    }
+
+    // No-op detection by durable content: identical folded props mean no
+    // durable change (regular-section geometry folds nowhere today).
+    if (JSON.stringify(folded.value.section.props) === JSON.stringify(section.props)) {
+      return { ok: true, changed: false };
+    }
+
+    // Commit the folded section as ONE history entry. Selection is separate
+    // store state and is preserved untouched.
+    set(
+      withHistory(state, (project) => {
+        for (const p of project.pages) {
+          const idx = p.sections.findIndex((s) => s.id === sectionId);
+          if (idx !== -1) {
+            p.sections[idx] = {
+              ...p.sections[idx],
+              props: folded.value.section.props,
+              styles: folded.value.section.styles,
+            };
+            project.updatedAt = new Date().toISOString();
+            return;
+          }
+        }
+      }),
+    );
+    return { ok: true, changed: true };
+  },
+
+  // ---- Element animation / interaction (Phase P22-G) ----
+  //
+  // Both actions share the exact same shape: schema-validate the incoming
+  // value (null clears), locate the section, materialize the FRESHEST tree,
+  // apply ONE validated element op, fold back, and commit as ONE withHistory
+  // entry. A no-op (identical stored value) skips history. No direct tree
+  // mutation ever reaches the store.
+
+  updateElementAnimation: (pageId, sectionId, elementId, animation) => {
+    if (!isEditorWritable()) return readonlyDenied();
+    if (animation !== null) {
+      const parsed = ElementAnimationSchema.safeParse(animation);
+      if (!parsed.success) {
+        return {
+          ok: false,
+          error: { code: "INVALID_TREE", message: "Invalid animation configuration." },
+        };
+      }
+    }
+    const state = get();
+    const page = state.project.pages.find((p) => p.id === pageId);
+    if (!page) {
+      return {
+        ok: false,
+        error: { code: "PAGE_NOT_FOUND", message: `Page "${pageId}" does not exist.` },
+      };
+    }
+    const section = page.sections.find((s) => s.id === sectionId);
+    if (!section) {
+      return {
+        ok: false,
+        error: { code: "SECTION_NOT_FOUND", message: `Section "${sectionId}" does not exist.` },
+      };
+    }
+    const tree = sectionToElementTree(section);
+    if (!tree.nodes[elementId]) {
+      return {
+        ok: false,
+        error: { code: "INVALID_TREE", message: `Element "${elementId}" does not exist.` },
+      };
+    }
+    // No-op detection by durable content — identical values skip history.
+    if (JSON.stringify(tree.nodes[elementId].animation ?? null) === JSON.stringify(animation)) {
+      return { ok: true, changed: false };
+    }
+    const applied = applyElementOperation(tree, {
+      kind: "update-animation",
+      elementId,
+      animation,
+    });
+    if (!applied.ok) {
+      return {
+        ok: false,
+        error: { code: "INVALID_TREE", message: applied.error.message },
+      };
+    }
+    const folded = elementTreeToSection(applied.value as ElementTree, section);
+    if (!folded.ok) {
+      return {
+        ok: false,
+        error: { code: "INVALID_TREE", message: folded.error.message },
+      };
+    }
+    set(
+      withHistory(state, (project) => {
+        for (const p of project.pages) {
+          const idx = p.sections.findIndex((s) => s.id === sectionId);
+          if (idx !== -1) {
+            p.sections[idx] = {
+              ...p.sections[idx],
+              props: folded.value.section.props,
+              styles: folded.value.section.styles,
+            };
+            project.updatedAt = new Date().toISOString();
+            return;
+          }
+        }
+      }),
+    );
+    return { ok: true, changed: true };
+  },
+
+  updateElementInteraction: (pageId, sectionId, elementId, interaction) => {
+    if (!isEditorWritable()) return readonlyDenied();
+    if (interaction !== null) {
+      const parsed = ElementInteractionSchema.safeParse(interaction);
+      if (!parsed.success) {
+        return {
+          ok: false,
+          error: { code: "INVALID_TREE", message: "Invalid interaction configuration." },
+        };
+      }
+    }
+    const state = get();
+    const page = state.project.pages.find((p) => p.id === pageId);
+    if (!page) {
+      return {
+        ok: false,
+        error: { code: "PAGE_NOT_FOUND", message: `Page "${pageId}" does not exist.` },
+      };
+    }
+    const section = page.sections.find((s) => s.id === sectionId);
+    if (!section) {
+      return {
+        ok: false,
+        error: { code: "SECTION_NOT_FOUND", message: `Section "${sectionId}" does not exist.` },
+      };
+    }
+    const tree = sectionToElementTree(section);
+    if (!tree.nodes[elementId]) {
+      return {
+        ok: false,
+        error: { code: "INVALID_TREE", message: `Element "${elementId}" does not exist.` },
+      };
+    }
+    // No-op detection by durable content — identical values skip history.
+    if (JSON.stringify(tree.nodes[elementId].interaction ?? null) === JSON.stringify(interaction)) {
+      return { ok: true, changed: false };
+    }
+    const applied = applyElementOperation(tree, {
+      kind: "update-interaction",
+      elementId,
+      interaction,
+    });
+    if (!applied.ok) {
+      return {
+        ok: false,
+        error: { code: "INVALID_TREE", message: applied.error.message },
+      };
+    }
+    const folded = elementTreeToSection(applied.value as ElementTree, section);
+    if (!folded.ok) {
+      return {
+        ok: false,
+        error: { code: "INVALID_TREE", message: folded.error.message },
+      };
+    }
+    set(
+      withHistory(state, (project) => {
+        for (const p of project.pages) {
+          const idx = p.sections.findIndex((s) => s.id === sectionId);
+          if (idx !== -1) {
+            p.sections[idx] = {
+              ...p.sections[idx],
+              props: folded.value.section.props,
+              styles: folded.value.section.styles,
+            };
+            project.updatedAt = new Date().toISOString();
+            return;
+          }
+        }
+      }),
+    );
+    return { ok: true, changed: true };
+  },
+
+  // ---- Collections (Phase P22-J) ----
+  //
+  // Durable collection definitions live on the Project document. Every action
+  // delegates to the pure collection-structure helpers and commits through
+  // withHistory as ONE entry (undo/redo + collab unchanged). A no-op skips
+  // history. Deleting a collection never touches existing bindings — they
+  // resolve as missing-collection and fall back to their static props.
+
+  addCollection: (name, fields) => {
+    if (!isEditorWritable()) return readonlyDenied();
+    const state = get();
+    const result = addCollectionToList(state.project.collections, name, fields);
+    if (!result.ok) return mapCollectionStructureError(result.error);
+    set(
+      withHistory(state, (project) => {
+        project.collections = result.value;
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
+    return { ok: true, changed: true };
+  },
+
+  renameCollection: (collectionId, name) => {
+    if (!isEditorWritable()) return readonlyDenied();
+    const state = get();
+    const result = renameCollectionInList(state.project.collections, collectionId, name);
+    if (!result.ok) return mapCollectionStructureError(result.error);
+    if (!result.changed) return { ok: true, changed: false };
+    set(
+      withHistory(state, (project) => {
+        project.collections = result.value;
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
+    return { ok: true, changed: true };
+  },
+
+  deleteCollection: (collectionId) => {
+    if (!isEditorWritable()) return readonlyDenied();
+    const state = get();
+    const result = deleteCollectionFromList(state.project.collections, collectionId);
+    if (!result.ok) return mapCollectionStructureError(result.error);
+    set(
+      withHistory(state, (project) => {
+        project.collections = result.value;
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
+    return { ok: true, changed: true };
+  },
+
+  addCollectionField: (collectionId, fieldName, fieldType) => {
+    if (!isEditorWritable()) return readonlyDenied();
+    const state = get();
+    const result = addFieldToList(state.project.collections, collectionId, fieldName, fieldType);
+    if (!result.ok) return mapCollectionStructureError(result.error);
+    set(
+      withHistory(state, (project) => {
+        project.collections = result.value;
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
+    return { ok: true, changed: true };
+  },
+
+  removeCollectionField: (collectionId, fieldId) => {
+    if (!isEditorWritable()) return readonlyDenied();
+    const state = get();
+    const result = removeFieldFromList(state.project.collections, collectionId, fieldId);
+    if (!result.ok) return mapCollectionStructureError(result.error);
+    set(
+      withHistory(state, (project) => {
+        project.collections = result.value;
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
+    return { ok: true, changed: true };
+  },
+
+  renameCollectionField: (collectionId, fieldId, name) => {
+    if (!isEditorWritable()) return readonlyDenied();
+    const state = get();
+    const result = renameFieldInList(state.project.collections, collectionId, fieldId, name);
+    if (!result.ok) return mapCollectionStructureError(result.error);
+    if (!result.changed) return { ok: true, changed: false };
+    set(
+      withHistory(state, (project) => {
+        project.collections = result.value;
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
+    return { ok: true, changed: true };
+  },
+
+  setCollectionFieldType: (collectionId, fieldId, fieldType) => {
+    if (!isEditorWritable()) return readonlyDenied();
+    const state = get();
+    const result = setFieldTypeInList(state.project.collections, collectionId, fieldId, fieldType);
+    if (!result.ok) return mapCollectionStructureError(result.error);
+    if (!result.changed) return { ok: true, changed: false };
+    set(
+      withHistory(state, (project) => {
+        project.collections = result.value;
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
+    return { ok: true, changed: true };
+  },
+
+  // ---- Responsive engine (Phase P22-F) ----
+  //
+  // Accept/Dismiss are explicit user actions — nothing is auto-applied. Each
+  // is ONE withHistory entry; the decision is recorded with the user's choice
+  // (dismissed proposals are never re-suggested; accepted decisions are not
+  // re-offered). The decision schema is the hard boundary — arbitrary
+  // transformation strings never reach the document.
+
+  acceptResponsiveDecision: (pageId, sectionId, decision) => {
+    if (!isEditorWritable()) return readonlyDenied();
+    const parsed = ResponsiveDecisionSchema.safeParse(decision);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: { code: "INVALID_TREE", message: "Invalid responsive decision." },
+      };
+    }
+    const state = get();
+    const page = state.project.pages.find((p) => p.id === pageId);
+    if (!page) {
+      return {
+        ok: false,
+        error: { code: "PAGE_NOT_FOUND", message: `Page "${pageId}" does not exist.` },
+      };
+    }
+    const section = page.sections.find((s) => s.id === sectionId);
+    if (!section) {
+      return {
+        ok: false,
+        error: { code: "SECTION_NOT_FOUND", message: `Section "${sectionId}" does not exist.` },
+      };
+    }
+    if (!sectionToElementTree(section).nodes[parsed.data.elementId]) {
+      return {
+        ok: false,
+        error: { code: "INVALID_TREE", message: `Element "${parsed.data.elementId}" does not exist.` },
+      };
+    }
+
+    // Apply the decision to the FRESHEST tree and fold it back.
+    const freshest = sectionToElementTree(section);
+    const applied = applyResponsibleDecision(freshest, parsed.data);
+    if (!applied.ok) {
+      return {
+        ok: false,
+        error: { code: "INVALID_TREE", message: applied.error.message },
+      };
+    }
+    const folded = elementTreeToSection(applied.value, section);
+    if (!folded.ok) {
+      return {
+        ok: false,
+        error: { code: "INVALID_TREE", message: folded.error.message },
+      };
+    }
+
+    // No-op when the decision was already recorded (it was applied in that
+    // earlier commit, so re-accepting changes nothing semantically).
+    const alreadyRecorded = (state.project.responsiveDecisions ?? []).some(
+      (d) =>
+        d.elementId === parsed.data.elementId &&
+        d.viewport === parsed.data.viewport &&
+        d.transformation === parsed.data.transformation &&
+        d.state === parsed.data.state,
+    );
+    if (alreadyRecorded) return { ok: true, changed: false };
+
+    set(
+      withHistory(state, (project) => {
+        for (const p of project.pages) {
+          const idx = p.sections.findIndex((s) => s.id === sectionId);
+          if (idx !== -1) {
+            p.sections[idx] = {
+              ...p.sections[idx],
+              props: folded.value.section.props,
+              styles: folded.value.section.styles,
+            };
+            project.responsiveDecisions = recordResponsiveDecision(
+              project.responsiveDecisions ?? [],
+              parsed.data,
+            );
+            project.updatedAt = new Date().toISOString();
+            return;
+          }
+        }
+      }),
+    );
+    return { ok: true, changed: true };
+  },
+
+  rejectResponsiveDecision: (decision) => {
+    if (!isEditorWritable()) return readonlyDenied();
+    const parsed = ResponsiveDecisionSchema.safeParse(decision);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: { code: "INVALID_TREE", message: "Invalid responsive decision." },
+      };
+    }
+    const state = get();
+    const alreadyRecorded = (state.project.responsiveDecisions ?? []).some(
+      (d) =>
+        d.elementId === parsed.data.elementId &&
+        d.viewport === parsed.data.viewport &&
+        d.transformation === parsed.data.transformation &&
+        d.state === parsed.data.state,
+    );
+    if (alreadyRecorded) return { ok: true, changed: false };
+
+    set(
+      withHistory(state, (project) => {
+        project.responsiveDecisions = recordResponsiveDecision(
+          project.responsiveDecisions ?? [],
+          parsed.data,
+        );
+        project.updatedAt = new Date().toISOString();
+      }),
+    );
     return { ok: true, changed: true };
   },
 

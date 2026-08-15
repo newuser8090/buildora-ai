@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/Input";
 import { Field } from "@/components/ui/Field";
 import { SharedSectionControls } from "./SharedSectionControls";
 import { InspectorAssetField } from "@/features/assets/components/InspectorAssetField";
+import { NavigateToPicker } from "@/features/editor/components/NavigateToPicker";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import type { BaseSection, FooterSectionProps } from "@/types/section";
 
@@ -18,6 +19,7 @@ export function FooterInspector({
   onUpdateStyles: (styles: Record<string, unknown>) => void;
 }) {
   const props = section.props as unknown as FooterSectionProps;
+  const pages = useEditorStore((s) => s.project.pages);
   const beginEditSession = useEditorStore((s) => s.beginEditSession);
   const commitEditSession = useEditorStore((s) => s.commitEditSession);
 
@@ -82,19 +84,30 @@ export function FooterInspector({
                   className="flex-1"
                 />
               </div>
-              <Input
-                value={link.href ?? "#"}
-                onFocus={handleFocus}
-                onBlur={handleBlur}
-                onKeyDown={handleKeyDown}
-                onChange={(e) => {
-                  const updated = [...props.links];
-                  updated[i] = { ...updated[i], href: e.target.value || "#" };
-                  update({ links: updated });
-                }}
-                placeholder="/path"
-                className="w-full text-xs text-text-dim"
-              />
+              <div className="flex items-center gap-2">
+                <Input
+                  value={link.href ?? "#"}
+                  onFocus={handleFocus}
+                  onBlur={handleBlur}
+                  onKeyDown={handleKeyDown}
+                  onChange={(e) => {
+                    const updated = [...props.links];
+                    updated[i] = { ...updated[i], href: e.target.value || "#" };
+                    update({ links: updated });
+                  }}
+                  placeholder="/path"
+                  className="min-w-0 flex-1 text-xs text-text-dim"
+                />
+                <NavigateToPicker
+                  pages={pages}
+                  value={link.href ?? "#"}
+                  onChange={(href) => {
+                    const updated = [...props.links];
+                    updated[i] = { ...updated[i], href };
+                    update({ links: updated });
+                  }}
+                />
+              </div>
             </div>
           ))}
         </div>

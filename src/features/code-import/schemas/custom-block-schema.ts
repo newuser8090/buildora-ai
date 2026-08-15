@@ -19,6 +19,11 @@
 import { z } from "zod";
 import type { BlockNode, BlockTree } from "@/features/blocks/types";
 import { ALL_BLOCK_TYPES } from "@/features/blocks/registry/default-blocks";
+import {
+  ElementAnimationSchema,
+  ElementBindingSchema,
+  ElementInteractionSchema,
+} from "@/features/elements/schemas/element-schemas";
 import type { ImportedCodeLanguage } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -263,11 +268,58 @@ const ResponsiveSchema = z
     { message: "Too many responsive breakpoints." },
   );
 
+// Phase P22-C — OPTIONAL Canva-first viewport overrides on stored
+// custom-block nodes (mirrors the P22-B geometry addition). Additive: old
+// stored trees (without viewport) still validate; new trees may carry
+// tablet/mobile style overrides for the universal inspector's responsive
+// section. Bounded: at most 2 viewport keys, each a capped style record.
+const NodeViewportSchema = z
+  .object({
+    tablet: StyleRecordSchema.optional(),
+    mobile: StyleRecordSchema.optional(),
+  })
+  .strict()
+  .refine(
+    (record) => Object.keys(record).length <= 2,
+    { message: "Too many viewport keys." },
+  );
+
+// Phase P22-B — OPTIONAL freeform geometry on stored custom-block nodes.
+// Additive: old stored trees (without geometry) still validate; new trees may
+// carry x/y/width/height/rotation/zIndex for the canvas manipulation layer.
+// Bounded and finite — malformed geometry is rejected at the persistence
+// boundary (same posture as every other custom-block field).
+const NodeGeometrySchema = z.object({
+  mode: z.enum(["flow", "absolute"]).default("flow"),
+  x: z.number().finite().min(-10000).max(10000).optional(),
+  y: z.number().finite().min(-10000).max(10000).optional(),
+  width: z.number().finite().min(0).max(10000).optional(),
+  height: z.number().finite().min(0).max(10000).optional(),
+  rotation: z.number().finite().min(-3600).max(3600).optional(),
+  zIndex: z.number().int().min(-1000).max(1000).optional(),
+});
+
 export const CustomBlockNodeSchema = z.object({
   id: z.string().min(1).max(120),
   type: knownBlockType,
   parentId: z.string().min(1).max(120).nullable(),
   children: z.array(z.string().min(1).max(120)).max(MAX_CUSTOM_BLOCK_CHILDREN),
+  geometry: NodeGeometrySchema.optional(),
+  viewport: NodeViewportSchema.optional(),
+  // Phase P22-G — OPTIONAL declarative interactions + animations on stored
+  // custom-block nodes (the P22-A model re-validated verbatim; no schema is
+  // redefined here). Additive: old stored trees (without animation/
+  // interaction) still validate; new trees may carry them. Bounded and
+  // allow-listed — malformed payloads are rejected at the persistence
+  // boundary (same posture as geometry/viewport).
+  animation: ElementAnimationSchema.optional(),
+  interaction: ElementInteractionSchema.optional(),
+  // Phase P22-J — OPTIONAL data binding on stored custom-block nodes (the
+  // P22-A model re-validated verbatim). Additive: old stored trees (without
+  // binding) still validate; new trees may carry them. Bounded and
+  // allow-listed — malformed payloads are rejected at the persistence
+  // boundary (same posture as geometry/viewport).
+  binding: ElementBindingSchema.optional(),
   props: z.custom<Record<string, unknown>>(
     (value) => {
       if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -323,6 +375,19 @@ export type ValidatedCustomBlockSectionProps = z.infer<typeof CustomBlockSection
 // Normalization / repair — malformed or legacy custom blocks
 // ---------------------------------------------------------------------------
 
+// Phase P22-B/P22-C/P22-G/P22-J — stored custom-block nodes MAY carry
+// optional freeform geometry, Canva-first viewport overrides, declarative
+// animations and interactions, and data bindings (additive runtime fields
+// beyond the base BlockNode type). The intersection type keeps the normalizer
+// honest about what it preserves.
+type StoredCustomBlockNode = BlockNode & {
+  geometry?: z.infer<typeof NodeGeometrySchema>;
+  viewport?: z.infer<typeof NodeViewportSchema>;
+  animation?: z.infer<typeof ElementAnimationSchema>;
+  interaction?: z.infer<typeof ElementInteractionSchema>;
+  binding?: z.infer<typeof ElementBindingSchema>;
+};
+
 /**
  * Repair an unknown tree-like value into a structurally valid BlockTree.
  *
@@ -349,7 +414,7 @@ export function normalizeCustomBlockTree(input: unknown): BlockTree | null {
       : {};
 
   const validTypes = new Set(ALL_BLOCK_TYPES as string[]);
-  const nodes: Record<string, BlockNode> = {};
+  const nodes: Record<string, StoredCustomBlockNode> = {};
   const reachable = new Set<string>();
 
   const sanitizeString = (value: unknown): unknown => {
@@ -383,11 +448,41 @@ export function normalizeCustomBlockTree(input: unknown): BlockTree | null {
       ? (node.children as unknown[]).filter((c): c is string => typeof c === "string" && c.length > 0).slice(0, MAX_CUSTOM_BLOCK_CHILDREN)
       : [];
 
+    // Carry OPTIONAL geometry through repair (validated; dropped when invalid).
+    const parsedGeometry =
+      node.geometry === undefined ? undefined : NodeGeometrySchema.safeParse(node.geometry);
+
+    // Carry OPTIONAL viewport overrides through repair (validated; dropped
+    // when malformed — same posture as geometry).
+    const parsedViewport =
+      node.viewport === undefined ? undefined : NodeViewportSchema.safeParse(node.viewport);
+
+    // Phase P22-G — carry OPTIONAL declarative animation + interaction through
+    // repair, validated by the SHARED P22-A schemas (never redefined here);
+    // malformed payloads are dropped — the allow-list is the only vocabulary
+    // the document accepts.
+    const parsedAnimation =
+      node.animation === undefined ? undefined : ElementAnimationSchema.safeParse(node.animation);
+
+    const parsedInteraction =
+      node.interaction === undefined ? undefined : ElementInteractionSchema.safeParse(node.interaction);
+
+    // Phase P22-J — carry OPTIONAL data binding through repair, validated by
+    // the SHARED P22-A schema; malformed payloads are dropped (same posture as
+    // animation/interaction).
+    const parsedBinding =
+      node.binding === undefined ? undefined : ElementBindingSchema.safeParse(node.binding);
+
     nodes[id] = {
       id,
       type: node.type as BlockNode["type"],
       parentId: typeof node.parentId === "string" && node.parentId.length > 0 ? node.parentId : null,
       children,
+      geometry: parsedGeometry && parsedGeometry.success ? parsedGeometry.data : undefined,
+      viewport: parsedViewport && parsedViewport.success ? parsedViewport.data : undefined,
+      animation: parsedAnimation && parsedAnimation.success ? parsedAnimation.data : undefined,
+      interaction: parsedInteraction && parsedInteraction.success ? parsedInteraction.data : undefined,
+      binding: parsedBinding && parsedBinding.success ? parsedBinding.data : undefined,
       props: sanitizeRecord(node.props, MAX_CUSTOM_BLOCK_PROPS_KEYS),
       style: sanitizeRecord(node.style, MAX_CUSTOM_BLOCK_STYLE_KEYS),
       responsive: {},

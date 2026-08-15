@@ -23,9 +23,19 @@
 //     itself does not create content.
 // ---------------------------------------------------------------------------
 
+import { z } from "zod";
 import type { Project } from "@/types/project";
 import type { BaseSection } from "@/types/section";
 import type { BlockTree } from "@/features/blocks/types";
+import { normalizeResponsiveDecisions } from "@/features/elements/responsive/decisions";
+import { normalizeCollections } from "@/features/elements/schemas/collection-schema";
+import {
+  ElementAnimationSchema,
+  ElementBindingSchema,
+  ElementGeometrySchema,
+  ElementInteractionSchema,
+  ElementViewportStylesSchema,
+} from "@/features/elements/schemas/element-schemas";
 
 // ---------------------------------------------------------------------------
 // Bounds (architecture §39)
@@ -49,6 +59,28 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
     !Array.isArray(value) &&
     !(value instanceof Date)
   );
+}
+
+// ---------------------------------------------------------------------------
+// Element metadata carry-through (Phase P22-G)
+//
+// Stored custom-block nodes MAY carry optional element metadata (geometry,
+// viewport overrides, declarative animation/interaction). The collab bridge
+// is shape-agnostic, so these fields flow through reconcileProject as plain
+// JSON — but normalizeBlockTree rebuilds every node from a fixed key set, so
+// it must preserve the OPTIONAL fields through the same validated,
+// additive manner as the custom-block schema (invalid payloads are DROPPED,
+// never coerced; old trees without them still normalize unchanged).
+// ---------------------------------------------------------------------------
+
+/** Validate an optional element-metadata field; undefined stays undefined. */
+function carryValidatedElementField(
+  value: unknown,
+  schema: z.ZodTypeAny,
+): unknown {
+  if (value === undefined) return undefined;
+  const parsed = schema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -154,6 +186,18 @@ export function normalizeBlockTree(tree: unknown): BlockTree | null {
     // A reachable node's parent must actually be reachable and (by our
     // construction) already built or scheduled; if parentId points to a node
     // that isn't an ancestor (cycle broken), clear it.
+    //
+    // Phase P22-G — preserve optional element metadata through the projection
+    // (validated; invalid payloads dropped). Collab sessions then keep the
+    // same additive fields as the custom-block persistence path.
+    const geometry = carryValidatedElementField(raw.geometry, ElementGeometrySchema);
+    const viewport = carryValidatedElementField(raw.viewport, ElementViewportStylesSchema);
+    const animation = carryValidatedElementField(raw.animation, ElementAnimationSchema);
+    const interaction = carryValidatedElementField(raw.interaction, ElementInteractionSchema);
+    // Phase P22-J — data bindings survive CRDT projection (validated; invalid
+    // payloads dropped). Same additive mechanism as the other metadata fields.
+    const binding = carryValidatedElementField(raw.binding, ElementBindingSchema);
+
     const node: Record<string, unknown> = {
       id,
       type: typeof raw.type === "string" ? raw.type : "container",
@@ -165,6 +209,11 @@ export function normalizeBlockTree(tree: unknown): BlockTree | null {
       visible: raw.visible !== false,
       locked: raw.locked === true,
       hidden: raw.hidden === true,
+      ...(geometry !== undefined ? { geometry } : {}),
+      ...(viewport !== undefined ? { viewport } : {}),
+      ...(animation !== undefined ? { animation } : {}),
+      ...(interaction !== undefined ? { interaction } : {}),
+      ...(binding !== undefined ? { binding } : {}),
     };
     normalizedNodes[id] = node;
     for (const childId of children) {
@@ -352,6 +401,12 @@ export function normalizeProject(value: unknown): Project {
     : [];
   const theme = sanitizeJson(raw.theme);
   const siteSettings = sanitizeJson(raw.siteSettings);
+  // Phase P22-F — responsive decisions flow through collab as bounded,
+  // validated JSON (invalid entries dropped by the shared normalizer).
+  const responsiveDecisions = normalizeResponsiveDecisions(raw.responsiveDecisions);
+  // Phase P22-J — durable collection definitions flow through collab as
+  // bounded, validated JSON (invalid entries dropped; old docs stay empty).
+  const collections = normalizeCollections(raw.collections);
 
   return {
     id: typeof raw.id === "string" ? raw.id : "unknown",
@@ -367,5 +422,7 @@ export function normalizeProject(value: unknown): Project {
     siteSettings: isPlainObject(siteSettings)
       ? (siteSettings as unknown as Project["siteSettings"])
       : undefined,
+    responsiveDecisions,
+    ...(collections !== undefined ? { collections } : {}),
   };
 }

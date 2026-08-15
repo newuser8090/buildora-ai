@@ -190,6 +190,91 @@ describe("resolveInternalHref", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Nested routes (P22-E — lock in existing support)
+// ---------------------------------------------------------------------------
+
+describe("nested routes", () => {
+  it("accepts nested slugs in validateSlug", () => {
+    expect(validateSlug("/blog/post").valid).toBe(true);
+    expect(validateSlug("/products/shoes/red").valid).toBe(true);
+  });
+
+  it("rejects unsafe nested segments", () => {
+    expect(validateSlug("/blog/[post]").valid).toBe(false);
+    expect(validateSlug("/blog/api").valid).toBe(false);
+    expect(validateSlug("/blog/_private").valid).toBe(false);
+  });
+
+  it("maps nested slugs to route files", () => {
+    expect(slugToRoutePath("/blog/post")).toBe("app/blog/post/page.tsx");
+    expect(slugToRouteUrl("/blog/post")).toBe("/blog/post");
+  });
+
+  it("computes route table entries for nested pages", () => {
+    const pages = [
+      makePage(),
+      makePage({ id: "blog", title: "Blog", slug: "/blog/post" }),
+    ];
+    const routes = computePageRoutes(pages);
+    expect(routes[1]).toMatchObject({
+      isHome: false,
+      routeUrl: "/blog/post",
+      filePath: "app/blog/post/page.tsx",
+    });
+  });
+
+  it("resolves internal hrefs to nested routes", () => {
+    const routes = computePageRoutes([
+      makePage(),
+      makePage({ id: "blog", title: "Blog", slug: "/blog/post" }),
+    ]);
+    expect(resolveInternalHref("/blog/post", routes)).toBe("/blog/post");
+    expect(resolveInternalHref("blog/post", routes)).toBe("/blog/post");
+  });
+
+  it("accepts nested slugs in export validation", () => {
+    const errors = validateRoutingForExport([
+      makePage(),
+      makePage({ id: "blog", title: "Blog", slug: "/blog/post" }),
+    ]);
+    expect(errors).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-page route behavior after homepage changes (P22-E)
+// ---------------------------------------------------------------------------
+
+describe("route table after homepage changes", () => {
+  it("maps the new first page to the root route", () => {
+    // The editor's set-homepage action reorders pages; computePageRoutes
+    // derives the homepage purely from order (pages[0] owns "/").
+    const pages = [
+      makePage({ id: "page-2", title: "About", slug: "/" }),
+      makePage({ id: "page-1", title: "Home", slug: "/home" }),
+      makePage({ id: "page-3", title: "Contact", slug: "/contact" }),
+    ];
+    const routes = computePageRoutes(pages);
+    expect(routes[0]).toMatchObject({ isHome: true, routeUrl: "/", page: expect.objectContaining({ id: "page-2" }) });
+    expect(routes[1]).toMatchObject({ isHome: false, routeUrl: "/home" });
+    expect(routes[2]).toMatchObject({ isHome: false, routeUrl: "/contact" });
+    expect(validateRoutingForExport(pages)).toEqual([]);
+  });
+
+  it("keeps internal links to the old homepage resolving to its new route", () => {
+    const pages = [
+      makePage({ id: "page-2", title: "About", slug: "/" }),
+      makePage({ id: "page-1", title: "Home", slug: "/home" }),
+    ];
+    const routes = computePageRoutes(pages);
+    // A link authored as "/home" (the old home's slug) resolves to "/home".
+    expect(resolveInternalHref("/home", routes)).toBe("/home");
+    // The root always resolves to the new homepage.
+    expect(resolveInternalHref("/", routes)).toBe("/");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // validateRoutingForExport
 // ---------------------------------------------------------------------------
 

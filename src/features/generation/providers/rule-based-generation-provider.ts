@@ -1,4 +1,4 @@
-import { analyzePrompt } from "../analyzers/prompt-analyzer";
+import { analyzePrompt, analyzeSitePrompt } from "../analyzers/prompt-analyzer";
 import { normalizeSectionType } from "./generation-provider";
 import {
   normalizeSectionProps as normalizeSectionComprehensively,
@@ -19,11 +19,14 @@ export const ruleBasedProvider: GenerationProvider = {
   id: "rule-based",
 
   async generatePlan(input: GenerationProviderInput): Promise<GenerationProviderResult> {
-    const plan = analyzePrompt(input.prompt);
+    // Phase P22-I — site mode routes through the deterministic site analyzer.
+    const plan =
+      input.mode === "site"
+        ? analyzeSitePrompt(input.prompt)
+        : analyzePrompt(input.prompt);
     const warnings: string[] = [];
 
-    // Normalize sections using the comprehensive normalizer
-    const normalizedSections = plan.sections.map((s) => {
+    const normalize = (s: { type: string; props: Record<string, unknown>; order: number }) => {
       const normalizedType = normalizeSectionType(s.type);
       if (normalizedType !== s.type) {
         warnings.push(`Normalized section type "${s.type}" → "${normalizedType}"`);
@@ -38,12 +41,23 @@ export const ruleBasedProvider: GenerationProvider = {
       logNormalizationWarning(s.type, "props", s.props);
 
       return { ...s, type: normalizedType, props: normalized.props };
-    });
+    };
+
+    const normalizedSections = plan.sections.map(normalize);
 
     return {
       plan: {
         ...plan,
         sections: normalizedSections,
+        // Phase P22-I — normalize every page's sections too, preserving the
+        // canonical page/slug structure from the site analyzer.
+        pages: plan.pages
+          ? plan.pages.map((p) => ({
+              title: p.title,
+              slug: p.slug,
+              sections: p.sections.map(normalize),
+            }))
+          : undefined,
       },
       source: "rule-based",
       warnings,

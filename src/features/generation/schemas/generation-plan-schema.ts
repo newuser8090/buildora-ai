@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { AssetRefSchema } from "@/features/assets/schemas/asset-schema";
 import { SiteSettingsSchema } from "@/features/site-settings/schema";
+import { ResponsiveDecisionsSchema } from "@/features/elements/responsive/decisions";
+import { CollectionsSchema } from "@/features/elements/schemas/collection-schema";
+import { validateSlug } from "@/features/routing/routes";
 
 // ---------------------------------------------------------------------------
 // Planned section schema
@@ -22,6 +25,28 @@ const ThemeStyleEnum = z.string().refine(
 );
 
 // ---------------------------------------------------------------------------
+// Site plan bounds (Phase P22-I) — 2–6 pages, one shared theme
+// ---------------------------------------------------------------------------
+
+export const SITE_MIN_PAGES = 2;
+export const SITE_MAX_PAGES = 6;
+
+// ---------------------------------------------------------------------------
+// Planned page schema (Phase P22-I)
+// ---------------------------------------------------------------------------
+
+export const PlannedPageSchema = z.object({
+  title: z.string().min(1, "Page title is required").max(80, "Page title too long"),
+  slug: z
+    .string()
+    .min(1)
+    .refine((v) => validateSlug(v).valid, { message: "Invalid page slug" }),
+  sections: z.array(PlannedSectionSchema).min(1, "At least one section required per page"),
+});
+
+export type PlannedPageInput = z.infer<typeof PlannedPageSchema>;
+
+// ---------------------------------------------------------------------------
 // Full GenerationPlan schema (what Gemini outputs)
 // ---------------------------------------------------------------------------
 
@@ -37,6 +62,13 @@ export const GenerationPlanSchema = z.object({
   brandName: z.string().min(1, "Brand name is required").default("MyBrand"),
   theme: ThemeStyleEnum.default("modern"),
   sections: z.array(PlannedSectionSchema).min(1, "At least one section required"),
+  // Phase P22-I — optional multi-page site plan (2–6 pages). Ordinary
+  // single-page create plans omit it entirely.
+  pages: z
+    .array(PlannedPageSchema)
+    .min(SITE_MIN_PAGES, `Site plans need at least ${SITE_MIN_PAGES} pages`)
+    .max(SITE_MAX_PAGES, `Site plans are limited to ${SITE_MAX_PAGES} pages`)
+    .optional(),
 });
 
 export type GeminiPlanInput = z.infer<typeof GenerationPlanSchema>;
@@ -146,4 +178,11 @@ export const ProjectSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   siteSettings: SiteSettingsSchema.optional(),
+  // Phase P22-F — optional persisted responsive decisions (bounded, validated
+  // allow-list transformations). Old projects without the field stay valid.
+  responsiveDecisions: ResponsiveDecisionsSchema.optional(),
+  // Phase P22-J — optional durable collection definitions (id/name/fields,
+  // bounded + allow-listed field types). Old projects without the field stay
+  // valid; runtime records never enter the document.
+  collections: CollectionsSchema.optional(),
 });

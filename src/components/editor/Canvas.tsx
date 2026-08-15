@@ -16,6 +16,7 @@ import { validateDropZone } from "@/features/my-blocks/drag/drop-zone-utils";
 import { getMyBlocksAdapter } from "@/features/my-blocks/storage/my-blocks-singleton";
 import { insertMyBlock } from "@/features/my-blocks/services/insert-my-block";
 import { useMyBlocksUiStore } from "@/features/my-blocks/store/my-blocks-ui-store";
+import { CanvasManipulationLayer } from "@/features/canvas/components/CanvasManipulationLayer";
 
 
 // ---------------------------------------------------------------------------
@@ -170,6 +171,9 @@ export function Canvas() {
   const guided = guidedHydrated && experienceMode === "guided";
 
   const canvasRef = useRef<HTMLDivElement>(null);
+  // Phase P22-B — ref for the scrollable preview content (canvas manipulation
+  // coordinate frame + selection overlay mount).
+  const previewContentRef = useRef<HTMLDivElement>(null);
   const prevProjectRef = useRef<string | null>(null);
   const [isTransitioning, setIsTransitioning] = useState(false);
 
@@ -299,6 +303,7 @@ export function Canvas() {
         {/* ---- Website content ---- */}
         <div
           id="preview-content"
+          ref={previewContentRef}
           data-testid="preview-content"
           data-preview-root
           className="relative flex-1 min-h-0 overflow-y-auto"
@@ -371,6 +376,8 @@ export function Canvas() {
                 showInsertionPoints={guided && !isGenerating}
                 myBlockDragActive={myBlockDragActive && !isGenerating}
               />
+              {/* Phase P22-B — canvas selection & manipulation layer (editor-only) */}
+              <CanvasManipulationLayer contentRef={previewContentRef} />
             </>
           ) : (
             !isGenerating &&

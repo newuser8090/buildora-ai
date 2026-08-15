@@ -6,6 +6,8 @@
 // ---------------------------------------------------------------------------
 
 import type { Project } from "@/types/project";
+import { normalizeResponsiveDecisions } from "@/features/elements/responsive/decisions";
+import { normalizeCollections } from "@/features/elements/schemas/collection-schema";
 import type { ProjectNormalizationResult } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -75,6 +77,20 @@ export function normalizeProject(input: unknown): ProjectNormalizationResult {
       delete project.siteSettings;
     }
 
+    // Phase P22-F: responsiveDecisions is optional authoring history — kept
+    // only as a bounded array of schema-valid decisions (invalid entries and
+    // unknown transformation strings are dropped, never coerced).
+    if (project.responsiveDecisions !== undefined) {
+      project.responsiveDecisions = normalizeResponsiveDecisions(project.responsiveDecisions);
+    }
+
+    // Phase P22-J: collections is optional durable definition data — kept
+    // only as a bounded array of schema-valid collections (invalid entries
+    // dropped, never coerced; old projects without the field stay unchanged).
+    if (project.collections !== undefined) {
+      project.collections = normalizeCollections(project.collections);
+    }
+
     // Ensure theme is at least a minimal object
     if (!project.theme || typeof project.theme !== "object") {
       project.theme = createMinimalTheme();
@@ -115,7 +131,7 @@ export function normalizeProject(input: unknown): ProjectNormalizationResult {
     // Remove transient/undefined fields that are not part of Project
     const allowedKeys = [
       "id", "name", "theme", "pages", "assets", "createdAt", "updatedAt",
-      "siteSettings",
+      "siteSettings", "responsiveDecisions", "collections",
     ];
     for (const key of Object.keys(project)) {
       if (!allowedKeys.includes(key)) {

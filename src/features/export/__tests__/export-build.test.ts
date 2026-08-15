@@ -1,19 +1,23 @@
 /**
  * Integration test for the export pipeline.
  *
- * Generates a complete project from a mock project (with assets), writes it
- * to a temporary directory, runs `npm install` and `npm run build`, and
- * verifies the build succeeds.
+ * Runs ONE full `npm install` + `npm run build` cycle on a GENERATED
+ * multi-page site (Phase P22-I — the real deterministic pipeline), and
+ * statically verifies the asset-export behavior of a second project. A single
+ * build keeps the gate bounded: on this Windows environment a fresh `npm
+ * install` in a temp dir measures ~4-5 minutes (network-bound), so two full
+ * install+build cycles would not fit in one test run and would double the
+ * gate duration for the same coverage.
  *
  * This test is SKIPPED by default because it requires network access
- * (npm install) and takes ~90s. Set RUN_BUILD_TEST=true to enable:
+ * (npm install) and takes several minutes. Set RUN_BUILD_TEST=true to enable:
  *   npm run test:export-build
  *
  * Child processes are executed ASYNCHRONOUSLY via child_process.spawn rather
  * than synchronously. A synchronous child-process call (execSync) blocks the
- * Vitest worker event loop for the entire install/build duration (~80-95s),
- * which prevents the internal task-update message from being delivered and
- * surfaces as:  Error: [vitest-worker]: Timeout calling "onTaskUpdate".
+ * Vitest worker event loop for the entire install/build duration, which
+ * prevents the internal task-update message from being delivered and surfaces
+ * as:  Error: [vitest-worker]: Timeout calling "onTaskUpdate".
  *
  * On Windows, npm is a .cmd shim that cannot be exec'd directly (EINVAL), so
  * the child is spawned through cmd.exe (shell: true) there; on POSIX it is
@@ -27,6 +31,8 @@ import { tmpdir } from "os";
 import { spawn } from "child_process";
 import { MOCK_PROJECT } from "@/features/editor/mock/mock-project";
 import { generateExportProject } from "../generators/project-generator";
+import { generateProject } from "@/features/generation/generators/project-generator";
+import { analyzeSitePrompt } from "@/features/generation/analyzers/prompt-analyzer";
 
 const SHOULD_RUN = process.env.RUN_BUILD_TEST === "true";
 
@@ -36,7 +42,12 @@ const SHOULD_RUN = process.env.RUN_BUILD_TEST === "true";
 const NPM_COMMAND = process.platform === "win32" ? "npm.cmd" : "npm";
 const USE_SHELL = process.platform === "win32";
 
-const COMMAND_TIMEOUT_MS = 170_000;
+// Measured on the CI/Windows environment: a fresh `npm install` in a temp
+// dir is network-bound and took ~275s; `npm run build` ~20s. The per-step cap
+// must exceed the install time (the previous 170s cap would kill a genuine
+// install), while the per-test timeout (below) also budgets the slow
+// node_modules deletion on Windows.
+const COMMAND_TIMEOUT_MS = 480_000;
 
 /**
  * Runs a command asynchronously.
@@ -115,8 +126,33 @@ function runCommand(
   });
 }
 
+/**
+ * Remove a temp project directory with retries.
+ *
+ * On Windows, node_modules contains many files and the npm child may briefly
+ * hold handles after exit, so a single rmSync can race with ENOTEMPTY. A
+ * failed cleanup must never fail the build gate — leftover OS temp dirs are
+ * harmless — so final attempts are logged and ignored.
+ */
+async function removeDirWithRetry(dir: string): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+      return;
+    } catch (err) {
+      if (attempt === 4) {
+        console.warn(
+          `[BUILD TEST] Temp cleanup failed (ignored): ${dir} — ${(err as Error).message}`,
+        );
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
-// Create a mock project with assets for the integration test
+// Mock project with assets for the asset-export assertions
 // ---------------------------------------------------------------------------
 
 function createProjectWithAssets() {
@@ -248,8 +284,12 @@ function createProjectWithAssets() {
 
 describe("Export build integration", () => {
   it(
-    "generated project builds successfully with npm install && npm run build",
-    { timeout: 180_000 },
+    "generated multi-page site + asset export: one npm install && npm run build",
+    // Justified by measurement: a fresh temp-dir `npm install` is network-bound
+    // (~275s on this Windows env), `npm run build` ~20s, and Windows node_modules
+    // deletion ~90s. A single build needs ~7 min of budget; two full install+build
+    // cycles would not fit a single gate run and would double its duration.
+    { timeout: 600_000 },
     async () => {
       if (!SHOULD_RUN) {
         console.log(
@@ -258,14 +298,43 @@ describe("Export build integration", () => {
         return;
       }
 
-      // 1. Generate all project files (including assets)
-      const project = createProjectWithAssets();
+      // ---------------------------------------------------------------
+      // Part A — generate a multi-page site through the REAL deterministic
+      // pipeline (Phase P22-I: rule-based site plan → project generator) and
+      // verify one export route per page.
+      // ---------------------------------------------------------------
+      const plan = analyzeSitePrompt(
+        "Build a multi-page SaaS website for Nimbus with features, pricing, about, and contact pages",
+      );
+      const project = generateProject(plan);
+      expect(project.pages.length).toBeGreaterThanOrEqual(2);
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { folderName, files } = generateExportProject(project as any);
-      expect(files.length).toBeGreaterThan(0);
+      const siteExport = generateExportProject(project as any);
+      const files = siteExport.files;
+
+      expect(files.some((f) => f.path === "app/page.tsx")).toBe(true);
+      const pageFiles = files.filter(
+        (f) => f.path.startsWith("app/") && f.path.endsWith("/page.tsx"),
+      );
+      expect(pageFiles.length).toBe(project.pages.length);
+      for (const page of project.pages.slice(1)) {
+        expect(
+          files.some((f) => f.path === `app${page.slug}/page.tsx`),
+        ).toBe(true);
+      }
+
+      // ---------------------------------------------------------------
+      // Part B — statically verify the asset-export behavior (no build
+      // needed: these are pure export-file assertions).
+      // ---------------------------------------------------------------
+      const assetProject = createProjectWithAssets();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { files: assetFiles2 } = generateExportProject(assetProject as any);
+      expect(assetFiles2.length).toBeGreaterThan(0);
 
       // Verify asset files are included
-      const assetFiles = files.filter((f) => f.path.startsWith("public/assets/"));
+      const assetFiles = assetFiles2.filter((f) => f.path.startsWith("public/assets/"));
       expect(assetFiles.length).toBeGreaterThan(0);
       // Verify unused asset is excluded
       expect(assetFiles.some((f) => f.path.includes("unused"))).toBe(false);
@@ -278,20 +347,22 @@ describe("Export build integration", () => {
       expect(assetFiles.filter((f) => f.path.includes("logo.png"))).toHaveLength(1);
 
       // Verify generated page.tsx has /assets/ paths instead of data URLs
-      const pageFile = files.find((f) => f.path === "app/page.tsx");
+      const pageFile = assetFiles2.find((f) => f.path === "app/page.tsx");
       expect(pageFile).toBeDefined();
       expect(pageFile!.content).toContain("/assets/");
       expect(pageFile!.content).not.toContain("data:image/");
 
       // Verify generated section components have no next/image imports
-      const sectionFiles = files.filter((f) => f.path.startsWith("components/sections/"));
+      const sectionFiles = assetFiles2.filter((f) => f.path.startsWith("components/sections/"));
       for (const sf of sectionFiles) {
         expect(sf.content).not.toContain("next/image");
       }
 
-      // 2. Write to temp directory
-      const tmpPath = mkdtempSync(join(tmpdir(), "buildora-export-test-"));
-      const projectDir = join(tmpPath, folderName);
+      // ---------------------------------------------------------------
+      // Part C — ONE install + ONE build on the generated multi-page site.
+      // ---------------------------------------------------------------
+      const tmpPath = mkdtempSync(join(tmpdir(), "buildora-export-site-"));
+      const projectDir = join(tmpPath, siteExport.folderName);
 
       try {
         // Ensure project root exists
@@ -312,27 +383,27 @@ describe("Export build integration", () => {
           }
         }
 
-        // 3. Run npm install (async — event loop stays responsive)
+        // Run npm install (async — event loop stays responsive)
         console.log(`[BUILD TEST] Running npm install in ${projectDir}...`);
         await runCommand(NPM_COMMAND, ["install"], projectDir);
 
-        // 4. Run npm run build (async)
+        // Run npm run build (async)
         console.log("[BUILD TEST] Running npm run build...");
         await runCommand(NPM_COMMAND, ["run", "build"], projectDir);
 
-        // 5. Verify build output exists
+        // Verify build output exists
         const nextOutDir = join(projectDir, ".next");
         expect(existsSync(nextOutDir)).toBe(true);
 
         const buildManifest = join(nextOutDir, "build-manifest.json");
         expect(existsSync(buildManifest)).toBe(true);
 
-        console.log("[BUILD TEST] ✅ Build succeeded!");
+        console.log("[BUILD TEST] ✅ Multi-page site build succeeded!");
       } finally {
-        // 6. Clean up temp directory — only after the child process has fully
-        //    exited (runCommand resolves/rejects only on completion).
+        // Clean up temp directory — only after the child process has fully
+        // exited (runCommand resolves/rejects only on completion).
         console.log(`[BUILD TEST] Cleaning up ${tmpPath}...`);
-        rmSync(tmpPath, { recursive: true, force: true });
+        await removeDirWithRetry(tmpPath);
       }
     },
   );

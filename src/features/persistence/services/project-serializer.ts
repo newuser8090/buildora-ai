@@ -56,7 +56,7 @@ export function serializeProject(
   // Remove any transient fields that may have leaked into the project
   const allowedKeys = [
     "id", "name", "theme", "pages", "assets", "createdAt", "updatedAt",
-    "siteSettings",
+    "siteSettings", "responsiveDecisions", "collections",
   ];
   const cloneObj = cloned as unknown as Record<string, unknown>;
   for (const key of Object.keys(cloneObj)) {

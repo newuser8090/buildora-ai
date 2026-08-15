@@ -6,6 +6,7 @@ import { Textarea } from "@/components/ui/Textarea";
 import { Field } from "@/components/ui/Field";
 import { SharedSectionControls } from "./SharedSectionControls";
 import { InspectorAssetField } from "@/features/assets/components/InspectorAssetField";
+import { NavigateToPicker } from "@/features/editor/components/NavigateToPicker";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import type { BaseSection, HeroSectionProps } from "@/types/section";
 
@@ -19,6 +20,7 @@ export function HeroInspector({
   onUpdateStyles: (styles: Record<string, unknown>) => void;
 }) {
   const props = section.props as unknown as HeroSectionProps;
+  const pages = useEditorStore((s) => s.project.pages);
   const beginEditSession = useEditorStore((s) => s.beginEditSession);
   const commitEditSession = useEditorStore((s) => s.commitEditSession);
 
@@ -100,17 +102,25 @@ export function HeroInspector({
       </Field>
 
       <Field label="Primary button href">
-        <Input
-          value={props.primaryCta.href ?? "#"}
-          onFocus={handleFocus}
-          onBlur={handleBlur}
-          onKeyDown={handleKeyDown}
-          onChange={(e) =>
-            update({
-              primaryCta: { ...props.primaryCta, href: e.target.value || "#" },
-            })
-          }
-        />
+        <div className="flex items-center gap-2">
+          <Input
+            value={props.primaryCta.href ?? "#"}
+            onFocus={handleFocus}
+            onBlur={handleBlur}
+            onKeyDown={handleKeyDown}
+            onChange={(e) =>
+              update({
+                primaryCta: { ...props.primaryCta, href: e.target.value || "#" },
+              })
+            }
+            className="min-w-0 flex-1"
+          />
+          <NavigateToPicker
+            pages={pages}
+            value={props.primaryCta.href ?? "#"}
+            onChange={(href) => update({ primaryCta: { ...props.primaryCta, href } })}
+          />
+        </div>
       </Field>
 
       <Field label="Secondary button label">
@@ -130,19 +140,33 @@ export function HeroInspector({
       </Field>
 
       <Field label="Secondary button href">
-        <Input
-          value={props.secondaryCta?.href ?? "#"}
-          onFocus={handleFocus}
-          onBlur={handleBlur}
-          onKeyDown={handleKeyDown}
-          onChange={(e) =>
-            update({
-              secondaryCta: props.secondaryCta
-                ? { ...props.secondaryCta, href: e.target.value || "#" }
-                : { text: "Learn More", href: e.target.value || "#" },
-            })
-          }
-        />
+        <div className="flex items-center gap-2">
+          <Input
+            value={props.secondaryCta?.href ?? "#"}
+            onFocus={handleFocus}
+            onBlur={handleBlur}
+            onKeyDown={handleKeyDown}
+            onChange={(e) =>
+              update({
+                secondaryCta: props.secondaryCta
+                  ? { ...props.secondaryCta, href: e.target.value || "#" }
+                  : { text: "Learn More", href: e.target.value || "#" },
+              })
+            }
+            className="min-w-0 flex-1"
+          />
+          <NavigateToPicker
+            pages={pages}
+            value={props.secondaryCta?.href ?? "#"}
+            onChange={(href) =>
+              update({
+                secondaryCta: props.secondaryCta
+                  ? { ...props.secondaryCta, href }
+                  : { text: "Learn More", href },
+              })
+            }
+          />
+        </div>
       </Field>
 
       <SharedSectionControls

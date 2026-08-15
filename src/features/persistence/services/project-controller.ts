@@ -144,6 +144,17 @@ export class ProjectController {
 
   private async _doInitialize(): Promise<void> {
     try {
+      // Guard: a project may already be explicitly open before initialize()
+      // runs — the editor page opens the URL project before EditorProvider
+      // mounts (which invokes this hook). The active-project restore must
+      // never clobber an explicit open: on a direct load of /editor/[id] for
+      // a NON-active project, re-hydrating the active project would replace
+      // the requested project with the wrong content (my-blocks independence
+      // E2E caught exactly this). The explicit open wins.
+      if (this._hydrated) {
+        return;
+      }
+
       useEditorStore.getState().setSaveStatus("hydrating");
 
       const activeResult = await this.adapter.getActiveProjectId();

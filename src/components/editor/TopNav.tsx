@@ -32,6 +32,7 @@ import { saveNowViaController } from "@/features/persistence/services/project-co
 import { ProjectExportService } from "@/features/projects/services/project-export-service";
 import { downloadProjectFile } from "@/features/projects/utils/download-project-file";
 import { exportProject as exportSiteZip } from "@/features/export/pipeline/export-pipeline";
+import { useDataIntegrationStore } from "@/features/integrations/store/data-integration-store";
 import { mapProjectTransferErrorToMessage } from "@/features/projects/types/project-transfer";
 import { cn } from "@/utils/cn";
 import { ExperienceModeSwitcher } from "@/features/guided-builder/components/ExperienceModeSwitcher";
@@ -173,7 +174,10 @@ export function TopNav() {
     await Promise.resolve();
 
     try {
-      const result = await exportSiteZip(project);
+      // Phase P22-J — static snapshot export: runtime records from the data
+      // integration provider are baked into the generated site at export time.
+      const records = useDataIntegrationStore.getState().records;
+      const result = await exportSiteZip(project, { records });
       if (!mountedRef.current) return;
       if (!result.success) {
         setExportSiteError(result.error ?? "Site export failed");

@@ -18,6 +18,7 @@ import {
   ArrowLeft,
   ArrowRight,
   FileText,
+  Home,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -89,6 +90,7 @@ export function PageTabs() {
   const renamePage = useEditorStore((s) => s.renamePage);
   const deletePage = useEditorStore((s) => s.deletePage);
   const movePage = useEditorStore((s) => s.movePage);
+  const setHomePage = useEditorStore((s) => s.setHomePage);
 
   // ---- Ephemeral UI state ----
   const [menuPageId, setMenuPageId] = useState<string | null>(null);
@@ -228,6 +230,14 @@ export function PageTabs() {
     setDeleteTarget(null);
   }, [deleteTarget, deletePage]);
 
+  const handleSetHome = useCallback(
+    (pageId: string) => {
+      setMenuPageId(null);
+      setHomePage(pageId);
+    },
+    [setHomePage],
+  );
+
   // Roving-tabindex arrow-key navigation across the page tabs. Arrow keys
   // use automatic activation (matching the RightSidebar TabList convention):
   // they move focus AND select the tab.
@@ -303,7 +313,15 @@ export function PageTabs() {
                 onClick={() => handleSelect(page.id)}
                 className="flex min-w-0 items-center gap-1.5 text-xs"
               >
-                <FileText className="h-3.5 w-3.5 flex-shrink-0 text-accent/70" />
+                {index === 0 ? (
+                  // The first page (homepage) carries the home indicator.
+                  <Home
+                    className="h-3.5 w-3.5 flex-shrink-0 text-accent/70"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <FileText className="h-3.5 w-3.5 flex-shrink-0 text-accent/70" />
+                )}
                 {isRenaming ? (
                   <input
                     ref={renameInputRef}
@@ -366,6 +384,19 @@ export function PageTabs() {
                       setMetaPage(page);
                     }}
                   />
+                  <MenuItem
+                    testId="page-action-set-home"
+                    icon={Home}
+                    label="Set as homepage"
+                    disabled={index === 0}
+                    ariaDisabledReason={
+                      index === 0
+                        ? "This page is already the homepage"
+                        : undefined
+                    }
+                    onClick={() => handleSetHome(page.id)}
+                  />
+                  <div className="my-1 h-px bg-border" />
                   <MenuItem
                     testId="page-action-move-left"
                     icon={ArrowLeft}

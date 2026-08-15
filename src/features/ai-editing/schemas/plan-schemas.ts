@@ -27,6 +27,12 @@ import {
 } from "@/features/editor/schemas/section-schemas";
 import { validatePageTitle } from "@/features/editor/store/page-structure";
 import { validateSlug } from "@/features/routing/routes";
+import {
+  ElementAnimationSchema,
+  ElementInteractionSchema,
+  ElementStyleTokensSchema,
+} from "@/features/elements/schemas/element-schemas";
+import { isRenderableElementType } from "@/features/elements/registry/element-registry";
 
 // ---------------------------------------------------------------------------
 // Security scan — adversarial plan payloads (Phase P10)
@@ -144,6 +150,13 @@ export const AiEditScopeSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("project"),
+  }),
+  // Phase P22-H — element scope (custom-block element trees only).
+  z.object({
+    type: z.literal("element"),
+    pageId: z.string().min(1, "pageId is required"),
+    sectionId: z.string().min(1, "sectionId is required"),
+    elementId: z.string().min(1, "elementId is required"),
   }),
 ]);
 
@@ -392,6 +405,115 @@ export const UpdatePageMetaOperationSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Element operations (Phase P22-H) — custom-block element trees only
+//
+// Reuse the validated element schemas (bounded records, animation, interaction)
+// at the plan boundary; the plan simulator re-validates at apply time through
+// applyElementOperation + the element registry + the final section schemas.
+// AI-generated arbitrary subtree JSON is REJECTED: insert ops carry only a
+// registered renderable type + bounded content (registry defaults win).
+// ---------------------------------------------------------------------------
+
+export const UpdateElementPropsOperationSchema = z.object({
+  ...AiEditOperationBaseSchema.shape,
+  type: z.literal("update-element-props"),
+  pageId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+  sectionId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+  elementId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+  props: z.record(z.string(), z.unknown()),
+});
+
+export const UpdateElementStyleOperationSchema = z.object({
+  ...AiEditOperationBaseSchema.shape,
+  type: z.literal("update-element-style"),
+  pageId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+  sectionId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+  elementId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+  style: ElementStyleTokensSchema,
+});
+
+export const UpdateElementResponsiveOperationSchema = z.object({
+  ...AiEditOperationBaseSchema.shape,
+  type: z.literal("update-element-responsive"),
+  pageId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+  sectionId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+  elementId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+  breakpoint: z.enum(["tablet", "mobile"]),
+  style: ElementStyleTokensSchema,
+});
+
+export const UpdateElementAnimationOperationSchema = z.object({
+  ...AiEditOperationBaseSchema.shape,
+  type: z.literal("update-element-animation"),
+  pageId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+  sectionId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+  elementId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+  animation: ElementAnimationSchema.nullable(),
+});
+
+export const UpdateElementInteractionOperationSchema = z.object({
+  ...AiEditOperationBaseSchema.shape,
+  type: z.literal("update-element-interaction"),
+  pageId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+  sectionId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+  elementId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+  interaction: ElementInteractionSchema.nullable(),
+});
+
+export const InsertElementOperationSchema = z
+  .object({
+    ...AiEditOperationBaseSchema.shape,
+    type: z.literal("insert-element"),
+    pageId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+    sectionId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+    parentElementId: z.string().min(1).max(PLAN_LIMITS.maxIdLength).optional(),
+    elementType: z
+      .string()
+      .min(1)
+      .max(64)
+      .refine(isRenderableElementType, {
+        message: "Element type must be a registered renderable block type.",
+      }),
+    index: z.number().int().min(0).optional(),
+    props: z.record(z.string(), z.unknown()).optional(),
+    style: ElementStyleTokensSchema.optional(),
+  })
+  .superRefine((op, ctx) => {
+    if (op.index !== undefined && op.parentElementId === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["index"],
+        message: "An insertion index requires an explicit parentElementId.",
+      });
+    }
+  });
+
+export const DeleteElementOperationSchema = z.object({
+  ...AiEditOperationBaseSchema.shape,
+  type: z.literal("delete-element"),
+  pageId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+  sectionId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+  elementId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+});
+
+export const DuplicateElementOperationSchema = z.object({
+  ...AiEditOperationBaseSchema.shape,
+  type: z.literal("duplicate-element"),
+  pageId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+  sectionId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+  elementId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+});
+
+export const SetElementVisibilityOperationSchema = z.object({
+  ...AiEditOperationBaseSchema.shape,
+  type: z.literal("set-element-visibility"),
+  pageId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+  sectionId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+  elementId: z.string().min(1).max(PLAN_LIMITS.maxIdLength),
+  visible: z.boolean(),
+});
+
+// ---------------------------------------------------------------------------
 // Discriminated union — canonical operation validation
 // ---------------------------------------------------------------------------
 
@@ -408,6 +530,15 @@ export const AiEditOperationSchema = z.discriminatedUnion("type", [
   DeletePageOperationSchema,
   MovePageOperationSchema,
   UpdatePageMetaOperationSchema,
+  UpdateElementPropsOperationSchema,
+  UpdateElementStyleOperationSchema,
+  UpdateElementResponsiveOperationSchema,
+  UpdateElementAnimationOperationSchema,
+  UpdateElementInteractionOperationSchema,
+  InsertElementOperationSchema,
+  DeleteElementOperationSchema,
+  DuplicateElementOperationSchema,
+  SetElementVisibilityOperationSchema,
 ]);
 
 // ---------------------------------------------------------------------------

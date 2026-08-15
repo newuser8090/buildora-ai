@@ -26,15 +26,27 @@ import type {
 // ---------------------------------------------------------------------------
 
 /**
- * Copilot scope. Unlike AiEditScope, it also covers the selected ELEMENT
- * (an inline-editable text field). "auto" is a UI preference that resolves
- * against live selection; it is never stored in a request.
+ * Copilot scope. Unlike AiEditScope, it also covers the selected ELEMENT:
+ *   - element scope with `elementId` — a selected element in a custom-block
+ *     tree (Phase P22-H)
+ *   - element scope with `fieldPath` only — a selected inline-editable text
+ *     field (legacy field-level behavior, preserved)
+ * "auto" is a UI preference that resolves against live selection; it is never
+ * stored in a request.
  */
 export type CopilotScope =
   | { type: "project" }
   | { type: "page"; pageId: string }
   | { type: "section"; pageId: string; sectionId: string }
-  | { type: "element"; pageId: string; sectionId: string; fieldPath: FieldPathSegment[] };
+  | {
+      type: "element";
+      pageId: string;
+      sectionId: string;
+      /** Phase P22-H — the selected element's id (custom-block trees). */
+      elementId?: string;
+      /** Legacy field scope — the selected inline text field path. */
+      fieldPath?: FieldPathSegment[];
+    };
 
 export type CopilotScopeChoice = "auto" | CopilotScope;
 
@@ -48,7 +60,7 @@ export function copilotScopeLabel(scope: CopilotScope): string {
     case "section":
       return "this section";
     case "element":
-      return "selected text";
+      return scope.elementId ? "this element" : "selected text";
   }
 }
 
@@ -60,7 +72,13 @@ export function toAiEditScope(scope: CopilotScope): AiEditScope {
     case "page":
       return { type: "page", pageId: scope.pageId };
     case "section":
+      return { type: "section", pageId: scope.pageId, sectionId: scope.sectionId };
     case "element":
+      // Phase P22-H — a selected element maps to the element plan scope;
+      // a field-only scope keeps the legacy section-scoped planning.
+      if (scope.elementId) {
+        return { type: "element", pageId: scope.pageId, sectionId: scope.sectionId, elementId: scope.elementId };
+      }
       return { type: "section", pageId: scope.pageId, sectionId: scope.sectionId };
   }
 }

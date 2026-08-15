@@ -72,6 +72,19 @@ function opSummary(op: AiEditOperation, plan: AiEditPlan): string {
     case "move-page":
     case "update-page-meta":
       return `page ${op.pageId ?? "?"}`;
+    // Phase P22-H — element operations
+    case "update-element-props":
+    case "update-element-style":
+    case "update-element-responsive":
+    case "update-element-animation":
+    case "update-element-interaction":
+    case "set-element-visibility":
+      return `element ${op.elementId ?? "?"}`;
+    case "insert-element":
+      return `${op.elementType ?? "element"} · ${op.parentElementId ?? "section root"}`;
+    case "delete-element":
+    case "duplicate-element":
+      return `element ${op.elementId ?? "?"}`;
     default:
       return "";
   }

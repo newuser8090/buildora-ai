@@ -80,6 +80,8 @@ export interface HandleMessageInput {
   selectedPageId: string | null;
   selectedSectionId: string | null;
   selectedField: EditableFieldDescriptor | null;
+  /** Phase P22-H — the normalized selected element (custom-block trees). */
+  selectedElement?: { pageId: string; sectionId: string; elementId: string } | null;
   readiness: LaunchReadinessReport | null;
   device: Viewport;
   messages: CopilotMessage[];
@@ -105,16 +107,28 @@ export function resolveEffectiveScope(
   selectedField: EditableFieldDescriptor | null,
   messages: CopilotMessage[],
   instruction: string,
+  /** Phase P22-H — normalized selected element (optional, appended for API stability). */
+  selectedElement?: { pageId: string; sectionId: string; elementId: string } | null,
 ): CopilotScope {
   if (scopeChoice !== "auto") return scopeChoice;
 
-  // A selected editable element is the tightest scope.
+  // A selected editable text field is the tightest scope (existing behavior).
   if (selectedField) {
     return {
       type: "element",
       pageId: selectedField.pageId,
       sectionId: selectedField.sectionId,
       fieldPath: selectedField.fieldPath,
+    };
+  }
+
+  // Phase P22-H — a selected element (canvas/inspector) is the next target.
+  if (selectedElement) {
+    return {
+      type: "element",
+      pageId: selectedElement.pageId,
+      sectionId: selectedElement.sectionId,
+      elementId: selectedElement.elementId,
     };
   }
 
@@ -249,10 +263,14 @@ export async function requestCopilotPlan(
 ): Promise<RequestPlanResult> {
   const requestPlan = deps.requestPlan ?? runPlanEdit;
 
-  // Map the Copilot scope onto the planner scope.
+  // Map the Copilot scope onto the planner scope. Element scope with an
+  // elementId targets the element; field-only element scope keeps the legacy
+  // section-scoped planning (Phase P22-H).
   const plannerScope =
     input.scope.type === "element"
-      ? { type: "section" as const, pageId: input.scope.pageId, sectionId: input.scope.sectionId }
+      ? input.scope.elementId
+        ? ({ type: "element" as const, pageId: input.scope.pageId, sectionId: input.scope.sectionId, elementId: input.scope.elementId } as const)
+        : ({ type: "section" as const, pageId: input.scope.pageId, sectionId: input.scope.sectionId } as const)
       : input.scope.type === "project"
         ? ({ type: "project" } as const)
         : ({ type: "page" as const, pageId: input.scope.pageId } as const);
@@ -526,6 +544,7 @@ export async function handleCopilotMessage(
     input.selectedField,
     input.messages,
     instruction,
+    input.selectedElement ?? null,
   );
 
   // Build the bounded context only now (never per keystroke).
@@ -543,6 +562,7 @@ export async function handleCopilotMessage(
           fieldPath: input.selectedField.fieldPath,
         }
       : null,
+    selectedElement: input.selectedElement ?? null,
     readiness: input.readiness,
     device: input.device,
     messages: input.messages,

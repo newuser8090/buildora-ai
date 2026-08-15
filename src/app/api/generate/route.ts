@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { generateProject } from "@/features/generation/generators/project-generator";
 import { geminiProvider } from "@/features/generation/providers/gemini-generation-provider";
 import { ruleBasedProvider } from "@/features/generation/providers/rule-based-generation-provider";
+import { detectSiteIntent } from "@/features/generation/analyzers/prompt-analyzer";
 import { geminiEditProvider } from "@/features/generation/providers/gemini-edit-provider";
 import { ruleBasedEditProvider } from "@/features/generation/providers/rule-based-edit-provider";
 import { geminiPlanProvider } from "@/features/ai-editing/planner/gemini-plan-provider";
@@ -75,6 +76,7 @@ export function boundedErrorToken(err: unknown): string {
 
 type GenerateRequest =
   | { kind: "create"; prompt: string }
+  | { kind: "site"; prompt: string }
   | { kind: "modify"; prompt: string; target: ValidatedEditTarget }
   | { kind: "plan-edit"; request: ValidatedPlanEditRequest }
   | { kind: "inline-edit"; request: ValidatedInlineEditRequest };
@@ -129,8 +131,12 @@ function validateRequest(body: unknown): ValidationResult {
     return { kind: "invalid", message: `Prompt must be ${MAX_PROMPT_LENGTH} characters or less` };
   }
 
-  if (mode !== undefined && mode !== "create" && mode !== "modify") {
-    return { kind: "invalid", message: 'Mode must be "create", "modify", "plan-edit" or "inline-edit"' };
+  if (mode !== undefined && mode !== "create" && mode !== "modify" && mode !== "site") {
+    return { kind: "invalid", message: 'Mode must be "create", "modify", "plan-edit", "inline-edit" or "site"' };
+  }
+
+  if (mode === "site") {
+    return { kind: "site", prompt: prompt.trim() };
   }
 
   if (mode === "modify") {
@@ -240,6 +246,13 @@ export async function POST(request: Request) {
 
     const prompt = validated.prompt;
 
+    // Phase P22-I — site generation. Explicit mode:"site" or clear server-side
+    // multi-page intent on an ordinary create request both route the provider
+    // into site mode. Ordinary single-page create behavior is unchanged.
+    const siteMode =
+      validated.kind === "site" || detectSiteIntent(validated.prompt);
+    const providerMode = siteMode ? ("site" as const) : ("create" as const);
+
     const forceLocal =
       process.env.BUILDORA_FORCE_LOCAL_GENERATION === "true" ||
       forceLocalHeader(request);
@@ -252,7 +265,7 @@ export async function POST(request: Request) {
     if (forceLocal) {
       logger.info("API", "BUILDORA_FORCE_LOCAL_GENERATION=true — skipping Gemini");
       source = "rule-based";
-      const localResult = await ruleBasedProvider.generatePlan({ prompt });
+      const localResult = await ruleBasedProvider.generatePlan({ prompt, mode: providerMode });
       warnings.push(...localResult.warnings);
       project = generateProject(localResult.plan);
       logger.info(
@@ -263,7 +276,7 @@ export async function POST(request: Request) {
       // 3a. Try Gemini provider
       try {
         logger.info("API", "Attempting Gemini generation...");
-        const geminiResult = await geminiProvider.generatePlan({ prompt });
+        const geminiResult = await geminiProvider.generatePlan({ prompt, mode: providerMode });
         source = "gemini";
         warnings.push(...geminiResult.warnings);
 
@@ -286,7 +299,7 @@ export async function POST(request: Request) {
         );
         source = "rule-based";
 
-        const fallbackResult = await ruleBasedProvider.generatePlan({ prompt });
+        const fallbackResult = await ruleBasedProvider.generatePlan({ prompt, mode: providerMode });
         warnings.push(...fallbackResult.warnings);
 
         // Generate project from plan

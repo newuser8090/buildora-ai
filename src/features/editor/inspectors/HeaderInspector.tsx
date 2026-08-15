@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/Input";
 import { Field } from "@/components/ui/Field";
 import { SharedSectionControls } from "./SharedSectionControls";
 import { InspectorAssetField } from "@/features/assets/components/InspectorAssetField";
+import { NavigateToPicker } from "@/features/editor/components/NavigateToPicker";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import type { BaseSection, HeaderSectionProps } from "@/types/section";
 
@@ -18,6 +19,7 @@ export function HeaderInspector({
   onUpdateStyles: (styles: Record<string, unknown>) => void;
 }) {
   const props = section.props as unknown as HeaderSectionProps;
+  const pages = useEditorStore((s) => s.project.pages);
   const beginEditSession = useEditorStore((s) => s.beginEditSession);
   const commitEditSession = useEditorStore((s) => s.commitEditSession);
 
@@ -84,19 +86,30 @@ export function HeaderInspector({
                   className="flex-1"
                 />
               </div>
-              <Input
-                value={link.href ?? "#"}
-                onFocus={handleFocus}
-                onBlur={handleBlur}
-                onKeyDown={handleKeyDown}
-                onChange={(e) => {
-                  const updated = [...props.navLinks];
-                  updated[i] = { ...updated[i], href: e.target.value || "#" };
-                  update({ navLinks: updated });
-                }}
-                placeholder="/path"
-                className="w-full text-xs text-text-dim"
-              />
+              <div className="flex items-center gap-2">
+                <Input
+                  value={link.href ?? "#"}
+                  onFocus={handleFocus}
+                  onBlur={handleBlur}
+                  onKeyDown={handleKeyDown}
+                  onChange={(e) => {
+                    const updated = [...props.navLinks];
+                    updated[i] = { ...updated[i], href: e.target.value || "#" };
+                    update({ navLinks: updated });
+                  }}
+                  placeholder="/path"
+                  className="min-w-0 flex-1 text-xs text-text-dim"
+                />
+                <NavigateToPicker
+                  pages={pages}
+                  value={link.href ?? "#"}
+                  onChange={(href) => {
+                    const updated = [...props.navLinks];
+                    updated[i] = { ...updated[i], href };
+                    update({ navLinks: updated });
+                  }}
+                />
+              </div>
             </div>
           ))}
         </div>
@@ -113,13 +126,21 @@ export function HeaderInspector({
       </Field>
 
       <Field label="CTA href">
-        <Input
-          value={props.ctaHref ?? "#"}
-          onFocus={handleFocus}
-          onBlur={handleBlur}
-          onKeyDown={handleKeyDown}
-          onChange={(e) => update({ ctaHref: e.target.value || "#" })}
-        />
+        <div className="flex items-center gap-2">
+          <Input
+            value={props.ctaHref ?? "#"}
+            onFocus={handleFocus}
+            onBlur={handleBlur}
+            onKeyDown={handleKeyDown}
+            onChange={(e) => update({ ctaHref: e.target.value || "#" })}
+            className="min-w-0 flex-1"
+          />
+          <NavigateToPicker
+            pages={pages}
+            value={props.ctaHref ?? "#"}
+            onChange={(href) => update({ ctaHref: href })}
+          />
+        </div>
       </Field>
 
       <SharedSectionControls

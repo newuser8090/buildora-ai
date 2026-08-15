@@ -14,6 +14,8 @@ import {
   LayoutList,
   ShieldAlert,
   ClipboardList,
+  ChevronsLeft,
+  ChevronsRight,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useGeneration } from "@/features/generation/hooks/useGeneration";
@@ -36,6 +38,14 @@ import {
   AI_COMPOSER_FOCUS_EVENT,
   type AiComposerFocusDetail,
 } from "@/features/guided-builder/constants";
+// Phase P22-K — collapsible/resizable shell chrome (UI-only, no project state).
+import { useEditorUiStore } from "@/features/editor/ui/editor-ui-store";
+import {
+  COLLAPSED_PANEL_WIDTH,
+  MAX_PANEL_WIDTH,
+  MIN_PANEL_WIDTH,
+} from "@/features/editor/ui/editor-ui-prefs";
+import { ResizeHandle } from "./ResizeHandle";
 
 // Instruction used by the in-chip Regenerate quick action.
 const REGENERATE_INSTRUCTION =
@@ -86,6 +96,13 @@ export function LeftSidebar() {
   const experienceMode = useGuidedBuilderStore((s) => s.experienceMode);
   const guidedHydrated = useGuidedBuilderStore((s) => s.hydrated);
   const guided = guidedHydrated && experienceMode === "guided";
+
+  // Phase P22-K — panel shell state (left sidebar).
+  const leftCollapsed = useEditorUiStore((s) => s.leftPanelCollapsed);
+  const leftWidth = useEditorUiStore((s) => s.leftPanelWidth);
+  const setLeftCollapsed = useEditorUiStore((s) => s.setLeftPanelCollapsed);
+  const setLeftWidth = useEditorUiStore((s) => s.setLeftPanelWidth);
+  const [leftDragging, setLeftDragging] = useState(false);
 
   const [scopeChoice, setScopeChoice] = useState<AiScopeChoice | "auto">("auto");
   const [reviewSignal, setReviewSignal] = useState(0);
@@ -239,19 +256,72 @@ export function LeftSidebar() {
   const isGenerating = stage !== "idle" && stage !== "done" && stage !== "error";
 
   return (
-    <aside data-testid="ai-sidebar" className="flex w-[320px] flex-shrink-0 flex-col border-r border-border bg-secondary" style={{ height: "100%" }}>
-      {/* ---- Header ---- */}
-      <div className="flex items-center gap-2.5 border-b border-border px-5 py-4 flex-shrink-0">
-        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent/10">
-          <Bot className="h-4 w-4 text-accent" />
-        </div>
-        <div>
-          <h2 className="text-sm font-semibold text-text-primary">
+    <>
+      {leftCollapsed ? (
+        /* ---- Collapsed rail (minimal shell affordance, Phase P22-K) ---- */
+        <aside
+          data-testid="ai-sidebar-rail"
+          className="flex w-12 flex-shrink-0 flex-col items-center gap-4 border-r border-border bg-secondary py-3"
+          aria-label="AI assistant (collapsed)"
+        >
+          <button
+            type="button"
+            data-testid="collapse-left-panel"
+            aria-expanded="false"
+            aria-controls="ai-sidebar"
+            aria-label="Expand AI assistant"
+            title="Expand AI assistant"
+            onClick={() => setLeftCollapsed(false)}
+            className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/10 text-accent transition-colors hover:bg-accent/20 focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            <Bot className="h-4 w-4" />
+          </button>
+          <span
+            aria-hidden="true"
+            className="text-[10px] font-medium uppercase tracking-[0.2em] text-text-dim/60 [writing-mode:vertical-rl]"
+          >
             AI Assistant
-          </h2>
-          <p className="text-xs text-text-dim">Describe your vision</p>
+          </span>
+          <ChevronsRight
+            aria-hidden="true"
+            className="mt-auto h-4 w-4 text-text-dim/40"
+          />
+        </aside>
+      ) : (
+      <aside
+        id="ai-sidebar"
+        data-testid="ai-sidebar"
+        className={`flex flex-shrink-0 flex-col overflow-hidden border-r border-border bg-secondary transition-[width] duration-200 ease-out ${
+          leftDragging ? "transition-none" : ""
+        }`}
+        style={{ width: leftCollapsed ? COLLAPSED_PANEL_WIDTH : leftWidth, height: "100%" }}
+      >
+        {/* ---- Header ---- */}
+        <div className="flex items-center gap-2.5 border-b border-border px-5 py-4 flex-shrink-0">
+          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent/10">
+            <Bot className="h-4 w-4 text-accent" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-sm font-semibold text-text-primary">
+              AI Assistant
+            </h2>
+            <p className="text-xs text-text-dim">Describe your vision</p>
+          </div>
+          {!leftCollapsed && (
+            <button
+              type="button"
+              data-testid="collapse-left-panel"
+              aria-expanded="true"
+              aria-controls="ai-sidebar"
+              aria-label="Collapse AI assistant"
+              title="Collapse AI assistant"
+              onClick={() => setLeftCollapsed(true)}
+              className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-text-dim transition-colors hover:bg-card hover:text-text-primary focus-visible:outline-2 focus-visible:outline-accent"
+            >
+              <ChevronsLeft className="h-4 w-4" />
+            </button>
+          )}
         </div>
-      </div>
 
       {/* ---- Conversation area ---- */}
       <div
@@ -718,6 +788,21 @@ export function LeftSidebar() {
       {reviewSignal > 0 && (
         <AiEditPlanReview key={reviewSignal} reopenKey={String(reviewSignal)} />
       )}
-    </aside>
+      </aside>
+      )}
+
+      {!leftCollapsed && (
+        <ResizeHandle
+          testId="resize-left-handle"
+          label="Resize AI assistant panel"
+          value={leftWidth}
+          min={MIN_PANEL_WIDTH}
+          max={MAX_PANEL_WIDTH}
+          multiplier={1}
+          onChange={setLeftWidth}
+          onDraggingChange={setLeftDragging}
+        />
+      )}
+    </>
   );
 }

@@ -81,7 +81,7 @@ export function buildSummary(
   plan: GenerationPlan,
   source: "gemini" | "rule-based",
 ): string {
-  const { brandName, websiteType, theme, sections } = plan;
+  const { brandName, websiteType, theme, sections, pages } = plan;
   const sectionCount = sections.length;
   const typeLabel = websiteType.charAt(0).toUpperCase() + websiteType.slice(1);
 
@@ -108,6 +108,20 @@ export function buildSummary(
   const themeDesc = adj ? `${adj}, ` : "";
 
   const typeStr = `${themeDesc}${typeLabel.toLowerCase()}`;
+
+  // Phase P22-I — site summary: communicate page count + page names.
+  if (pages && pages.length > 0) {
+    const pageNames = pages.map((p) => p.title);
+    const lastPage = pageNames.pop();
+    const pageList =
+      pageNames.length > 0
+        ? pageNames.join(", ") + ", and " + lastPage
+        : lastPage ?? "";
+    if (source === "gemini") {
+      return `I created a ${pages.length}-page ${typeStr} website for ${brandName}: ${pageList}. Switch between pages using the tabs above, and select any section to customize its content and spacing.`;
+    }
+    return `I created your ${pages.length}-page ${typeStr} website using Buildora's local generation engine because Gemini was unavailable. It's fully editable: ${pageList}.`;
+  }
 
   if (source === "gemini") {
     return `I created a ${typeStr} landing page for ${brandName} with ${sectionCount} editable sections: ${sectionList}. Select any section in the preview to customize its content and spacing.`;
@@ -170,6 +184,12 @@ export async function runGeneration(
       brandName: data.project.name.split(" — ")[0] || "MyBrand",
       theme: inferTheme(data.project) as ThemeStyle,
       sections: data.project.pages[0]?.sections ?? [],
+      // Phase P22-I — multi-page sites carry their pages for the site summary.
+      pages: (data.project as Project).pages.map((p) => ({
+        title: p.title,
+        slug: p.slug,
+        sections: p.sections,
+      })),
     },
     source: data.source as "gemini" | "rule-based",
     warnings: data.warnings as string[],

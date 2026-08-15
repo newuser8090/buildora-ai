@@ -32,6 +32,12 @@ import { SectionFactory, type SectionIdFactory } from "@/features/editor/section
 import { registerDefaultSectionLibrary } from "@/features/editor/section-library/registry/register-default-section-library";
 import { normalizeSectionType, SUPPORTED_SECTION_TYPES } from "@/features/generation/providers/generation-provider";
 import { createPageId, resolveUniqueSlug, validatePageTitle } from "@/features/editor/store/page-structure";
+import { sectionToElementTree } from "@/features/elements/adapters/section-element-adapter";
+import { blockRegistry } from "@/features/blocks/registry/block-registry";
+import type { ElementNode, ElementStyleTokens, ElementTree } from "@/features/elements/types";
+import type { ElementAnimation } from "@/features/elements/animation/types";
+import type { ElementInteraction } from "@/features/elements/interaction/types";
+import type { ElementPlanBreakpoint } from "../plan-types";
 import type { EditTarget } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -141,11 +147,34 @@ class PlanBuilder {
     return page ? [page] : [];
   }
 
-  /** The page a section-scope plan resolves to. */
+  /** The page a section- or element-scope plan resolves to. */
   sectionScopePage(): Page | undefined {
     const { scope, project } = this.input;
-    if (scope.type !== "section") return undefined;
+    if (scope.type !== "section" && scope.type !== "element") return undefined;
     return project.pages.find((p) => p.id === scope.pageId);
+  }
+
+  /**
+   * Phase P22-H — resolve the element scope's target (page/section/node).
+   * Returns null when the scope is not element or the element is gone.
+   */
+  elementScopeTarget(): {
+    page: Page;
+    section: BaseSection;
+    elementId: string;
+    node: ElementNode;
+    tree: ElementTree;
+  } | null {
+    const { scope, project } = this.input;
+    if (scope.type !== "element") return null;
+    const page = project.pages.find((p) => p.id === scope.pageId);
+    if (!page) return null;
+    const section = page.sections.find((s) => s.id === scope.sectionId);
+    if (!section) return null;
+    const tree = sectionToElementTree(section);
+    const node = tree.nodes[scope.elementId];
+    if (!node) return null;
+    return { page, section, elementId: scope.elementId, node, tree };
   }
 
   /**
@@ -807,6 +836,439 @@ const toneRewriteRecognizer: Recognizer = (input, b) => {
 };
 
 // ---------------------------------------------------------------------------
+// Element recognizers (Phase P22-H) — deterministic element-scoped fallback
+//
+// These run ONLY when the scope is element ({ type: "element" }). They target
+// the selected element and produce ops through the existing element engine
+// semantics. Insert ops supply only a registered renderable type + bounded
+// content — canonical defaults come from the registry/factory at simulation
+// time (never fabricated subtree JSON).
+// ---------------------------------------------------------------------------
+
+const ELEMENT_COLORS: Array<[string, string]> = [
+  ["blue", "#2563eb"],
+  ["red", "#dc2626"],
+  ["green", "#16a34a"],
+  ["purple", "#7c5cfc"],
+  ["orange", "#ea580c"],
+  ["pink", "#db2777"],
+];
+
+function parseFontSizePx(value: unknown): number | null {
+  if (typeof value === "number") return value;
+  if (typeof value === "string") {
+    const match = value.trim().match(/^([0-9.]+)px$/);
+    if (match) return parseFloat(match[1]);
+  }
+  return null;
+}
+
+/** Resolve a natural-language keyword to a REGISTERED RENDERABLE block type. */
+function resolveBlockTypeKeyword(keyword: string): string | null {
+  const lower = keyword.toLowerCase().trim().replace(/\s+/g, " ");
+  if (!lower) return null;
+  const defs = blockRegistry.list();
+  const byType = defs.find((d) => d.type === lower);
+  if (byType) return byType.type;
+  const byLabel = defs.find((d) => d.label.toLowerCase() === lower);
+  if (byLabel) return byLabel.type;
+  for (const d of defs) {
+    if ((d.keywords ?? []).some((k) => lower.includes(k) || k.includes(lower))) {
+      return d.type;
+    }
+  }
+  const singular = lower.replace(/s$/, "");
+  const bySingular = defs.find(
+    (d) => d.type === singular || d.label.toLowerCase() === singular,
+  );
+  return bySingular ? bySingular.type : null;
+}
+
+function requireElementTarget(
+  input: AiEditPlannerInput,
+  b: PlanBuilder,
+  action: string,
+): ReturnType<PlanBuilder["elementScopeTarget"]> {
+  const target = b.elementScopeTarget();
+  if (!target) {
+    b.warn("ELEMENT_NOT_FOUND", `The selected element is missing, so it cannot be ${action}.`);
+  }
+  return target;
+}
+
+// ---- 1. Element style: bold / larger / smaller / accent / color ------------
+
+const elementStyleRecognizer: Recognizer = (input, b) => {
+  const target = requireElementTarget(input, b, "restyled");
+  if (!target) return { operations: [] };
+  const instruction = input.instruction.toLowerCase();
+  if (/\bon (mobile|tablet)\b/.test(instruction)) return { operations: [] };
+
+  const style: ElementStyleTokens = {};
+  let label = "";
+  let explanation = "";
+
+  if (/\bbold\b|\bbolder\b|\bheavier\b/.test(instruction)) {
+    style.fontWeight = 700;
+    label = "Make element bold";
+    explanation = "Sets a bold font weight on the selected element.";
+  } else if (/\blarger\b|\bbigger\b|\blarger text\b/.test(instruction)) {
+    const current = parseFontSizePx(target.node.style?.fontSize) ?? 24;
+    style.fontSize = Math.min(200, current + 8);
+    label = "Make element larger";
+    explanation = `Increases the element's font size to ${style.fontSize}px.`;
+  } else if (/\bsmaller\b|\bsmall\b/.test(instruction)) {
+    const current = parseFontSizePx(target.node.style?.fontSize) ?? 16;
+    style.fontSize = Math.max(8, current - 4);
+    label = "Make element smaller";
+    explanation = `Decreases the element's font size to ${style.fontSize}px.`;
+  } else if (/\baccent\b|\bhighlight\b/.test(instruction)) {
+    style.color = "var(--accent, #7c5cfc)";
+    label = "Color the element accent";
+    explanation = "Applies the site accent color to the element's text.";
+  } else {
+    for (const [name, hex] of ELEMENT_COLORS) {
+      if (new RegExp(`\\b${name}\\b`).test(instruction)) {
+        style.color = hex;
+        label = `Make the element ${name}`;
+        explanation = `Sets the element's text color to ${hex}.`;
+        break;
+      }
+    }
+  }
+
+  if (!label) return { operations: [] };
+  const base = opBase(b, "update-element-style", "low", label, explanation);
+  return {
+    operations: [
+      {
+        ...base,
+        type: "update-element-style",
+        pageId: target.page.id,
+        sectionId: target.section.id,
+        elementId: target.elementId,
+        style,
+      },
+    ],
+  };
+};
+
+// ---- 2. Element responsive: larger/smaller on mobile/tablet -----------------
+
+const elementResponsiveRecognizer: Recognizer = (input, b) => {
+  const target = requireElementTarget(input, b, "resized responsively");
+  if (!target) return { operations: [] };
+  const instruction = input.instruction.toLowerCase();
+  const breakpointMatch = instruction.match(/\bon (mobile|tablet)\b/);
+  if (!breakpointMatch) return { operations: [] };
+  const breakpoint = breakpointMatch[1] as ElementPlanBreakpoint;
+
+  const style: ElementStyleTokens = {};
+  let label = "";
+  if (/\blarger\b|\bbigger\b/.test(instruction)) {
+    const current = parseFontSizePx(target.node.style?.fontSize) ?? 24;
+    style.fontSize = Math.min(200, current + 8);
+    label = `Make element larger on ${breakpoint}`;
+  } else if (/\bsmaller\b|\bsmall\b/.test(instruction)) {
+    const current = parseFontSizePx(target.node.style?.fontSize) ?? 16;
+    style.fontSize = Math.max(8, current - 4);
+    label = `Make element smaller on ${breakpoint}`;
+  } else if (/\bhidden\b/.test(instruction)) {
+    style.display = "none";
+    label = `Hide element on ${breakpoint}`;
+  } else {
+    return { operations: [] };
+  }
+
+  const base = opBase(b, "update-element-responsive", "low", label, `Adds ${breakpoint} viewport overrides for the element.`);
+  return {
+    operations: [
+      {
+        ...base,
+        type: "update-element-responsive",
+        pageId: target.page.id,
+        sectionId: target.section.id,
+        elementId: target.elementId,
+        breakpoint,
+        style,
+      },
+    ],
+  };
+};
+
+// ---- 3. Element animation: fade/slide/bounce on load or scroll -------------
+
+const elementAnimationRecognizer: Recognizer = (input, b) => {
+  const target = requireElementTarget(input, b, "animated");
+  if (!target) return { operations: [] };
+  const instruction = input.instruction.toLowerCase();
+  if (!/\bfade\b|\bslide\b|\bbounce\b|\banimate\b/.test(instruction)) {
+    return { operations: [] };
+  }
+
+  const type: ElementAnimation["type"] = /\bslide\b/.test(instruction)
+    ? "slide"
+    : /\bbounce\b/.test(instruction)
+      ? "bounce"
+      : "fade";
+  const trigger: ElementAnimation["trigger"] = /\bon scroll\b|\bscroll\b/.test(instruction)
+    ? "scroll"
+    : "load";
+  const animation: ElementAnimation = {
+    trigger,
+    type,
+    durationMs: 600,
+    easing: "ease",
+  };
+  const base = opBase(
+    b,
+    "update-element-animation",
+    "low",
+    `Animate element (${type} on ${trigger})`,
+    `Adds a ${type} entrance animation that plays ${trigger === "load" ? "when the page loads" : "when the element scrolls into view"}.`,
+  );
+  return {
+    operations: [
+      {
+        ...base,
+        type: "update-element-animation",
+        pageId: target.page.id,
+        sectionId: target.section.id,
+        elementId: target.elementId,
+        animation,
+      },
+    ],
+  };
+};
+
+// ---- 4. Element interaction: link to a page / hover color -------------------
+
+const elementLinkRecognizer: Recognizer = (input, b) => {
+  const target = requireElementTarget(input, b, "linked");
+  if (!target) return { operations: [] };
+  const match = input.instruction.match(
+    /(?:link|point|go|navigate)\s+(?:it|this|the element|the \w+)?\s*(?:to|toward|towards)\s+(?:the\s+)?(.+?)\s+page/i,
+  );
+  if (!match) return { operations: [] };
+  const pages = resolvePagesByKeyword(input.project.pages, match[1].trim());
+  if (pages.length === 0) {
+    b.warn("PAGE_NOT_FOUND", `Could not find a page matching "${match[1].trim()}" to link to.`);
+    return { operations: [] };
+  }
+  if (pages.length > 1) {
+    b.warn("AMBIGUOUS_PAGE", `Multiple pages match "${match[1].trim()}" — the link target needs to be unique.`);
+    return { operations: [] };
+  }
+  const interaction: ElementInteraction = {
+    click: { kind: "navigate", target: { kind: "page", pageId: pages[0].id } },
+  };
+  const base = opBase(
+    b,
+    "update-element-interaction",
+    "low",
+    `Link element to "${pages[0].title}"`,
+    `Makes the element navigate to the "${pages[0].title}" page when clicked.`,
+  );
+  return {
+    operations: [
+      {
+        ...base,
+        type: "update-element-interaction",
+        pageId: target.page.id,
+        sectionId: target.section.id,
+        elementId: target.elementId,
+        interaction,
+      },
+    ],
+  };
+};
+
+const elementHoverRecognizer: Recognizer = (input, b) => {
+  const target = requireElementTarget(input, b, "stylized");
+  if (!target) return { operations: [] };
+  const instruction = input.instruction.toLowerCase();
+  if (!/\bon hover\b|\bwhen hovered\b/.test(instruction)) return { operations: [] };
+  let backgroundColor: string | undefined;
+  if (/\baccent\b/.test(instruction)) {
+    backgroundColor = "var(--accent, #7c5cfc)";
+  } else {
+    for (const [name, hex] of ELEMENT_COLORS) {
+      if (new RegExp(`\\b${name}\\b`).test(instruction)) {
+        backgroundColor = hex;
+        break;
+      }
+    }
+  }
+  if (!backgroundColor) return { operations: [] };
+  const interaction: ElementInteraction = {
+    hover: { backgroundColor, color: "#ffffff" },
+  };
+  const base = opBase(
+    b,
+    "update-element-interaction",
+    "low",
+    "Add hover highlight",
+    "Highlights the element when the pointer hovers over it.",
+  );
+  return {
+    operations: [
+      {
+        ...base,
+        type: "update-element-interaction",
+        pageId: target.page.id,
+        sectionId: target.section.id,
+        elementId: target.elementId,
+        interaction,
+      },
+    ],
+  };
+};
+
+// ---- 5. Insert a registered renderable element ------------------------------
+
+const ADD_ELEMENT_RE =
+  /add\s+(?:a|an|another|one|new)?\s*([\w\-\s]+?)\s+(?:element|button|heading|paragraph|image|badge|spacer|divider|icon|container|card|stack|row|column|grid|video)\s*(?:to|in|into)\s*(?:this section|the section|here|it)?\s*$/i;
+
+const elementInsertRecognizer: Recognizer = (input, b) => {
+  if (input.scope.type !== "element") return { operations: [] };
+  const match = input.instruction.match(ADD_ELEMENT_RE);
+  if (!match) return { operations: [] };
+  const keyword = match[1].trim();
+  const type = resolveBlockTypeKeyword(keyword);
+  if (!type) {
+    b.warn(
+      "UNSUPPORTED_ELEMENT_TYPE",
+      `"${keyword}" is not a supported element — element-only families have no renderer or persistence path yet.`,
+    );
+    return { operations: [] };
+  }
+  const target = b.elementScopeTarget();
+  if (!target) {
+    b.warn("ELEMENT_NOT_FOUND", "The selected section no longer exists.");
+    return { operations: [] };
+  }
+  const base = opBase(
+    b,
+    "insert-element",
+    "low",
+    `Add ${type} element`,
+    `Adds a new "${type}" element to the section with default content.`,
+  );
+  return {
+    operations: [
+      {
+        ...base,
+        type: "insert-element",
+        pageId: target.page.id,
+        sectionId: target.section.id,
+        elementType: type,
+      },
+    ],
+  };
+};
+
+// ---- 6. Delete / duplicate / hide / show the selected element --------------
+
+const elementDeleteRecognizer: Recognizer = (input, b) => {
+  const target = requireElementTarget(input, b, "deleted");
+  if (!target) return { operations: [] };
+  if (!/(?:delete|remove)\s+(?:the\s+)?(?:selected\s+)?(?:this\s+)?(?:element|it|block)\s*$/i.test(input.instruction)) {
+    return { operations: [] };
+  }
+  const base = opBase(
+    b,
+    "delete-element",
+    "high",
+    `Delete ${target.node.type} element`,
+    `Permanently removes the "${target.node.type}" element from the section.`,
+  );
+  return {
+    operations: [
+      {
+        ...base,
+        type: "delete-element",
+        pageId: target.page.id,
+        sectionId: target.section.id,
+        elementId: target.elementId,
+      },
+    ],
+  };
+};
+
+const elementDuplicateRecognizer: Recognizer = (input, b) => {
+  const target = requireElementTarget(input, b, "duplicated");
+  if (!target) return { operations: [] };
+  if (!/duplicate\s+(?:the\s+)?(?:selected\s+)?(?:this\s+)?(?:element|it|block)\s*$/i.test(input.instruction)) {
+    return { operations: [] };
+  }
+  const base = opBase(
+    b,
+    "duplicate-element",
+    "medium",
+    `Duplicate ${target.node.type} element`,
+    `Creates a copy of the "${target.node.type}" element right below the original.`,
+  );
+  return {
+    operations: [
+      {
+        ...base,
+        type: "duplicate-element",
+        pageId: target.page.id,
+        sectionId: target.section.id,
+        elementId: target.elementId,
+      },
+    ],
+  };
+};
+
+const elementVisibilityRecognizer: Recognizer = (input, b) => {
+  const target = requireElementTarget(input, b, "hidden or shown");
+  if (!target) return { operations: [] };
+  const match = input.instruction.match(
+    /(hide|show)\s+(?:the\s+)?(?:selected\s+)?(?:this\s+)?(?:element|it|block)\s*$/i,
+  );
+  if (!match) return { operations: [] };
+  const visible = match[1].toLowerCase() !== "hide";
+  if (target.node.visible === visible) {
+    b.warn("NO_OP", `The element is already ${visible ? "visible" : "hidden"}.`);
+    return { operations: [] };
+  }
+  const base = opBase(
+    b,
+    "set-element-visibility",
+    "low",
+    `${visible ? "Show" : "Hide"} ${target.node.type} element`,
+    `${visible ? "Shows" : "Hides"} the element. Hidden elements are not rendered or exported.`,
+  );
+  return {
+    operations: [
+      {
+        ...base,
+        type: "set-element-visibility",
+        pageId: target.page.id,
+        sectionId: target.section.id,
+        elementId: target.elementId,
+        visible,
+      },
+    ],
+  };
+};
+
+// ---- Element recognizer order — structural commands before styling ---------
+
+const ELEMENT_RECOGNIZERS: Recognizer[] = [
+  elementInsertRecognizer,
+  elementDeleteRecognizer,
+  elementDuplicateRecognizer,
+  elementVisibilityRecognizer,
+  elementLinkRecognizer,
+  elementHoverRecognizer,
+  elementAnimationRecognizer,
+  elementResponsiveRecognizer,
+  elementStyleRecognizer,
+];
+
+// ---------------------------------------------------------------------------
 // Recognizer order — destructive/specific commands run before generic rewrite
 // ---------------------------------------------------------------------------
 
@@ -848,7 +1310,13 @@ export class RuleBasedPlanner implements AiEditPlanner {
   async createPlan(input: AiEditPlannerInput): Promise<AiEditPlannerResult> {
     const builder = new PlanBuilder(input, this.idFactory);
 
-    for (const recognizer of RECOGNIZERS) {
+    // Phase P22-H — element scope runs ONLY the element recognizers (the
+    // section/page recognizers would misinterpret element-scoped instructions
+    // such as "make it bold" or "hide this element").
+    const recognizers =
+      input.scope.type === "element" ? ELEMENT_RECOGNIZERS : RECOGNIZERS;
+
+    for (const recognizer of recognizers) {
       const result = recognizer(input, builder);
       builder.operations.push(...result.operations);
     }

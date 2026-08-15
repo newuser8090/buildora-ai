@@ -189,6 +189,32 @@ describe("ProjectController — hydration", () => {
     controller.shutdown();
   });
 
+  it("initialize() does not clobber an explicitly opened project (P22-C my-blocks regression)", async () => {
+    const adapter = createMockAdapter();
+    const projectA = makeProject({ id: "proj-url", name: "URL Project" });
+    const projectB = makeProject({ id: "proj-active", name: "Active Project" });
+    await adapter.saveProject({ project: projectA, revision: 1 });
+    await adapter.saveProject({ project: projectB, revision: 1 });
+    // The ACTIVE pointer points at B — a direct load of /editor/A must still
+    // show A (the editor page opens the URL project BEFORE EditorProvider
+    // mounts and calls initialize()).
+    await adapter.setActiveProjectId("proj-active");
+
+    const controller = new ProjectController(adapter);
+    const opened = await controller.openProject("proj-url");
+    expect(opened.success).toBe(true);
+
+    // EditorProvider mounts after the open and calls initialize() — the
+    // active-project restore must NOT replace the explicit open.
+    await controller.initialize();
+
+    const state = useEditorStore.getState();
+    expect(state.project.id).toBe("proj-url");
+    expect(state.project.name).toBe("URL Project");
+    expect(state.project.id).not.toBe("proj-active");
+    await controller.shutdown();
+  });
+
   it("missing project falls back to creating fresh project", async () => {
     const adapter = createMockAdapter();
     // Set active project ID but no data exists

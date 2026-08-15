@@ -34,6 +34,16 @@ import {
   validatePageTitle,
 } from "@/features/editor/store/page-structure";
 import { validateRoutingForExport } from "@/features/routing/routes";
+import {
+  elementTreeToSection,
+  sectionToElementTree,
+} from "@/features/elements/adapters/section-element-adapter";
+import { isCustomBlockSection } from "@/features/blocks/adapters/section-block-adapter";
+import {
+  applyElementOperation,
+  createElement,
+} from "@/features/elements/engine/element-operations";
+import { isRenderableElementType } from "@/features/elements/registry/element-registry";
 import type {
   AiEditOperation,
   AiEditPlanError,
@@ -42,6 +52,8 @@ import type {
   SimulatePlanResult,
 } from "../plan-types";
 import { formatZodIssues } from "../schemas/plan-schemas";
+import type { ElementTree, ElementType } from "@/features/elements/types";
+import type { ElementResult } from "@/features/elements/types";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -466,6 +478,288 @@ function applyUpdatePageMeta(
   return { ok: true, project: updated, changed, detail: changed ? "Updated page metadata" : "Page metadata unchanged" };
 }
 
+// ---------------------------------------------------------------------------
+// Element operations (Phase P22-H) — custom-block element trees only
+//
+// Every element op is executed through the canonical applyElementOperation
+// engine and materializes/folds through sectionToElementTree /
+// elementTreeToSection. Targets are restricted to CUSTOM-BLOCK sections (the
+// durable element-tree surface); regular sections are rejected rather than
+// silently dropping element metadata after persistence.
+// ---------------------------------------------------------------------------
+
+/** Narrow the engine's union result to the tree (duplicate returns {tree,newId}). */
+function unwrapElementResult(
+  result: ElementResult<ElementTree | { tree: ElementTree; newId: string }>,
+): ElementResult<ElementTree> {
+  if (!result.ok) return result;
+  const value = result.value;
+  if (value !== null && typeof value === "object" && "tree" in value && value.tree) {
+    return { ok: true, value: value.tree };
+  }
+  return { ok: true, value: value as ElementTree };
+}
+
+function applyElementOp(
+  project: Project,
+  op: AiEditOperation,
+  target: { pageId: string; sectionId: string; elementId?: string },
+  applyFn: (tree: ElementTree) => ElementResult<ElementTree>,
+  detail?: string,
+  errorField = "elementId",
+): ApplyResult {
+  const found = findSection(project, target.pageId, target.sectionId);
+  if (!found) {
+    const page = findPage(project, target.pageId);
+    if (!page) return opError(op, `Page "${target.pageId}" does not exist.`, "pageId");
+    return opError(op, `Section "${target.sectionId}" does not exist on page "${target.pageId}".`, "sectionId");
+  }
+  const section = found.section;
+  if (!isCustomBlockSection(section)) {
+    return opError(
+      op,
+      "Element editing is only supported inside custom-block sections.",
+      "sectionId",
+    );
+  }
+  const tree = sectionToElementTree(section);
+  if (target.elementId !== undefined && !tree.nodes[target.elementId]) {
+    return opError(
+      op,
+      `Element "${target.elementId}" does not exist on section "${target.sectionId}".`,
+      "elementId",
+    );
+  }
+  const applied = applyFn(tree);
+  if (!applied.ok) {
+    return opError(op, applied.error.message, errorField);
+  }
+  const folded = elementTreeToSection(applied.value, section);
+  if (!folded.ok) {
+    return opError(op, folded.error.message, "tree");
+  }
+  const changed =
+    JSON.stringify(folded.value.section.props) !== JSON.stringify(section.props);
+  if (!changed) {
+    return { ok: true, project, changed: false, detail: "Element unchanged" };
+  }
+  const updated = cloneProject(project);
+  const page = findPage(updated, target.pageId)!;
+  const idx = page.sections.findIndex((s) => s.id === target.sectionId);
+  page.sections[idx] = {
+    ...page.sections[idx],
+    props: folded.value.section.props,
+    styles: folded.value.section.styles,
+  };
+  return { ok: true, project: updated, changed: true, detail };
+}
+
+function applyUpdateElementProps(
+  project: Project,
+  op: Extract<AiEditOperation, { type: "update-element-props" }>,
+): ApplyResult {
+  return applyElementOp(
+    project,
+    op,
+    { pageId: op.pageId, sectionId: op.sectionId, elementId: op.elementId },
+    (tree) =>
+      unwrapElementResult(
+        applyElementOperation(tree, {
+          kind: "update-props",
+          elementId: op.elementId,
+          props: op.props,
+        }),
+      ),
+    "Updated element content",
+  );
+}
+
+function applyUpdateElementStyle(
+  project: Project,
+  op: Extract<AiEditOperation, { type: "update-element-style" }>,
+): ApplyResult {
+  return applyElementOp(
+    project,
+    op,
+    { pageId: op.pageId, sectionId: op.sectionId, elementId: op.elementId },
+    (tree) =>
+      unwrapElementResult(
+        applyElementOperation(tree, {
+          kind: "update-style",
+          elementId: op.elementId,
+          style: op.style,
+        }),
+      ),
+    "Updated element style",
+  );
+}
+
+function applyUpdateElementResponsive(
+  project: Project,
+  op: Extract<AiEditOperation, { type: "update-element-responsive" }>,
+): ApplyResult {
+  return applyElementOp(
+    project,
+    op,
+    { pageId: op.pageId, sectionId: op.sectionId, elementId: op.elementId },
+    (tree) =>
+      unwrapElementResult(
+        applyElementOperation(tree, {
+          kind: "update-viewport",
+          elementId: op.elementId,
+          viewport: op.breakpoint,
+          style: op.style,
+        }),
+      ),
+    `Updated ${op.breakpoint} responsive overrides`,
+  );
+}
+
+function applyUpdateElementAnimation(
+  project: Project,
+  op: Extract<AiEditOperation, { type: "update-element-animation" }>,
+): ApplyResult {
+  return applyElementOp(
+    project,
+    op,
+    { pageId: op.pageId, sectionId: op.sectionId, elementId: op.elementId },
+    (tree) =>
+      unwrapElementResult(
+        applyElementOperation(tree, {
+          kind: "update-animation",
+          elementId: op.elementId,
+          animation: op.animation,
+        }),
+      ),
+    op.animation === null ? "Cleared element animation" : "Updated element animation",
+  );
+}
+
+function applyUpdateElementInteraction(
+  project: Project,
+  op: Extract<AiEditOperation, { type: "update-element-interaction" }>,
+): ApplyResult {
+  return applyElementOp(
+    project,
+    op,
+    { pageId: op.pageId, sectionId: op.sectionId, elementId: op.elementId },
+    (tree) =>
+      unwrapElementResult(
+        applyElementOperation(tree, {
+          kind: "update-interaction",
+          elementId: op.elementId,
+          interaction: op.interaction,
+        }),
+      ),
+    op.interaction === null ? "Cleared element interactions" : "Updated element interactions",
+  );
+}
+
+function applyInsertElement(
+  project: Project,
+  op: Extract<AiEditOperation, { type: "insert-element" }>,
+): ApplyResult {
+  return applyElementOp(
+    project,
+    op,
+    { pageId: op.pageId, sectionId: op.sectionId },
+    (tree) => {
+      const parentId = op.parentElementId ?? tree.rootIds[0];
+      if (!tree.nodes[parentId]) {
+        return {
+          ok: false,
+          error: {
+            code: "ELEMENT_TARGET_NOT_FOUND",
+            message: `Parent element "${parentId}" does not exist.`,
+          },
+        };
+      }
+      if (!isRenderableElementType(op.elementType)) {
+        return {
+          ok: false,
+          error: {
+            code: "ELEMENT_TYPE_NOT_REGISTERED",
+            message: `"${op.elementType}" is not a registered renderable element.`,
+          },
+        };
+      }
+      // Registry/factory defaults + bounded AI content — never fabricated JSON.
+      const element = createElement(op.elementType as ElementType, {
+        props: op.props,
+        style: op.style,
+      });
+      return unwrapElementResult(
+        applyElementOperation(tree, {
+          kind: "insert",
+          parentId,
+          element,
+          index: op.index,
+        }),
+      );
+    },
+    `Inserted ${op.elementType} element`,
+    "parentElementId",
+  );
+}
+
+function applyDeleteElement(
+  project: Project,
+  op: Extract<AiEditOperation, { type: "delete-element" }>,
+): ApplyResult {
+  return applyElementOp(
+    project,
+    op,
+    { pageId: op.pageId, sectionId: op.sectionId, elementId: op.elementId },
+    (tree) =>
+      unwrapElementResult(
+        applyElementOperation(tree, {
+          kind: "delete",
+          elementId: op.elementId,
+        }),
+      ),
+    `Deleted element "${op.elementId}"`,
+  );
+}
+
+function applyDuplicateElement(
+  project: Project,
+  op: Extract<AiEditOperation, { type: "duplicate-element" }>,
+): ApplyResult {
+  return applyElementOp(
+    project,
+    op,
+    { pageId: op.pageId, sectionId: op.sectionId, elementId: op.elementId },
+    (tree) =>
+      unwrapElementResult(
+        applyElementOperation(tree, {
+          kind: "duplicate",
+          elementId: op.elementId,
+        }),
+      ),
+    `Duplicated element "${op.elementId}"`,
+  );
+}
+
+function applySetElementVisibility(
+  project: Project,
+  op: Extract<AiEditOperation, { type: "set-element-visibility" }>,
+): ApplyResult {
+  return applyElementOp(
+    project,
+    op,
+    { pageId: op.pageId, sectionId: op.sectionId, elementId: op.elementId },
+    (tree) =>
+      unwrapElementResult(
+        applyElementOperation(tree, {
+          kind: "set-visible",
+          elementId: op.elementId,
+          visible: op.visible,
+        }),
+      ),
+    op.visible ? `Element "${op.elementId}" is now visible` : `Element "${op.elementId}" is now hidden`,
+  );
+}
+
 function applyOperation(project: Project, op: AiEditOperation): ApplyResult {
   switch (op.type) {
     case "update-section-props":
@@ -492,6 +786,25 @@ function applyOperation(project: Project, op: AiEditOperation): ApplyResult {
       return applyMovePage(project, op);
     case "update-page-meta":
       return applyUpdatePageMeta(project, op);
+    // Phase P22-H — element operations
+    case "update-element-props":
+      return applyUpdateElementProps(project, op);
+    case "update-element-style":
+      return applyUpdateElementStyle(project, op);
+    case "update-element-responsive":
+      return applyUpdateElementResponsive(project, op);
+    case "update-element-animation":
+      return applyUpdateElementAnimation(project, op);
+    case "update-element-interaction":
+      return applyUpdateElementInteraction(project, op);
+    case "insert-element":
+      return applyInsertElement(project, op);
+    case "delete-element":
+      return applyDeleteElement(project, op);
+    case "duplicate-element":
+      return applyDuplicateElement(project, op);
+    case "set-element-visibility":
+      return applySetElementVisibility(project, op);
     default:
       return opError(op, `Unsupported operation type "${(op as { type: string }).type}".`);
   }

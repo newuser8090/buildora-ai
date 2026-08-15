@@ -217,6 +217,16 @@ export function generatePageFile(
     if (!info) continue;
 
     const propsLines = serializePropsForComponent(section, manifest, routes);
+    // Phase P22-G — custom-block sections carry typed NavTargets inside their
+    // element trees. The exported CustomBlock needs the page route map to
+    // resolve them to real exported routes (pageId → routeUrl).
+    if (section.type === "custom-block") {
+      const routeMap = JSON.stringify(
+        Object.fromEntries(routes.map((route) => [route.page.id, route.routeUrl])),
+      );
+      rendered.push(`      <${info.componentName} key="${section.id}" ${propsLines} routes={${routeMap}} />`);
+      continue;
+    }
     rendered.push(`      <${info.componentName} key="${section.id}" ${propsLines} />`);
   }
 

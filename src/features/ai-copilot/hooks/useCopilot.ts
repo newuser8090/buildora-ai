@@ -20,6 +20,10 @@ import {
   type CopilotScope,
   type CopilotScopeChoice,
 } from "../types";
+import {
+  getElementEditTarget,
+  useElementEditTarget,
+} from "@/features/ai-editing/selected-element";
 
 // ---------------------------------------------------------------------------
 // Summary copy (beginner-first)
@@ -68,6 +72,9 @@ export function useCopilot() {
   // Inline field selection (read live via the global store).
   const selectedField = useInlineEditingStore((s) => s.selectedField);
 
+  // Phase P22-H — the normalized selected element (canvas/inspector).
+  const selectedElement = useElementEditTarget();
+
   const undo = useEditorStore((s) => s.undo);
 
   // -------------------------------------------------------------------------
@@ -115,6 +122,7 @@ export function useCopilot() {
 
     // Resolve the scope NOW so it is available for the conversation record,
     // the plan request, and Regenerate — even if planning fails.
+    const element = getElementEditTarget();
     const scope = resolveEffectiveScope(
       store.scopeChoice,
       editor.project,
@@ -123,6 +131,7 @@ export function useCopilot() {
       field,
       store.messages,
       instruction,
+      element,
     );
 
     store.addUserMessage(instruction);
@@ -145,6 +154,7 @@ export function useCopilot() {
         selectedPageId: editor.selectedPageId,
         selectedSectionId: editor.selectedSectionId,
         selectedField: field,
+        selectedElement: element,
         readiness: report,
         device: editor.viewport,
         messages: store.messages,
@@ -408,6 +418,7 @@ export function useCopilot() {
     styleNotes,
     memoryRestored,
     selectedField,
+    selectedElement,
     readiness,
     openPanel,
     closePanel,

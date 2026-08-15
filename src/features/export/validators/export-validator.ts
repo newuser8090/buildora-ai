@@ -1,6 +1,7 @@
 import type { Project } from "@/types/project";
 import { AnySectionSchema } from "@/features/editor/schemas/section-schemas";
 import { ProjectSchema, ThemeSchema } from "@/features/generation/schemas/generation-plan-schema";
+import type { ElementBinding } from "@/features/elements/binding/types";
 import { sectionRegistry } from "@/features/editor/registry/section-registry";
 import { validateRoutingForExport } from "@/features/routing/routes";
 import { buildExportAssetManifest } from "../generators/asset-export-manifest";
@@ -28,6 +29,7 @@ export function validateProjectForExport(project: Project): ExportValidation {
   // 0. Read known types from the singleton registry
   const KNOWN_TYPES_FALLBACK = [
     "header", "hero", "features", "pricing", "faq", "cta", "footer",
+    "custom-block",
   ];
   const knownTypes = sectionRegistry.types.length > 0
     ? sectionRegistry.types
@@ -94,6 +96,28 @@ export function validateProjectForExport(project: Project): ExportValidation {
   //     paths, and duplicate routes
   for (const routingError of validateRoutingForExport(project.pages)) {
     errors.push(`Routing: ${routingError}`);
+  }
+
+  // 3c. Data binding validation (Phase P22-J) — a collection binding must
+  //     reference a collection that exists in the project. Dangling references
+  //     would export as static fallbacks, so they are rejected explicitly
+  //     (never a silent content loss).
+  const collectionIds = new Set((project.collections ?? []).map((c) => c.id));
+  for (const page of project.pages) {
+    for (const section of page.sections) {
+      if (section.type !== "custom-block") continue;
+      const tree = (section.props as { tree?: { nodes?: Record<string, { binding?: ElementBinding }> } }).tree;
+      if (!tree?.nodes) continue;
+      for (const [nodeId, node] of Object.entries(tree.nodes)) {
+        const binding = node.binding;
+        if (!binding || binding.source !== "collection") continue;
+        if (!binding.collectionId || !collectionIds.has(binding.collectionId)) {
+          errors.push(
+            `Section "${section.id}" element "${nodeId}" binds to missing collection "${String(binding.collectionId)}".`,
+          );
+        }
+      }
+    }
   }
 
   // 4. Asset validation — check referenced assets via manifest builder

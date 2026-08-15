@@ -13,6 +13,9 @@ import type {
   AiEditDiffField,
   AiEditOperation,
 } from "../plan-types";
+import { sectionToElementTree } from "@/features/elements/adapters/section-element-adapter";
+import { elementRegistry } from "@/features/elements/registry/element-registry";
+import type { ElementNode } from "@/features/elements/types";
 
 const MAX_FIELD_CHARS = 500;
 
@@ -39,6 +42,35 @@ function sectionLabelAt(project: Project, pageId: string, sectionId: string): st
   if (!section) return "Unknown section";
   const name = section.type.charAt(0).toUpperCase() + section.type.slice(1);
   return `${name} section`;
+}
+
+/** Resolve a node inside a section's element tree (best-effort). */
+function elementNodeAt(
+  project: Project,
+  pageId: string,
+  sectionId: string,
+  elementId: string,
+): ElementNode | undefined {
+  const section = findPage(project, pageId)?.sections.find((s) => s.id === sectionId);
+  if (!section) return undefined;
+  return sectionToElementTree(section).nodes[elementId];
+}
+
+/** Human-friendly element label from the registry (falls back to the type). */
+function elementLabel(
+  project: Project,
+  pageId: string,
+  sectionId: string,
+  elementType: string,
+): string {
+  const registered = elementRegistry.get(elementType as never);
+  if (registered) return registered.label;
+  const node = elementNodeAt(project, pageId, sectionId, elementType);
+  if (node) {
+    const label = elementRegistry.get(node.type as never)?.label;
+    if (label) return label;
+  }
+  return elementType.charAt(0).toUpperCase() + elementType.slice(1);
 }
 
 /** Diff scalar fields of two plain objects; only changed keys are emitted. */
@@ -270,6 +302,142 @@ function buildDiffForOperation(
         });
       }
       return { operationId: operation.id, kind: "metadata", fields };
+    }
+
+    // ---- Phase P22-H — element operations ----
+
+    case "update-element-props": {
+      const beforeNode = elementNodeAt(before, operation.pageId, operation.sectionId, operation.elementId);
+      const afterNode = elementNodeAt(after, operation.pageId, operation.sectionId, operation.elementId);
+      const fields = diffProps(
+        (beforeNode?.props ?? {}) as Record<string, unknown>,
+        (afterNode?.props ?? {}) as Record<string, unknown>,
+      );
+      return { operationId: operation.id, kind: "element", fields };
+    }
+
+    case "update-element-style": {
+      const beforeNode = elementNodeAt(before, operation.pageId, operation.sectionId, operation.elementId);
+      const afterNode = elementNodeAt(after, operation.pageId, operation.sectionId, operation.elementId);
+      const fields = diffProps(
+        (beforeNode?.style ?? {}) as Record<string, unknown>,
+        (afterNode?.style ?? {}) as Record<string, unknown>,
+      );
+      return { operationId: operation.id, kind: "element", fields };
+    }
+
+    case "update-element-responsive": {
+      const beforeNode = elementNodeAt(before, operation.pageId, operation.sectionId, operation.elementId);
+      const afterNode = elementNodeAt(after, operation.pageId, operation.sectionId, operation.elementId);
+      const beforeOverrides = (beforeNode?.viewport?.[operation.breakpoint] ?? {}) as Record<string, unknown>;
+      const afterOverrides = (afterNode?.viewport?.[operation.breakpoint] ?? {}) as Record<string, unknown>;
+      const fields = diffProps(beforeOverrides, afterOverrides);
+      if (fields.length === 0) {
+        fields.push({
+          key: "breakpoint",
+          label: `Breakpoint (${operation.breakpoint})`,
+          after: "No change",
+        });
+      }
+      return { operationId: operation.id, kind: "element", fields };
+    }
+
+    case "update-element-animation": {
+      const beforeNode = elementNodeAt(before, operation.pageId, operation.sectionId, operation.elementId);
+      const afterNode = elementNodeAt(after, operation.pageId, operation.sectionId, operation.elementId);
+      return {
+        operationId: operation.id,
+        kind: "element",
+        fields: [
+          {
+            key: "animation",
+            label: "Animation",
+            before: truncate(beforeNode?.animation),
+            after: truncate(afterNode?.animation ?? null),
+          },
+        ],
+      };
+    }
+
+    case "update-element-interaction": {
+      const beforeNode = elementNodeAt(before, operation.pageId, operation.sectionId, operation.elementId);
+      const afterNode = elementNodeAt(after, operation.pageId, operation.sectionId, operation.elementId);
+      return {
+        operationId: operation.id,
+        kind: "element",
+        fields: [
+          {
+            key: "interaction",
+            label: "Interactions",
+            before: truncate(beforeNode?.interaction),
+            after: truncate(afterNode?.interaction ?? null),
+          },
+        ],
+      };
+    }
+
+    case "insert-element": {
+      const label = elementLabel(before, operation.pageId, operation.sectionId, operation.elementType);
+      return {
+        operationId: operation.id,
+        kind: "element",
+        fields: [
+          {
+            key: "element",
+            label: "Added",
+            after: `${label}${operation.parentElementId ? ` — inside ${operation.parentElementId}` : ""}`,
+          },
+        ],
+      };
+    }
+
+    case "delete-element": {
+      const beforeNode = elementNodeAt(before, operation.pageId, operation.sectionId, operation.elementId);
+      return {
+        operationId: operation.id,
+        kind: "element",
+        fields: [
+          {
+            key: "element",
+            label: "Removed",
+            before: beforeNode
+              ? `${elementLabel(before, operation.pageId, operation.sectionId, beforeNode.type)} (${operation.elementId})`
+              : operation.elementId,
+          },
+        ],
+      };
+    }
+
+    case "duplicate-element": {
+      const beforeNode = elementNodeAt(before, operation.pageId, operation.sectionId, operation.elementId);
+      return {
+        operationId: operation.id,
+        kind: "element",
+        fields: [
+          {
+            key: "element",
+            label: "Duplicated",
+            after: beforeNode
+              ? `${elementLabel(before, operation.pageId, operation.sectionId, beforeNode.type)} — copy added below the original`
+              : operation.elementId,
+          },
+        ],
+      };
+    }
+
+    case "set-element-visibility": {
+      return {
+        operationId: operation.id,
+        kind: "visibility",
+        fields: [
+          {
+            key: "visibility",
+            label: "Element visibility",
+            before: operation.visible ? "Hidden" : "Visible",
+            after: operation.visible ? "Visible" : "Hidden",
+          },
+        ],
+      };
     }
 
     default:

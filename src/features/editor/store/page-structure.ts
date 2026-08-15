@@ -8,7 +8,7 @@
 
 import type { Page, PageMeta } from "@/types/project";
 import type { BaseSection } from "@/types/section";
-import { isReservedSlugSegment } from "@/features/routing/routes";
+import { isReservedSlugSegment, ROOT_SLUG } from "@/features/routing/routes";
 
 // ---------------------------------------------------------------------------
 // Structured errors
@@ -332,6 +332,76 @@ export function deletePageFromList(
   const remaining = pages.filter((p) => p.id !== pageId);
   const nextSelection = remaining[Math.min(index, remaining.length - 1)]?.id ?? null;
   return { ok: true, value: { pages: remaining, nextSelection } };
+}
+
+// ---------------------------------------------------------------------------
+// Homepage
+// ---------------------------------------------------------------------------
+
+/**
+ * Id of the current homepage (the FIRST page owns the root route — the
+ * documented `pages[0]` policy shared by routing, export and preview).
+ */
+export function homePageId(pages: Page[]): string | null {
+  return pages[0]?.id ?? null;
+}
+
+export interface SetHomePageOutput {
+  pages: Page[];
+  /** True when the page order (and therefore the homepage) changed. */
+  changed: boolean;
+}
+
+/**
+ * Make a page the homepage by moving it to the front of the list.
+ *
+ * Follows the documented `pages[0]` homepage policy (no `isHome` field):
+ *   - the selected page moves to index 0 and owns the root slug "/"
+ *   - the previously-first page (now index 1) receives a unique non-root
+ *     slug derived from its title (reusing `resolveUniqueSlug`)
+ *   - every page keeps its identity and content
+ *
+ * Reuses `movePageToIndex` for the reorder and `resolveUniqueSlug` for slug
+ * ownership — no routing/slug logic is duplicated. Setting the already-home
+ * page is a no-op (`changed: false`, the caller skips history).
+ */
+export function setHomePageInList(
+  pages: Page[],
+  pageId: string,
+): PageStructureResult<SetHomePageOutput> {
+  const index = pages.findIndex((p) => p.id === pageId);
+  if (index === -1) {
+    return {
+      ok: false,
+      error: { code: "PAGE_NOT_FOUND", message: `Page "${pageId}" does not exist.` },
+    };
+  }
+
+  // Already the homepage — no-op.
+  if (index === 0) {
+    return { ok: true, value: { pages, changed: false } };
+  }
+
+  // Move the target page to the front (reuses the existing helper).
+  const moved = movePageToIndex(pages, pageId, 0);
+  if (!moved.ok) return moved;
+
+  const reordered = moved.value.pages;
+
+  // The new homepage (index 0) owns the root slug "/".
+  const next = reordered.map((p, i) =>
+    i === 0 ? { ...p, slug: ROOT_SLUG } : p,
+  );
+
+  // The displaced previously-first page (now index 1) must receive a unique
+  // non-root slug derived from its title.
+  const displaced = next[1];
+  if (displaced) {
+    const uniqueSlug = resolveUniqueSlug(next, displaced.title, displaced.id);
+    next[1] = { ...displaced, slug: uniqueSlug };
+  }
+
+  return { ok: true, value: { pages: next, changed: true } };
 }
 
 // ---------------------------------------------------------------------------

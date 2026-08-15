@@ -10,7 +10,12 @@ import { useAiPlanStore } from "../../store/plan-store";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { useChatStore } from "@/features/chat/store/chat-store";
 import { MOCK_PROJECT } from "@/features/editor/mock/mock-project";
+import { registerDefaultBlocks, isDefaultBlocksRegistered } from "@/features/blocks/registry/block-registry";
 import { simulatePlan } from "../../services/plan-simulator";
+
+// The plan simulator folds element trees through the block engine, which
+// validates types against the block registry.
+if (!isDefaultBlocksRegistered()) registerDefaultBlocks();
 import { buildDiffs } from "../../services/diff-builder";
 import type {
   AiEditDiff,
@@ -170,6 +175,137 @@ describe("AiEditPlanReview — rendering", () => {
   it("returns null when there is no plan", () => {
     const { container } = renderReview();
     expect(container.firstChild).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase P22-H — element plans render with element diffs
+// ---------------------------------------------------------------------------
+
+describe("AiEditPlanReview — element plans", () => {
+  function customBlockProject() {
+    const project = JSON.parse(JSON.stringify(MOCK_PROJECT)) as typeof MOCK_PROJECT;
+    project.pages[0].sections = [
+      {
+        id: "s-custom",
+        type: "custom-block",
+        order: 1,
+        visible: true,
+        props: {
+          name: "Design",
+          tree: {
+            rootIds: ["s-custom"],
+            nodes: {
+              "s-custom": {
+                id: "s-custom",
+                type: "container",
+                parentId: null,
+                children: ["heading-1"],
+                props: {},
+                style: {},
+                responsive: {},
+                visible: true,
+                locked: false,
+                hidden: false,
+              },
+              "heading-1": {
+                id: "heading-1",
+                type: "heading",
+                parentId: "s-custom",
+                children: [],
+                props: { text: "Original headline" },
+                style: {},
+                responsive: {},
+                visible: true,
+                locked: false,
+                hidden: false,
+              },
+            },
+          },
+        },
+        styles: {},
+      },
+    ];
+    return project;
+  }
+
+  function elementPlan(): AiEditPlan {
+    return {
+      ...makePlan({ type: "element", pageId: "page-1", sectionId: "s-custom", elementId: "heading-1" }),
+      summary: "One change for the selected element.",
+      operations: [
+        {
+          ...baseOp("op-1"),
+          type: "update-element-props",
+          pageId: "page-1",
+          sectionId: "s-custom",
+          elementId: "heading-1",
+          props: { text: "Fresh headline" },
+        } as AiEditOperation,
+      ],
+    };
+  }
+
+  it("renders an element plan operation with its element target", () => {
+    const plan = elementPlan();
+    const sim = simulatePlan(customBlockProject(), plan.operations, { captureSnapshots: true });
+    const diffs = sim.ok ? buildDiffs(plan.operations, sim.snapshots) : [];
+    useAiPlanStore.getState().setReady({
+      plan,
+      selectedOperationIds: ["op-1"],
+      diffs,
+      warnings: [],
+      lastRequest: { instruction: plan.instruction, scope: plan.scope },
+    });
+    renderReview();
+    expect(screen.getByTestId("plan-op-op-1").textContent).toContain("heading-1");
+  });
+
+  it("renders element-kind diffs for an element operation", () => {
+    const plan = elementPlan();
+    const sim = simulatePlan(customBlockProject(), plan.operations, { captureSnapshots: true });
+    const diffs = sim.ok ? buildDiffs(plan.operations, sim.snapshots) : [];
+    useAiPlanStore.getState().setReady({
+      plan,
+      selectedOperationIds: ["op-1"],
+      diffs,
+      warnings: [],
+      lastRequest: { instruction: plan.instruction, scope: plan.scope },
+    });
+    renderReview();
+    fireEvent.click(screen.getByLabelText("Show diff"));
+    expect(screen.getByText("text")).toBeTruthy();
+    expect(screen.getByText("Original headline")).toBeTruthy();
+    // The after value renders with a "→ " prefix inside the same text node.
+    expect(screen.getByText(/Fresh headline/)).toBeTruthy();
+  });
+
+  it("Applies an element plan through the review (one history entry)", async () => {
+    hydrate();
+    useEditorStore.getState().setProject(customBlockProject() as never);
+    const plan = elementPlan();
+    const sim = simulatePlan(customBlockProject(), plan.operations, { captureSnapshots: true });
+    const diffs = sim.ok ? buildDiffs(plan.operations, sim.snapshots) : [];
+    useAiPlanStore.getState().setReady({
+      plan,
+      selectedOperationIds: ["op-1"],
+      diffs,
+      warnings: [],
+      lastRequest: { instruction: plan.instruction, scope: plan.scope },
+    });
+    const historyBefore = useEditorStore.getState().history.past.length;
+    renderReview();
+
+    fireEvent.click(screen.getByTestId("plan-apply-all"));
+
+    await waitFor(() => {
+      const section = useEditorStore.getState().project.pages[0].sections[0];
+      const tree = (section.props as { tree: { nodes: Record<string, { props: { text: string } }> } }).tree;
+      expect(tree.nodes["heading-1"].props.text).toBe("Fresh headline");
+    });
+    // Exactly ONE new history entry for the whole element plan (the
+    // setProject above already pushed its own entry before this point).
+    expect(useEditorStore.getState().history.past.length).toBe(historyBefore + 1);
   });
 });
 
