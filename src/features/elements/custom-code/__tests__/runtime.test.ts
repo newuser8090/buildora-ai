@@ -16,6 +16,10 @@ import {
   type CustomCodeRuntimeState,
 } from "../runtime";
 import { RUNTIME_MESSAGE_TYPES } from "../constants";
+import {
+  MAX_DIAGNOSTIC_MESSAGE_LENGTH,
+  type RuntimeDiagnostic,
+} from "../diagnostics";
 
 // interval 3000 / timeout 1500 / maxMisses 2 keeps the math easy:
 // a tick at 3s observes 3s of silence → miss; 2 consecutive misses → fire.
@@ -29,6 +33,7 @@ interface Harness {
   onUnresponsive: ReturnType<typeof vi.fn>;
   onError: ReturnType<typeof vi.fn>;
   onStateChange: ReturnType<typeof vi.fn>;
+  onDiagnostic: ReturnType<typeof vi.fn>;
 }
 
 function createHarness(maxRecoveryAttempts?: number): Harness {
@@ -38,6 +43,7 @@ function createHarness(maxRecoveryAttempts?: number): Harness {
   const onUnresponsive = vi.fn();
   const onError = vi.fn();
   const onStateChange = vi.fn();
+  const onDiagnostic = vi.fn();
   const runtime = createCustomCodeRuntime({
     getContentWindow: () => contentWindow,
     heartbeat: HEARTBEAT,
@@ -47,8 +53,18 @@ function createHarness(maxRecoveryAttempts?: number): Harness {
     onUnresponsive,
     onError,
     onStateChange,
+    onDiagnostic,
   });
-  return { runtime, contentWindow, onReady, onHeight, onUnresponsive, onError, onStateChange };
+  return {
+    runtime,
+    contentWindow,
+    onReady,
+    onHeight,
+    onUnresponsive,
+    onError,
+    onStateChange,
+    onDiagnostic,
+  };
 }
 
 function readyMessage(): unknown {
@@ -507,5 +523,304 @@ describe("state model", () => {
     h.runtime.dispose();
     h.runtime.mount();
     expect(h.runtime.state).toBe("disposed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OBSERVABILITY (P23-H) — diagnostics + read-only snapshot
+// ---------------------------------------------------------------------------
+
+/** The ordered diagnostic kinds emitted so far. */
+function diagnosticKinds(h: Harness): RuntimeDiagnostic["kind"][] {
+  return h.onDiagnostic.mock.calls.map((call) => {
+    const diagnostic = call[0] as RuntimeDiagnostic;
+    return diagnostic.kind;
+  });
+}
+
+describe("diagnostic emission (P23-H)", () => {
+  it("emits a ready diagnostic exactly once per instance, with identity", () => {
+    const h = createHarness();
+    h.runtime.mount();
+    expect(h.runtime.handleMessage(h.contentWindow, readyMessage())).toBe(true);
+
+    expect(h.onDiagnostic).toHaveBeenCalledTimes(1);
+    const diagnostic = h.onDiagnostic.mock.calls[0][0] as RuntimeDiagnostic;
+    expect(diagnostic.kind).toBe("ready");
+    expect(diagnostic.instanceId).toBe(h.runtime.instanceId);
+    expect(diagnostic.message).toBe("Frame ready");
+    expect(typeof diagnostic.at).toBe("number");
+
+    // A re-anchoring ready (self-reload) reports no duplicate lifecycle event.
+    expect(h.runtime.handleMessage(h.contentWindow, readyMessage())).toBe(true);
+    expect(h.onDiagnostic).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits height diagnostics with the validated height", () => {
+    const h = createHarness();
+    makeReady(h);
+    h.onDiagnostic.mockClear();
+
+    expect(h.runtime.handleMessage(h.contentWindow, heightMessage(500))).toBe(true);
+    const diagnostic = h.onDiagnostic.mock.calls[0][0] as RuntimeDiagnostic;
+    expect(diagnostic.kind).toBe("height");
+    expect(diagnostic.height).toBe(500);
+    expect(diagnostic.message).toBe("Frame height updated");
+  });
+
+  it("emits error diagnostics with the sanitized error info", () => {
+    const h = createHarness();
+    makeReady(h);
+    h.onDiagnostic.mockClear();
+
+    expect(h.runtime.handleMessage(h.contentWindow, errorMessage("boom"))).toBe(true);
+    const diagnostic = h.onDiagnostic.mock.calls[0][0] as RuntimeDiagnostic;
+    expect(diagnostic.kind).toBe("error");
+    expect(diagnostic.error).toEqual({ message: "boom" });
+    expect(diagnostic.message).toBe("Runtime error reported");
+  });
+
+  it("emits the full lifecycle diagnostic sequence in order", () => {
+    const h = createHarness();
+    h.runtime.mount();
+    h.runtime.handleMessage(h.contentWindow, readyMessage()); // ready
+    h.runtime.handleMessage(h.contentWindow, heightMessage(400)); // height
+    h.runtime.handleMessage(h.contentWindow, errorMessage("x")); // error
+    forceUnresponsive(h); // unresponsive
+    h.runtime.handleMessage(h.contentWindow, readyMessage()); // recovery-started
+    h.runtime.handleMessage(h.contentWindow, readyMessage()); // recovery-succeeded
+    h.runtime.dispose(); // disposed
+
+    expect(diagnosticKinds(h)).toEqual([
+      "ready",
+      "height",
+      "error",
+      "unresponsive",
+      "recovery-started",
+      "recovery-succeeded",
+      "disposed",
+    ]);
+  });
+
+  it("state observers fire before the matching diagnostic and semantic callback", () => {
+    const h = createHarness();
+    h.runtime.mount();
+    h.runtime.handleMessage(h.contentWindow, readyMessage());
+
+    const stateChangeReadyIndex = h.onStateChange.mock.invocationCallOrder[1];
+    const diagnosticIndex = h.onDiagnostic.mock.invocationCallOrder[0];
+    const onReadyIndex = h.onReady.mock.invocationCallOrder[0];
+    expect(stateChangeReadyIndex).toBeLessThan(diagnosticIndex);
+    expect(diagnosticIndex).toBeLessThan(onReadyIndex);
+  });
+
+  it("recovery diagnostics fire per recovery cycle", () => {
+    const h = createHarness();
+    makeReady(h);
+    forceUnresponsive(h);
+
+    h.runtime.handleMessage(h.contentWindow, readyMessage()); // recovery-started
+    expect(diagnosticKinds(h)).toContain("recovery-started");
+    h.runtime.handleMessage(h.contentWindow, heightMessage(10)); // recovery-succeeded
+    expect(diagnosticKinds(h)).toContain("recovery-succeeded");
+
+    // A second silent period reports its own unresponsive event (each cycle
+    // is a real timeout — not a duplicate).
+    forceUnresponsive(h);
+    const unresponsiveCount = diagnosticKinds(h).filter(
+      (kind) => kind === "unresponsive",
+    ).length;
+    expect(unresponsiveCount).toBe(2);
+  });
+
+  it("recovery exhaustion is reported exactly once", () => {
+    const h = createHarness(0); // no recovery allowed
+    makeReady(h);
+    forceUnresponsive(h);
+    h.onDiagnostic.mockClear();
+
+    expect(h.runtime.handleMessage(h.contentWindow, readyMessage())).toBe(false);
+    expect(h.runtime.handleMessage(h.contentWindow, heightMessage(1))).toBe(false);
+    expect(h.runtime.handleMessage(h.contentWindow, readyMessage())).toBe(false);
+
+    const exhausted = diagnosticKinds(h).filter(
+      (kind) => kind === "recovery-exhausted",
+    );
+    expect(exhausted).toHaveLength(1);
+  });
+
+  it("dispose reports disposed exactly once; no events after disposal", () => {
+    const h = createHarness();
+    makeReady(h);
+    h.onDiagnostic.mockClear();
+
+    h.runtime.dispose();
+    h.runtime.dispose();
+    expect(diagnosticKinds(h)).toEqual(["disposed"]);
+
+    // Disposal prevents future events — even valid messages and timers.
+    expect(h.runtime.handleMessage(h.contentWindow, readyMessage())).toBe(false);
+    vi.advanceTimersByTime(60_000);
+    expect(diagnosticKinds(h)).toEqual(["disposed"]);
+  });
+
+  it("a stale runtime never emits events after replacement", () => {
+    const oldHarness = createHarness();
+    makeReady(oldHarness);
+    const activeHarness = createHarness();
+    activeHarness.runtime.mount();
+
+    oldHarness.runtime.dispose();
+    oldHarness.onDiagnostic.mockClear();
+    expect(oldHarness.runtime.handleMessage(oldHarness.contentWindow, readyMessage())).toBe(false);
+    expect(oldHarness.onDiagnostic).not.toHaveBeenCalled();
+  });
+
+  it("rejected and hostile messages never produce diagnostics", () => {
+    const h = createHarness();
+    makeReady(h);
+    h.onDiagnostic.mockClear();
+
+    expect(h.runtime.handleMessage({ other: "window" }, readyMessage())).toBe(false);
+    expect(h.runtime.handleMessage(h.contentWindow, { type: "buildora:evil" })).toBe(false);
+    expect(h.runtime.handleMessage(h.contentWindow, "garbage")).toBe(false);
+    expect(h.runtime.handleMessage(h.contentWindow, { type: RUNTIME_MESSAGE_TYPES.error, error: { message: 42 } })).toBe(false);
+    expect(h.onDiagnostic).not.toHaveBeenCalled();
+  });
+
+  it("diagnostic strings are always bounded", () => {
+    const h = createHarness();
+    h.runtime.mount();
+    h.runtime.handleMessage(h.contentWindow, readyMessage());
+    h.runtime.handleMessage(h.contentWindow, heightMessage(5));
+    h.runtime.handleMessage(h.contentWindow, errorMessage("boom"));
+    forceUnresponsive(h);
+    h.runtime.handleMessage(h.contentWindow, readyMessage());
+    h.runtime.handleMessage(h.contentWindow, heightMessage(6));
+    h.runtime.dispose();
+
+    for (const call of h.onDiagnostic.mock.calls) {
+      const diagnostic = call[0] as RuntimeDiagnostic;
+      expect(diagnostic.message.length).toBeLessThanOrEqual(
+        MAX_DIAGNOSTIC_MESSAGE_LENGTH,
+      );
+    }
+  });
+
+  it("diagnostics never carry raw payloads or exception objects", () => {
+    const h = createHarness();
+    makeReady(h);
+    h.runtime.handleMessage(h.contentWindow, heightMessage(500));
+    h.runtime.handleMessage(h.contentWindow, errorMessage("boom"));
+
+    for (const call of h.onDiagnostic.mock.calls) {
+      const diagnostic = call[0] as RuntimeDiagnostic;
+      expect(diagnostic).not.toHaveProperty("source");
+      expect(diagnostic).not.toHaveProperty("data");
+      expect(diagnostic).not.toHaveProperty("contentWindow");
+      expect(diagnostic).not.toHaveProperty("exception");
+    }
+  });
+});
+
+describe("observer safety (P23-H)", () => {
+  it("a throwing onDiagnostic observer cannot break the runtime", () => {
+    const h = createHarness();
+    h.onDiagnostic.mockImplementation(() => {
+      throw new Error("observer blew up");
+    });
+
+    expect(() => {
+      h.runtime.mount();
+      h.runtime.handleMessage(h.contentWindow, readyMessage());
+      h.runtime.handleMessage(h.contentWindow, heightMessage(5));
+      h.runtime.dispose();
+    }).not.toThrow();
+    expect(h.runtime.state).toBe("disposed");
+    vi.advanceTimersByTime(60_000);
+    expect(h.onUnresponsive).not.toHaveBeenCalled(); // cleanup unaffected
+  });
+
+  it("a throwing semantic callback cannot break recovery or cleanup", () => {
+    const h = createHarness();
+    h.onReady.mockImplementation(() => {
+      throw new Error("onReady blew up");
+    });
+    makeReady(h);
+
+    forceUnresponsive(h);
+    expect(() => {
+      // Recovery still progresses despite onReady throwing.
+      expect(h.runtime.handleMessage(h.contentWindow, readyMessage())).toBe(true);
+      expect(h.runtime.state).toBe("recovering");
+      h.runtime.dispose();
+    }).not.toThrow();
+  });
+});
+
+describe("runtime snapshot (P23-H)", () => {
+  it("reflects current state before and after events", () => {
+    const h = createHarness();
+    let snap = h.runtime.snapshot();
+    expect(snap).toEqual({
+      instanceId: h.runtime.instanceId,
+      state: "idle",
+      recoveryAttempts: 0,
+      heartbeatActive: false,
+      lastHeight: null,
+      lastDiagnostic: null,
+      updatedAt: expect.any(Number),
+    });
+
+    h.runtime.mount();
+    h.runtime.handleMessage(h.contentWindow, readyMessage());
+    h.runtime.handleMessage(h.contentWindow, heightMessage(500));
+
+    snap = h.runtime.snapshot();
+    expect(snap.state).toBe("ready");
+    expect(snap.heartbeatActive).toBe(true);
+    expect(snap.lastHeight).toBe(500);
+    expect(snap.lastDiagnostic?.kind).toBe("height");
+    expect(snap.lastDiagnostic?.height).toBe(500);
+
+    h.runtime.dispose();
+    snap = h.runtime.snapshot();
+    expect(snap.state).toBe("disposed");
+    expect(snap.heartbeatActive).toBe(false);
+    expect(snap.lastDiagnostic?.kind).toBe("disposed");
+  });
+
+  it("tracks recovery attempts", () => {
+    const h = createHarness();
+    makeReady(h);
+    forceUnresponsive(h);
+    h.runtime.handleMessage(h.contentWindow, readyMessage());
+    expect(h.runtime.snapshot().recoveryAttempts).toBe(1);
+    h.runtime.handleMessage(h.contentWindow, heightMessage(5));
+    expect(h.runtime.snapshot().recoveryAttempts).toBe(1);
+  });
+
+  it("returns a fresh frozen copy every call — read-only, no live references", () => {
+    const h = createHarness();
+    makeReady(h);
+    h.runtime.handleMessage(h.contentWindow, heightMessage(200));
+
+    const first = h.runtime.snapshot();
+    const second = h.runtime.snapshot();
+    expect(first).not.toBe(second); // fresh copy
+    expect(second).toEqual(first); // same observable state
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(Object.isFrozen(first.lastDiagnostic)).toBe(true);
+
+    // Exact field set — bounded primitives only, never live references.
+    expect(Object.keys(first).sort()).toEqual([
+      "heartbeatActive",
+      "instanceId",
+      "lastDiagnostic",
+      "lastHeight",
+      "recoveryAttempts",
+      "state",
+      "updatedAt",
+    ]);
   });
 });

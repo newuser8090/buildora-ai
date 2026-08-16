@@ -1,5 +1,6 @@
 // ---------------------------------------------------------------------------
-// Custom-code runtime controller (Phase P23-G) — parent-side instance lifecycle
+// Custom-code runtime controller (Phase P23-G/H) — parent-side instance
+// lifecycle + safe observability
 //
 // One controller owns ONE mounted custom-code iframe runtime. It enforces the
 // hard invariant of the whole phase:
@@ -17,6 +18,15 @@
 //     budget — a frame can recover a finite number of times, then it is dead)
 //   - structured, sanitized runtime-error delivery (never an exception object)
 //   - idempotent disposal that stops every timer and rejects every message
+//   - safe observability (P23-H): typed, sanitized diagnostics and a read-only
+//     runtime snapshot for tests/debugging — no iframe/window references,
+//     DOM nodes, exception objects, executable source, or raw message events
+//     are ever exposed
+//
+// Observer contract (P23-H): every callback (onStateChange / onReady /
+// onHeight / onUnresponsive / onError / onDiagnostic) is invoked through a
+// safe wrapper — an observer that throws can never break the runtime's state
+// transitions, cleanup, or recovery. Disposed instances stop emitting.
 //
 // Framework-independent: no DOM, no timers created outside the heartbeat's
 // injected clock/timers (or vi fake timers in tests). The generated export
@@ -25,6 +35,11 @@
 // ---------------------------------------------------------------------------
 
 import { MAX_RECOVERY_ATTEMPTS } from "./constants";
+import {
+  createRuntimeDiagnostic,
+  type RuntimeDiagnostic,
+  type RuntimeDiagnosticKind,
+} from "./diagnostics";
 import {
   createFrameHeartbeat,
   type FrameHeartbeatOptions,
@@ -53,6 +68,28 @@ export type CustomCodeRuntimeState =
   | "recovering"
   | "disposed";
 
+/**
+ * A safe, read-only snapshot of the runtime's observable state. Contains only
+ * bounded primitives and the sanitized last diagnostic — never iframe/window
+ * references, DOM nodes, exception objects, executable source, or raw
+ * message events. `snapshot()` returns a fresh, frozen copy every call, so
+ * callers can never mutate runtime state through it.
+ */
+export interface RuntimeSnapshot {
+  readonly instanceId: number;
+  readonly state: CustomCodeRuntimeState;
+  /** Consumed recoveries (bounded by maxRecoveryAttempts). */
+  readonly recoveryAttempts: number;
+  /** Whether the heartbeat loop is currently scheduled. */
+  readonly heartbeatActive: boolean;
+  /** Last accepted frame height (null until the first report). */
+  readonly lastHeight: number | null;
+  /** Last emitted diagnostic (null until the first event). */
+  readonly lastDiagnostic: RuntimeDiagnostic | null;
+  /** Timestamp of the last state change or diagnostic (safe clock). */
+  readonly updatedAt: number;
+}
+
 export interface CustomCodeRuntimeOptions {
   /**
    * Returns the iframe's contentWindow. Read fresh for every message so the
@@ -68,11 +105,22 @@ export interface CustomCodeRuntimeOptions {
    * Bounded — there is never an infinite recover/declared-dead loop.
    */
   maxRecoveryAttempts?: number;
+  /**
+   * Safe clock for diagnostic timestamps and the snapshot's updatedAt.
+   * Defaults to Date.now(); inject a clock for deterministic tests.
+   */
+  now?: () => number;
   onReady?: () => void;
   onHeight?: (height: number) => void;
   onUnresponsive?: () => void;
   onError?: (error: RuntimeErrorInfo) => void;
   onStateChange?: (state: CustomCodeRuntimeState) => void;
+  /**
+   * Receives every structured runtime diagnostic. Observers are invoked
+   * through a safe wrapper — a throwing observer can never break the
+   * runtime. A disposed instance emits no further diagnostics.
+   */
+  onDiagnostic?: (diagnostic: RuntimeDiagnostic) => void;
 }
 
 export interface CustomCodeRuntime {
@@ -84,7 +132,8 @@ export interface CustomCodeRuntime {
   /**
    * Validate + process one postMessage event. Returns true when the message
    * was accepted (correct source, valid payload, live instance), false
-   * otherwise — rejected messages never touch runtime state.
+   * otherwise — rejected messages never touch runtime state and never emit
+   * diagnostics.
    */
   handleMessage(source: unknown, data: unknown): boolean;
   /** Record a validated frame message as a liveness signal. */
@@ -95,10 +144,31 @@ export interface CustomCodeRuntime {
    * is rejected. A disposed runtime can never affect the active runtime.
    */
   dispose(): void;
+  /**
+   * A fresh, frozen, read-only copy of the runtime's observable state. Safe
+   * to inspect in tests and debugging tools; never contains live references.
+   */
+  snapshot(): RuntimeSnapshot;
 }
 
 /** Id allocator only — labels instances; no behavior depends on it. */
 let nextRuntimeInstanceId = 0;
+
+/**
+ * Invoke an observer through a safe wrapper. An observer that throws must
+ * never break the runtime's state transitions, cleanup, or recovery — the
+ * exception is contained and the runtime continues.
+ */
+function safeInvoke<A extends unknown[]>(
+  callback: (...args: A) => void,
+  args: A,
+): void {
+  try {
+    callback(...args);
+  } catch {
+    // Contained: observers are advisory, never load-bearing.
+  }
+}
 
 export function createCustomCodeRuntime(
   options: CustomCodeRuntimeOptions = {},
@@ -107,44 +177,87 @@ export function createCustomCodeRuntime(
   const getContentWindow = options.getContentWindow ?? (() => null);
   const maxRecoveryAttempts =
     options.maxRecoveryAttempts ?? MAX_RECOVERY_ATTEMPTS;
+  const now = options.now ?? (() => Date.now());
   const onReady = options.onReady ?? (() => {});
   const onHeight = options.onHeight ?? (() => {});
   const onUnresponsive = options.onUnresponsive ?? (() => {});
   const onError = options.onError ?? (() => {});
   const onStateChange = options.onStateChange ?? (() => {});
+  const onDiagnostic = options.onDiagnostic ?? (() => {});
 
   let state: CustomCodeRuntimeState = "idle";
   /** Consumed recoveries — bounded by maxRecoveryAttempts. */
   let recoveryAttempts = 0;
+  let lastHeight: number | null = null;
+  let lastDiagnostic: RuntimeDiagnostic | null = null;
+  let updatedAt = now();
+  /** One-shot guard so recovery exhaustion is reported exactly once. */
+  let recoveryExhaustedEmitted = false;
 
   const setState = (next: CustomCodeRuntimeState): void => {
     if (state === next) return;
     state = next;
-    onStateChange(next);
+    updatedAt = now();
+    safeInvoke(onStateChange, [next]);
+  };
+
+  /**
+   * Emit one diagnostic. A disposed instance emits nothing except the
+   * `disposed` event itself (which only fires from dispose()).
+   */
+  const emitDiagnostic = (
+    kind: RuntimeDiagnosticKind,
+    message: string,
+    extra?: { height?: number; error?: RuntimeErrorInfo },
+  ): void => {
+    if (state === "disposed" && kind !== "disposed") return;
+    const diagnostic = createRuntimeDiagnostic({
+      instanceId,
+      kind,
+      message,
+      at: now(),
+      ...(extra?.height !== undefined ? { height: extra.height } : {}),
+      ...(extra?.error !== undefined ? { error: extra.error } : {}),
+    });
+    lastDiagnostic = diagnostic;
+    updatedAt = diagnostic.at;
+    safeInvoke(onDiagnostic, [diagnostic]);
   };
 
   const heartbeat = createFrameHeartbeat(() => {
     // Guard: the latched heartbeat callback can never fire after dispose.
     if (state === "disposed") return;
     setState("unresponsive");
-    onUnresponsive();
+    emitDiagnostic("unresponsive", "Frame unresponsive");
+    safeInvoke(onUnresponsive, []);
   }, options.heartbeat ?? {});
 
   const reject = (): false => false;
 
   const recover = (): boolean => {
     // Bounded: once the budget is spent, the frame is dead — no timers, no
-    // more recovery attempts, subsequent messages are ignored.
+    // more recovery attempts, subsequent messages are ignored. Reported once.
     if (recoveryAttempts >= maxRecoveryAttempts) {
+      if (!recoveryExhaustedEmitted) {
+        recoveryExhaustedEmitted = true;
+        emitDiagnostic("recovery-exhausted", "Recovery budget exhausted");
+      }
       heartbeat.dispose();
       return reject();
     }
     recoveryAttempts += 1;
     heartbeat.reset();
     setState("recovering");
-    onReady();
+    emitDiagnostic("recovery-started", "Recovery started");
+    safeInvoke(onReady, []);
     heartbeat.markAlive();
     return true;
+  };
+
+  /** A second validated message confirms the recovery. */
+  const confirmRecovery = (): void => {
+    setState("ready");
+    emitDiagnostic("recovery-succeeded", "Recovery succeeded");
   };
 
   const handleMessage = (source: unknown, data: unknown): boolean => {
@@ -159,18 +272,19 @@ export function createCustomCodeRuntime(
     if (message.type === "buildora:ready") {
       if (state === "unresponsive") return recover();
       if (state === "recovering") {
-        // Second validated message confirms the recovery.
-        setState("ready");
+        confirmRecovery();
         heartbeat.markAlive();
         return true;
       }
       if (state === "mounting") {
         setState("ready");
         heartbeat.markAlive();
-        onReady();
+        emitDiagnostic("ready", "Frame ready");
+        safeInvoke(onReady, []);
         return true;
       }
       // Already ready: a re-anchoring ready (self-reload) — keep liveness.
+      // No diagnostic: the ready event is reported once per instance.
       heartbeat.markAlive();
       return true;
     }
@@ -182,13 +296,20 @@ export function createCustomCodeRuntime(
       const recovered = recover();
       if (!recovered) return false;
     } else if (state === "recovering") {
-      setState("ready");
+      confirmRecovery();
     }
     heartbeat.markAlive();
     if (message.type === "buildora:height") {
-      onHeight(message.height);
+      lastHeight = message.height;
+      emitDiagnostic("height", "Frame height updated", {
+        height: message.height,
+      });
+      safeInvoke(onHeight, [message.height]);
     } else {
-      onError(message.error);
+      emitDiagnostic("error", "Runtime error reported", {
+        error: message.error,
+      });
+      safeInvoke(onError, [message.error]);
     }
     return true;
   };
@@ -214,6 +335,18 @@ export function createCustomCodeRuntime(
       if (state === "disposed") return; // idempotent
       heartbeat.dispose();
       setState("disposed");
+      emitDiagnostic("disposed", "Runtime disposed");
+    },
+    snapshot() {
+      return Object.freeze({
+        instanceId,
+        state,
+        recoveryAttempts,
+        heartbeatActive: heartbeat.running,
+        lastHeight,
+        lastDiagnostic,
+        updatedAt,
+      });
     },
   };
 }

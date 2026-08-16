@@ -292,6 +292,54 @@ describe("generateCustomBlockComponent — runtime hardening (P23-G)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Generated component — P23-H safe observability
+// ---------------------------------------------------------------------------
+
+describe("generateCustomBlockComponent — safe observability (P23-H)", () => {
+  it("exposes bounded, sanitized state via data attributes", () => {
+    const file = generateCustomBlockComponent();
+    expect(file.content).toContain("data-buildora-status={runtimeStatus}");
+    expect(file.content).toContain("data-buildora-error={runtimeError ? \"1\" : undefined}");
+    expect(file.content).toContain("data-buildora-height={frameHeight === null ? undefined : frameHeight}");
+  });
+
+  it("never leaks raw exception data into the observability surface", () => {
+    const file = generateCustomBlockComponent();
+    // The mirror records ONLY a boolean error flag — the sanitized message
+    // and stack are validated internally but never rendered or emitted.
+    expect(file.content).toContain("setRuntimeError(true)");
+    expect(file.content).not.toContain("data-buildora-error-message");
+    expect(file.content).not.toContain("data-buildora-error-stack");
+    expect(file.content).not.toContain("data-buildora-last-error");
+  });
+
+  it("the exported runtime is self-contained — no editor-only imports leak", () => {
+    const file = generateCustomBlockComponent();
+    // The ONLY module import is React — nothing from the editor codebase
+    // (the `custom-code/...` text that appears in comments is documentation,
+    // not an import).
+    const importLines = file.content
+      .split("\n")
+      .filter((line) => /^import\s/.test(line.trim()));
+    expect(importLines).toHaveLength(1);
+    expect(importLines[0]).toBe('import { useEffect, useMemo, useRef, useState } from "react";');
+    expect(file.content).not.toContain('from "@/');
+  });
+
+  it("keeps the sandbox + runtime guarantees intact", () => {
+    const file = generateCustomBlockComponent();
+    expect(file.content).toContain("sandbox={CUSTOM_CODE_SANDBOX}");
+    expect(file.content).toContain("event.source !== iframe.contentWindow");
+    expect(file.content).toContain("recoveryAttempts >= CUSTOM_CODE_MAX_RECOVERY_ATTEMPTS");
+    expect(file.content).not.toContain("allow-same-origin");
+    expect(file.content).not.toContain("allow-popups");
+    expect(file.content).not.toContain("eval(");
+    expect(file.content).not.toContain("new Function");
+    expect(file.content).not.toContain("dangerouslySetInnerHTML");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Export pipeline
 // ---------------------------------------------------------------------------
 

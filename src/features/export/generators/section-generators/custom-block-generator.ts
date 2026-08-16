@@ -750,6 +750,10 @@ function CustomCodeFrame({ srcDoc }: { srcDoc: string }) {
     };
   }, []);
 
+  // Phase P23-H — safe observability: the mirror exposes ONLY bounded,
+  // sanitized state (lifecycle status, whether an error was reported, and
+  // the last validated height) as data attributes — never raw payloads or
+  // exception data.
   return (
     <iframe
       ref={iframeRef}
@@ -758,6 +762,7 @@ function CustomCodeFrame({ srcDoc }: { srcDoc: string }) {
       title="Custom code"
       data-buildora-status={runtimeStatus}
       data-buildora-error={runtimeError ? "1" : undefined}
+      data-buildora-height={frameHeight === null ? undefined : frameHeight}
       style={{
         width: "100%",
         border: "none",
