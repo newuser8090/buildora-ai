@@ -28,6 +28,7 @@ import type { OutputFile } from "../../pipeline/types";
 import { SANDBOX_POLICY } from "@/features/elements/custom-code/sandbox-policy";
 import {
   HEARTBEAT_DEFAULTS,
+  HEIGHT_COALESCE_MS,
   MAX_FRAME_HEIGHT_PX,
   MAX_RECOVERY_ATTEMPTS,
   MAX_RUNTIME_ERROR_MESSAGE_LENGTH,
@@ -596,6 +597,8 @@ const CUSTOM_CODE_MAX_RECOVERY_ATTEMPTS = ${JSON.stringify(MAX_RECOVERY_ATTEMPTS
 const CUSTOM_CODE_MAX_FRAME_HEIGHT_PX = ${JSON.stringify(MAX_FRAME_HEIGHT_PX)};
 const CUSTOM_CODE_MAX_ERROR_MESSAGE_LENGTH = ${JSON.stringify(MAX_RUNTIME_ERROR_MESSAGE_LENGTH)};
 const CUSTOM_CODE_MAX_ERROR_STACK_LENGTH = ${JSON.stringify(MAX_RUNTIME_ERROR_STACK_LENGTH)};
+// Phase P23-I — bounded height-write window (see HEIGHT_COALESCE_MS).
+const CUSTOM_CODE_HEIGHT_COALESCE_MS = ${JSON.stringify(HEIGHT_COALESCE_MS)};
 
 // Phase P23-C/G — renders ONE validated custom-code srcdoc inside the
 // sandboxed iframe. The frame is the only surface where custom code may
@@ -628,6 +631,30 @@ function CustomCodeFrame({ srcDoc }: { srcDoc: string }) {
     let unresponsive = false;
     let recoveryAttempts = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
+
+    // Phase P23-I — bounded height propagation. Validated heights are
+    // change-detected and coalesced into at most ONE state write per
+    // HEIGHT_COALESCE_MS window, so a chatty/hostile frame cannot cause
+    // layout thrashing or unbounded re-renders. The latest height always
+    // wins; normal dynamic resizing is preserved (writes trail by at most
+    // the coalesce window). All state here is local to this mount.
+    let pendingHeight: number | null = null;
+    let heightTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const flushHeight = () => {
+      heightTimer = undefined;
+      if (disposed || pendingHeight === null) return;
+      const height = pendingHeight;
+      pendingHeight = null;
+      setFrameHeight(height);
+    };
+
+    const scheduleHeight = (height: number) => {
+      if (pendingHeight === height) return; // change detection — no-op repeats
+      pendingHeight = height;
+      if (heightTimer !== undefined) clearTimeout(heightTimer);
+      heightTimer = setTimeout(flushHeight, CUSTOM_CODE_HEIGHT_COALESCE_MS);
+    };
 
     const applyStatus = (next: "mounting" | "ready" | "unresponsive" | "recovering") => {
       status = next;
@@ -688,18 +715,45 @@ function CustomCodeFrame({ srcDoc }: { srcDoc: string }) {
     };
 
     const onMessage = (event: MessageEvent) => {
-      if (disposed) return;
-      // The sandbox has an opaque origin, so origin checks are meaningless —
-      // the source must be THIS frame's window, and each mount owns a private
-      // instance (keyed remounts dispose the previous one).
-      if (event.source !== iframe.contentWindow) return;
-      const message = parseMessage(event.data);
-      if (!message) return;
+      // Phase P23-I — a hostile/throwable message must never escape as an
+      // uncaught exception into the parent application; everything a frame
+      // can say is contained within this instance's runtime.
+      try {
+        if (disposed) return;
+        // The sandbox has an opaque origin, so origin checks are meaningless —
+        // the source must be THIS frame's window (never a sibling), and each
+        // mount owns a private instance (keyed remounts dispose the previous
+        // one).
+        if (event.source !== iframe.contentWindow) return;
+        const message = parseMessage(event.data);
+        if (!message) return;
 
-      if (message.type === CUSTOM_CODE_MESSAGE_TYPES.ready) {
+        if (message.type === CUSTOM_CODE_MESSAGE_TYPES.ready) {
+          if (status === "unresponsive") {
+            // Bounded recovery — a frame may come back a finite number of times,
+            // then it is dead (timers stopped, messages ignored).
+            if (recoveryAttempts >= CUSTOM_CODE_MAX_RECOVERY_ATTEMPTS) {
+              if (timer !== undefined) clearTimeout(timer);
+              timer = undefined;
+              return;
+            }
+            recoveryAttempts += 1;
+            unresponsive = false;
+            applyStatus("recovering");
+          } else if (status === "recovering") {
+            applyStatus("ready");
+          } else if (status === "mounting") {
+            applyStatus("ready");
+          }
+          lastSeen = Date.now();
+          misses = 0;
+          return;
+        }
+
+        // height / error — only a frame that has anchored may send them; while
+        // mounting, non-ready messages are stale/foreign and are fenced out.
+        if (status === "mounting") return;
         if (status === "unresponsive") {
-          // Bounded recovery — a frame may come back a finite number of times,
-          // then it is dead (timers stopped, messages ignored).
           if (recoveryAttempts >= CUSTOM_CODE_MAX_RECOVERY_ATTEMPTS) {
             if (timer !== undefined) clearTimeout(timer);
             timer = undefined;
@@ -710,35 +764,20 @@ function CustomCodeFrame({ srcDoc }: { srcDoc: string }) {
           applyStatus("recovering");
         } else if (status === "recovering") {
           applyStatus("ready");
-        } else if (status === "mounting") {
-          applyStatus("ready");
         }
         lastSeen = Date.now();
         misses = 0;
-        return;
-      }
-
-      // height / error — only a frame that has anchored may send them; while
-      // mounting, non-ready messages are stale/foreign and are fenced out.
-      if (status === "mounting") return;
-      if (status === "unresponsive") {
-        if (recoveryAttempts >= CUSTOM_CODE_MAX_RECOVERY_ATTEMPTS) {
-          if (timer !== undefined) clearTimeout(timer);
-          timer = undefined;
-          return;
+        if (message.type === CUSTOM_CODE_MESSAGE_TYPES.height) {
+          // Phase P23-I — validated heights go through the bounded scheduler
+          // (change-detected + coalesced); never a direct render write.
+          if (typeof message.height === "number") scheduleHeight(message.height);
+        } else if (message.type === CUSTOM_CODE_MESSAGE_TYPES.error && message.error) {
+          setRuntimeError(true);
         }
-        recoveryAttempts += 1;
-        unresponsive = false;
-        applyStatus("recovering");
-      } else if (status === "recovering") {
-        applyStatus("ready");
-      }
-      lastSeen = Date.now();
-      misses = 0;
-      if (message.type === CUSTOM_CODE_MESSAGE_TYPES.height) {
-        if (typeof message.height === "number") setFrameHeight(message.height);
-      } else if (message.type === CUSTOM_CODE_MESSAGE_TYPES.error && message.error) {
-        setRuntimeError(true);
+      } catch {
+        // Phase P23-I — runtime containment: a malformed/throwable event must
+        // never escape the frame's runtime as an uncaught exception in the
+        // parent application. Nothing is rethrown; no state is mutated.
       }
     };
     window.addEventListener("message", onMessage);
@@ -747,6 +786,8 @@ function CustomCodeFrame({ srcDoc }: { srcDoc: string }) {
       disposed = true;
       window.removeEventListener("message", onMessage);
       if (timer !== undefined) clearTimeout(timer);
+      if (heightTimer !== undefined) clearTimeout(heightTimer);
+      heightTimer = undefined;
     };
   }, []);
 

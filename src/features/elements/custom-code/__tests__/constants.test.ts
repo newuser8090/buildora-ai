@@ -6,6 +6,7 @@
 import { describe, it, expect } from "vitest";
 import {
   HEARTBEAT_DEFAULTS,
+  HEIGHT_COALESCE_MS,
   MAX_CUSTOM_CODE_ATTRIBUTES,
   MAX_CUSTOM_CODE_LENGTH,
   MAX_CUSTOM_CODE_TOTAL,
@@ -51,6 +52,14 @@ describe("message protocol constants", () => {
 
   it("caps frame height at 10,000px", () => {
     expect(MAX_FRAME_HEIGHT_PX).toBe(10_000);
+  });
+
+  it("defines a bounded height-coalescing window (Phase P23-I)", () => {
+    // The exported runtime coalesces validated height writes into at most ONE
+    // React/style write per window so a chatty frame cannot thrash layout.
+    expect(HEIGHT_COALESCE_MS).toBe(100);
+    expect(HEIGHT_COALESCE_MS).toBeGreaterThan(0);
+    expect(Number.isFinite(HEIGHT_COALESCE_MS)).toBe(true);
   });
 
   it("caps sanitized error reports at the approved lengths", () => {

@@ -48,6 +48,16 @@ export const RUNTIME_MESSAGE_TYPES = {
 /** Hard cap on frame height reports (layout-bomb guard). */
 export const MAX_FRAME_HEIGHT_PX = 10_000;
 
+/**
+ * Exported-runtime height coalescing window (Phase P23-I). The generated
+ * CustomCodeFrame change-detects validated frame-height reports and coalesces
+ * them into at most ONE React/style write per window, so a chatty or hostile
+ * frame cannot cause layout thrashing or unbounded re-renders. Normal dynamic
+ * resizing is preserved — the latest validated height always wins and is
+ * applied within this window.
+ */
+export const HEIGHT_COALESCE_MS = 100;
+
 // ---------------------------------------------------------------------------
 // Runtime error reporting caps (Phase P23-G)
 //

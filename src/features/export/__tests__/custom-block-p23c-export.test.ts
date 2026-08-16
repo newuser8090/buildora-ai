@@ -25,6 +25,8 @@ import {
 import { SANDBOX_POLICY } from "@/features/elements/custom-code/sandbox-policy";
 import {
   HEARTBEAT_DEFAULTS,
+  HEIGHT_COALESCE_MS,
+  MAX_FRAME_HEIGHT_PX,
   MAX_RECOVERY_ATTEMPTS,
   RUNTIME_MESSAGE_TYPES,
 } from "@/features/elements/custom-code/constants";
@@ -340,6 +342,122 @@ describe("generateCustomBlockComponent — safe observability (P23-H)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Generated component — P23-I runtime contract hardening
+// ---------------------------------------------------------------------------
+
+describe("generateCustomBlockComponent — runtime contract (P23-I)", () => {
+  it("keeps every runtime instance local — no module-level mutable state, no global registry", () => {
+    const file = generateCustomBlockComponent();
+    // The frame's runtime state lives INSIDE the component's effect (per
+    // mount), never at module scope. The only module-scope declarations are
+    // immutable constants (sandbox, protocol, caps).
+    const moduleLevelLets = file.content
+      .split("\n")
+      .filter((line) => /^let\s/.test(line));
+    expect(moduleLevelLets).toEqual([]);
+    // No global custom-code registry, no cross-frame DOM queries, and no
+    // parent-document access anywhere in the custom-code runtime. (The P22-G
+    // scroll-reveal observer elsewhere in the generated component uses
+    // querySelectorAll on ITS OWN document — irrelevant to the frame runtime.)
+    expect(file.content).not.toContain("window.__");
+    expect(file.content).not.toContain("contentDocument");
+    expect(file.content).not.toContain("parent.document");
+    // The frame runtime itself performs no DOM queries — only the ref'd
+    // iframe's contentWindow for source fencing.
+    const frameSection = file.content.slice(
+      file.content.indexOf("function CustomCodeFrame"),
+      file.content.indexOf("function NodeView"),
+    );
+    expect(frameSection).not.toContain("querySelector");
+    expect(frameSection).not.toContain("getElementById");
+    expect(frameSection).not.toContain("contentDocument");
+  });
+
+  it("renders one isolated CustomCodeFrame per enabled node (multi-instance page)", () => {
+    const file = generateCustomBlockComponent();
+    // NodeView is recursive — every enabled node renders its own frame, each
+    // keyed by ITS OWN srcdoc, so instances never share state or timers.
+    expect(file.content).toContain("<CustomCodeFrame key={srcdoc} srcDoc={srcdoc} />");
+    expect(file.content).toContain("srcdocs[node.id]");
+    // Exactly one message listener is attached per mount — each instance
+    // owns its own private listener/timers.
+    expect(countOccurrences(file.content, 'window.addEventListener("message", onMessage)')).toBe(1);
+  });
+
+  it("fences messages to the exact frame — sibling frames can never be accepted", () => {
+    const file = generateCustomBlockComponent();
+    // The source check MUST run before any payload is parsed — a sibling
+    // frame's window is never this frame's contentWindow, so its messages
+    // die at the fence (no "accept any iframe" shortcut anywhere).
+    const fence = "if (event.source !== iframe.contentWindow) return;";
+    const parse = "const message = parseMessage(event.data);";
+    expect(file.content.indexOf(fence)).toBeGreaterThan(-1);
+    expect(file.content.indexOf(parse)).toBeGreaterThan(file.content.indexOf(fence));
+    expect(countOccurrences(file.content, "event.source")).toBe(1);
+  });
+
+  it("hardens the height contract — finite-only, clamped, coalesced writes", () => {
+    const file = generateCustomBlockComponent();
+    // NaN / Infinity / non-numbers are rejected before touching state.
+    expect(file.content).toContain("!Number.isFinite(msg.height)");
+    // Negative → 0, absurd values → the shared cap (no duplicate policy).
+    expect(file.content).toContain(
+      "Math.min(Math.max(Math.round(msg.height), 0), CUSTOM_CODE_MAX_FRAME_HEIGHT_PX)",
+    );
+    expect(file.content).toContain(
+      `const CUSTOM_CODE_HEIGHT_COALESCE_MS = ${JSON.stringify(HEIGHT_COALESCE_MS)};`,
+    );
+    // Change-detection + at most one write per coalesce window — a chatty or
+    // hostile frame cannot cause layout thrashing or unbounded re-renders.
+    expect(file.content).toContain("if (pendingHeight === height) return;");
+    expect(file.content).toContain("setTimeout(flushHeight, CUSTOM_CODE_HEIGHT_COALESCE_MS)");
+    // Heights from messages go through the scheduler, never a direct write.
+    expect(file.content).toContain("scheduleHeight(message.height)");
+    expect(file.content).not.toContain("setFrameHeight(message.height)");
+  });
+
+  it("contains the height scheduler within the frame's own runtime", () => {
+    const file = generateCustomBlockComponent();
+    // The scheduler + its timer are declared per-mount, so two frames never
+    // share a height timer; unmount clears it alongside the heartbeat.
+    expect(file.content).toContain("let pendingHeight: number | null = null;");
+    expect(file.content).toContain("let heightTimer: ReturnType<typeof setTimeout> | undefined;");
+    expect(file.content).toContain("if (heightTimer !== undefined) clearTimeout(heightTimer);");
+  });
+
+  it("contains every frame error inside the frame's runtime", () => {
+    const file = generateCustomBlockComponent();
+    // The message handler is exception-contained: a malformed/throwable event
+    // never escapes as an uncaught exception into the parent application.
+    expect(file.content).toContain("try {");
+    expect(file.content).toContain("} catch {");
+    // Errors surface ONLY as the established boolean data attribute — the
+    // sanitized message/stack stay inside the runtime and are never rendered.
+    expect(file.content).toContain("setRuntimeError(true)");
+    expect(file.content).not.toContain("data-buildora-error-message");
+    expect(file.content).not.toContain("data-buildora-error-stack");
+  });
+
+  it("cleans up every listener and timer on unmount/remount", () => {
+    const file = generateCustomBlockComponent();
+    expect(file.content).toContain("disposed = true;");
+    expect(file.content).toContain("window.removeEventListener(\"message\", onMessage)");
+    expect(file.content).toContain("clearTimeout(timer)");
+    expect(file.content).toContain("clearTimeout(heightTimer)");
+    // The frame is keyed by srcdoc — any html/css/js/attribute/enabled change
+    // deterministically unmounts the old instance and mounts a fresh one.
+    expect(file.content).toContain("<CustomCodeFrame key={srcdoc} srcDoc={srcdoc} />");
+  });
+
+  it("emits the shared height cap so the exported runtime stays in lockstep with the editor", () => {
+    const file = generateCustomBlockComponent();
+    expect(file.content).toContain(
+      `const CUSTOM_CODE_MAX_FRAME_HEIGHT_PX = ${JSON.stringify(MAX_FRAME_HEIGHT_PX)};`,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Export pipeline
 // ---------------------------------------------------------------------------
 
@@ -361,5 +479,31 @@ describe("export pipeline — custom code (P23-C)", () => {
     const page = files.find((f) => f.path === "app/page.tsx");
     expect(page?.content).toContain("srcdocs={");
     expect(page?.content).toContain('import { CustomBlock } from "@/components/sections/custom-block";');
+  });
+
+  it("two enabled custom-code nodes on one page keep independent srcdocs", () => {
+    const tree = treeWithNodes({
+      n1: makeNode("n1", { customCode: ENABLED }),
+      n2: makeNode("n2", { customCode: { ...ENABLED, html: "<span>two</span>", js: "console.log('second')" } }),
+    });
+    const routes = computePageRoutes(makeProject(tree).pages);
+    const page = generatePageFile(makeProject(tree), makeProject(tree).pages[0], routes);
+
+    // BOTH enabled nodes produce their own srcdoc entry — each with its own
+    // validated document — and the page renders two independent frames.
+    expect(countOccurrences(page.content, "srcdocs={")).toBe(1);
+    const first = buildValidatedCustomCodeSrcdoc(ENABLED);
+    const second = buildValidatedCustomCodeSrcdoc({ ...ENABLED, html: "<span>two</span>", js: "console.log('second')" });
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    expect(first).not.toBe(second);
+    expect(page.content).toContain("n1");
+    expect(page.content).toContain("n2");
+
+    // The component maps each node to its OWN srcdoc at render time, so one
+    // frame's heartbeat/messages/errors can never reach a sibling.
+    const component = generateCustomBlockComponent();
+    expect(component.content).toContain("srcdocs[node.id]");
+    expect(component.content).toContain("<CustomCodeFrame key={srcdoc} srcDoc={srcdoc} />");
   });
 });

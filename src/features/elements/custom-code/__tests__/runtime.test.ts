@@ -824,3 +824,163 @@ describe("runtime snapshot (P23-H)", () => {
     ]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// P23-I — multiple-instance isolation (2 frames on one page)
+//
+// Each mounted frame owns an independent controller instance. One frame's
+// ready/height/error/recovery/disposal must never leak into a sibling, and
+// stale frames (old instance, sibling window) can never be accepted.
+// ---------------------------------------------------------------------------
+
+describe("multiple-instance isolation (P23-I)", () => {
+  it("two instances anchor independently — a sibling's ready never touches this one", () => {
+    const a = createHarness();
+    const b = createHarness();
+    a.runtime.mount();
+    b.runtime.mount();
+
+    // Frame A anchors first — only A sees it.
+    expect(a.runtime.handleMessage(a.contentWindow, readyMessage())).toBe(true);
+    expect(a.runtime.state).toBe("ready");
+    expect(a.onReady).toHaveBeenCalledTimes(1);
+    expect(b.runtime.state).toBe("mounting");
+    expect(b.onReady).toHaveBeenCalledTimes(0);
+
+    // Frame B anchors later — only B sees it; A is untouched.
+    expect(b.runtime.handleMessage(b.contentWindow, readyMessage())).toBe(true);
+    expect(b.runtime.state).toBe("ready");
+    expect(b.onReady).toHaveBeenCalledTimes(1);
+    expect(a.runtime.snapshot().state).toBe("ready");
+    expect(a.onReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("height updates are per-instance — siblings keep their own last height", () => {
+    const a = createHarness();
+    const b = createHarness();
+    makeReady(a);
+    makeReady(b);
+
+    expect(a.runtime.handleMessage(a.contentWindow, heightMessage(120))).toBe(true);
+    expect(a.runtime.snapshot().lastHeight).toBe(120);
+    expect(b.runtime.snapshot().lastHeight).toBeNull();
+    expect(a.onHeight).toHaveBeenCalledWith(120);
+    expect(b.onHeight).not.toHaveBeenCalled();
+
+    expect(b.runtime.handleMessage(b.contentWindow, heightMessage(340))).toBe(true);
+    expect(b.runtime.snapshot().lastHeight).toBe(340);
+    // A still holds its own height — B's update never leaked into it.
+    expect(a.runtime.snapshot().lastHeight).toBe(120);
+  });
+
+  it("errors stay inside the throwing frame — the sibling remains ready", () => {
+    const a = createHarness();
+    const b = createHarness();
+    makeReady(a);
+    makeReady(b);
+
+    expect(a.runtime.handleMessage(a.contentWindow, errorMessage("a boom"))).toBe(true);
+    expect(a.onError).toHaveBeenCalledWith({ message: "a boom" });
+    expect(a.runtime.snapshot().lastDiagnostic?.kind).toBe("error");
+    // B saw nothing: no error callback, no state change, still ready.
+    expect(b.onError).not.toHaveBeenCalled();
+    expect(b.runtime.state).toBe("ready");
+    expect(b.runtime.snapshot().lastDiagnostic?.kind).not.toBe("error");
+  });
+
+  it("recovery is independent per instance", () => {
+    const a = createHarness();
+    const b = createHarness();
+    makeReady(a);
+    makeReady(b);
+
+    vi.advanceTimersByTime(3_000); // tick 1 — both silent so far: 1 miss each
+    // B stays active — its liveness window resets; A's does not.
+    expect(b.runtime.handleMessage(b.contentWindow, heightMessage(10))).toBe(true);
+    vi.advanceTimersByTime(3_000); // tick 2 — A's silence accumulates → unresponsive
+    expect(a.runtime.state).toBe("unresponsive");
+    // B's own liveness kept it healthy — A's silence never touched B.
+    expect(b.runtime.state).toBe("ready");
+    expect(b.onUnresponsive).not.toHaveBeenCalled();
+
+    // A recovers via its own validated message; B is untouched.
+    expect(a.runtime.handleMessage(a.contentWindow, readyMessage())).toBe(true);
+    expect(a.runtime.state).toBe("recovering");
+    expect(a.runtime.snapshot().recoveryAttempts).toBe(1);
+    expect(b.runtime.snapshot().state).toBe("ready");
+    expect(b.runtime.snapshot().recoveryAttempts).toBe(0);
+  });
+
+  it("disposing one frame never affects a sibling", () => {
+    const a = createHarness();
+    const b = createHarness();
+    makeReady(a);
+    makeReady(b);
+
+    a.runtime.dispose();
+    expect(a.runtime.state).toBe("disposed");
+    expect(a.runtime.snapshot().heartbeatActive).toBe(false);
+
+    // B stays fully healthy and keeps accepting its own messages.
+    expect(b.runtime.state).toBe("ready");
+    expect(b.runtime.snapshot().heartbeatActive).toBe(true);
+    expect(b.runtime.handleMessage(b.contentWindow, heightMessage(99))).toBe(true);
+    expect(b.runtime.snapshot().lastHeight).toBe(99);
+    expect(b.onHeight).toHaveBeenCalledWith(99);
+  });
+
+  it("a sibling's window is rejected as a message source (no cross-frame acceptance)", () => {
+    const a = createHarness();
+    const b = createHarness();
+    makeReady(a);
+    makeReady(b);
+
+    // Frame B's window talks to A's runtime: the source is not A's frame.
+    expect(a.runtime.handleMessage(b.contentWindow, readyMessage())).toBe(false);
+    expect(a.runtime.state).toBe("ready");
+    expect(a.onReady).toHaveBeenCalledTimes(1);
+    // Rejected messages emit nothing — A's diagnostics are unchanged (the
+    // single ready diagnostic from anchoring).
+    expect(a.onDiagnostic).toHaveBeenCalledTimes(1);
+
+    // And the reverse: A's window cannot drive B's runtime.
+    expect(b.runtime.handleMessage(a.contentWindow, heightMessage(1))).toBe(false);
+    expect(b.runtime.snapshot().lastHeight).toBeNull();
+    expect(b.onHeight).not.toHaveBeenCalled();
+  });
+
+  it("stale frames from a replaced instance are ignored by the replacement (remount contract)", () => {
+    // Simulate mount → unmount → remount: the old instance's window keeps
+    // talking, but only the NEW instance's window may drive the new runtime.
+    const oldWindow = { self: "old-frame" };
+    const replacement = createHarness();
+    replacement.runtime.mount();
+    replacement.runtime.handleMessage(replacement.contentWindow, readyMessage());
+    replacement.runtime.dispose();
+
+    const fresh = createHarness();
+    fresh.runtime.mount();
+    fresh.runtime.handleMessage(fresh.contentWindow, readyMessage());
+    expect(fresh.runtime.state).toBe("ready");
+
+    // The disposed old runtime still rejects everything, including its window.
+    expect(replacement.runtime.handleMessage(replacement.contentWindow, heightMessage(500))).toBe(false);
+    expect(replacement.runtime.snapshot().lastHeight).toBeNull();
+    // The stale old window can never drive the fresh runtime either.
+    expect(fresh.runtime.handleMessage(oldWindow, heightMessage(500))).toBe(false);
+    expect(fresh.runtime.snapshot().lastHeight).toBeNull();
+    // The fresh runtime remains healthy on its own.
+    expect(fresh.runtime.handleMessage(fresh.contentWindow, heightMessage(42))).toBe(true);
+    expect(fresh.runtime.snapshot().lastHeight).toBe(42);
+  });
+
+  it("instances carry distinct ids — no shared instance identity", () => {
+    const a = createHarness();
+    const b = createHarness();
+    const c = createHarness();
+    const ids = [a, b, c].map((h) => h.runtime.instanceId);
+    expect(new Set(ids).size).toBe(3);
+    expect(a.runtime.snapshot().instanceId).toBe(a.runtime.instanceId);
+    expect(b.runtime.snapshot().instanceId).toBe(b.runtime.instanceId);
+  });
+});
