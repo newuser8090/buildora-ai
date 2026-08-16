@@ -388,7 +388,11 @@ export type ValidatedCustomBlockSectionProps = z.infer<typeof CustomBlockSection
 // animations and interactions, data bindings, and custom code (additive
 // runtime fields beyond the base BlockNode type). The intersection type
 // keeps the normalizer honest about what it preserves.
-type StoredCustomBlockNode = BlockNode & {
+//
+// Exported so distribution boundaries (P23-E) can type fixtures and clones
+// that intentionally carry schema-level customCode without widening the
+// universal BlockNode type.
+export type StoredCustomBlockNode = BlockNode & {
   geometry?: z.infer<typeof NodeGeometrySchema>;
   viewport?: z.infer<typeof NodeViewportSchema>;
   animation?: z.infer<typeof ElementAnimationSchema>;

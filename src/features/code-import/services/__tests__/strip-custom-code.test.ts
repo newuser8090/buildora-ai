@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BlockTree } from "@/features/blocks/types";
+import type { StoredCustomBlockNode } from "@/features/code-import/schemas/custom-block-schema";
 import type { Project } from "@/types/project";
 import { stripCustomCodeFromProject, stripCustomCodeFromTree } from "../strip-custom-code";
 
@@ -7,7 +8,18 @@ function customCode() {
   return { enabled: true, html: "<div>hello</div>", css: ".x{color:red}", js: "console.log('x')" };
 }
 
-function makeTree(): BlockTree {
+/**
+ * A custom-block tree whose nodes may carry schema-level customCode (P23-C).
+ * CustomCodeTree is structurally assignable to BlockTree because
+ * StoredCustomBlockNode extends BlockNode, so the fixtures still feed the
+ * strip helpers directly while exposing the customCode field for assertions.
+ */
+type CustomCodeTree = {
+  rootIds: string[];
+  nodes: Record<string, StoredCustomBlockNode>;
+};
+
+function makeTree(): CustomCodeTree {
   const root = "root";
   return {
     rootIds: [root],
@@ -24,7 +36,7 @@ function makeTree(): BlockTree {
         locked: false,
         hidden: false,
         customCode: customCode(),
-      } as BlockTree["nodes"][string],
+      },
     },
   };
 }
@@ -34,7 +46,9 @@ describe("stripCustomCodeFromTree", () => {
     const tree = makeTree();
     const result = stripCustomCodeFromTree(tree);
 
-    expect(result.nodes.root.customCode).toBeUndefined();
+    // The sanitized tree is a plain BlockTree by design — customCode is gone —
+    // so the optional runtime key is asserted through a narrow cast.
+    expect((result.nodes.root as { customCode?: unknown }).customCode).toBeUndefined();
     expect(result.nodes.root.props).toEqual(tree.nodes.root.props);
     expect(tree.nodes.root.customCode).toEqual(customCode());
   });
@@ -69,8 +83,11 @@ describe("stripCustomCodeFromProject", () => {
     const result = stripCustomCodeFromProject(project);
     const storedTree = (result.pages[0].sections[0].props as { tree: BlockTree }).tree;
 
-    expect(storedTree.nodes.root.customCode).toBeUndefined();
-    expect((project.pages[0].sections[0].props as { tree: BlockTree }).tree.nodes.root.customCode).toEqual(customCode());
+    // Sanitized tree is a plain BlockTree (customCode stripped) — narrow cast
+    // reads the optional runtime key. The ORIGINAL project still carries the
+    // typed customCode on its custom-block tree, so it is asserted directly.
+    expect((storedTree.nodes.root as { customCode?: unknown }).customCode).toBeUndefined();
+    expect((project.pages[0].sections[0].props as { tree: CustomCodeTree }).tree.nodes.root.customCode).toEqual(customCode());
   });
 
   it("does not touch non-custom-block sections", () => {

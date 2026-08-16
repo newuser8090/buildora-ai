@@ -10,6 +10,7 @@
 // ---------------------------------------------------------------------------
 
 import type { BlockTree } from "@/features/blocks/types";
+import type { StoredCustomBlockNode } from "@/features/code-import/schemas/custom-block-schema";
 import type { Project } from "@/types/project";
 
 /** Remove node-level customCode from a tree without mutating the input. */
@@ -17,9 +18,14 @@ export function stripCustomCodeFromTree(tree: BlockTree): BlockTree {
   const nodes: BlockTree["nodes"] = {};
 
   for (const [id, node] of Object.entries(tree.nodes)) {
-    const clone = JSON.parse(JSON.stringify(node)) as Record<string, unknown>;
+    // Persisted custom-block nodes may carry schema-level customCode that the
+    // universal BlockNode type does not model (P23-C). The JSON clone is a
+    // runtime value, so it is cast to the existing stored-node shape — the
+    // narrowest type that captures the runtime payload. Dropping customCode
+    // yields a plain BlockNode, so no further cast is needed on assignment.
+    const clone = JSON.parse(JSON.stringify(node)) as StoredCustomBlockNode;
     delete clone.customCode;
-    nodes[id] = clone as BlockTree["nodes"][string];
+    nodes[id] = clone;
   }
 
   return {

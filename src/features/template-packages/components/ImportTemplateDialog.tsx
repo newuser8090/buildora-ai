@@ -19,7 +19,7 @@
 
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Upload, FileArchive, X, CheckCircle2, AlertCircle, ArrowRight } from "lucide-react";
 import { TEMPLATE_CATEGORY_LABELS } from "@/features/templates/types";
 import type { PersonalTemplateRecord } from "@/features/personal-templates/types";
@@ -77,7 +77,13 @@ export function ImportTemplateDialog({
   const fileInFlightRef = useRef(false);
   const installInFlightRef = useRef(false);
 
-  useEffect(() => {
+  // Synced with useLayoutEffect (flushed synchronously inside the commit)
+  // rather than useEffect, so event handlers and the stable keydown listener
+  // never read a stale mirror. With an effect-synced mirror there is a window
+  // where the committed DOM (observed by a test's waitFor) is ahead of the
+  // mirror; a click/keydown in that window is silently dropped by the phase
+  // guards, which surfaced as an intermittent full-suite-only test flake.
+  useLayoutEffect(() => {
     phaseRef.current = phase;
     creatingRef.current = creatingProject;
     openRef.current = open;

@@ -1,8 +1,19 @@
 import { describe, expect, it } from "vitest";
-import type { BlockTree } from "@/features/blocks/types";
+import type { StoredCustomBlockNode } from "@/features/code-import/schemas/custom-block-schema";
 import { prepareTreeForStorage } from "../services/my-blocks-service";
 
-function makeTree(): BlockTree {
+/**
+ * A custom-block tree whose nodes may carry schema-level customCode (P23-C).
+ * CustomCodeTree is structurally assignable to BlockTree because
+ * StoredCustomBlockNode extends BlockNode, so the fixture feeds the storage
+ * preparation directly while exposing customCode for assertions.
+ */
+type CustomCodeTree = {
+  rootIds: string[];
+  nodes: Record<string, StoredCustomBlockNode>;
+};
+
+function makeTree(): CustomCodeTree {
   return {
     rootIds: ["heading-1"],
     nodes: {
@@ -18,7 +29,7 @@ function makeTree(): BlockTree {
         locked: false,
         hidden: false,
         customCode: { enabled: true, html: "<script>bad()</script>", css: ".x{}", js: "bad()" },
-      } as BlockTree["nodes"][string],
+      },
     },
   };
 }
@@ -30,7 +41,9 @@ describe("P23-E My Blocks boundary", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.nodes["heading-1"].customCode).toBeUndefined();
+    // The stored result is a plain BlockTree (customCode stripped) — the
+    // optional runtime key is read through a narrow cast.
+    expect((result.value.nodes["heading-1"] as { customCode?: unknown }).customCode).toBeUndefined();
     expect(tree.nodes["heading-1"].customCode).toBeDefined();
   });
 });
