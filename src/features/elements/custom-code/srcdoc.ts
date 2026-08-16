@@ -36,8 +36,90 @@ import { ElementCustomCodeSchema } from "../schemas/element-schemas";
 import {
   MAX_CUSTOM_CODE_LENGTH,
   MAX_CUSTOM_CODE_TOTAL,
+  MAX_RUNTIME_ERROR_MESSAGE_LENGTH,
+  MAX_RUNTIME_ERROR_STACK_LENGTH,
+  RUNTIME_MESSAGE_TYPES,
   SANDBOX_CSP,
 } from "./constants";
+
+// ---------------------------------------------------------------------------
+// Child-side runtime shell (Phase P23-G)
+//
+// A small, fixed script emitted into EVERY enabled sandbox document. It is
+// the ONLY child-side channel: it reports the document load (`ready`), the
+// content height (`height`, via a ResizeObserver when available), and
+// structured, sanitized runtime errors (`error` — message/stack strings only,
+// capped here and re-validated/re-capped by the parent protocol).
+//
+// Safety properties:
+//   - pure reporting — it never reads parent data, never executes user code,
+//     and adds no capability to the sandbox
+//   - every path is wrapped so a broken report can never break user code
+//   - runs in the HEAD (before any user JS) so it can catch synchronous
+//     errors from the user's inline script
+//   - ES5 only (no transpilation happens inside the frame)
+//   - `</script` is escaped at emission like any other inline script
+// ---------------------------------------------------------------------------
+
+const SANDBOX_RUNTIME_SHELL = [
+  "(function () {",
+  "  'use strict';",
+  "  function post(type, payload) {",
+  "    try {",
+  "      var message = { type: type };",
+  "      if (payload) {",
+  "        for (var key in payload) {",
+  "          if (Object.prototype.hasOwnProperty.call(payload, key)) { message[key] = payload[key]; }",
+  "        }",
+  "      }",
+  "      window.parent.postMessage(message, '*');",
+  "    } catch (err) { /* a broken report must never break user code */ }",
+  "  }",
+  "  function cap(value, limit) {",
+  "    try { return typeof value === 'string' ? value.slice(0, limit) : ''; } catch (err) { return ''; }",
+  "  }",
+  "  function reportError(message, stack) {",
+  "    var info = { message: cap(message, " + MAX_RUNTIME_ERROR_MESSAGE_LENGTH + ") };",
+  "    var cappedStack = cap(stack, " + MAX_RUNTIME_ERROR_STACK_LENGTH + ");",
+  "    if (cappedStack.length > 0) { info.stack = cappedStack; }",
+  "    post('" + RUNTIME_MESSAGE_TYPES.error + "', { error: info });",
+  "  }",
+  "  window.addEventListener('error', function (event) {",
+  "    var eventError = event && event.error;",
+  "    var message = (event && typeof event.message === 'string' && event.message) || 'Runtime error';",
+  "    var stack = (eventError && typeof eventError.stack === 'string' && eventError.stack) || '';",
+  "    reportError(message, stack);",
+  "  });",
+  "  window.addEventListener('unhandledrejection', function (event) {",
+  "    var reason = event && event.reason;",
+  "    var message = (reason && typeof reason.message === 'string' && reason.message) || 'Unhandled promise rejection';",
+  "    var stack = (reason && typeof reason.stack === 'string' && reason.stack) || '';",
+  "    reportError(message, stack);",
+  "  });",
+  "  function reportReady() {",
+  "    post('" + RUNTIME_MESSAGE_TYPES.ready + "');",
+  "    var root = document.getElementById('buildora-root');",
+  "    if (!root) { return; }",
+  "    function reportHeight() {",
+  "      var height = 0;",
+  "      try { height = Math.max(0, Math.round(root.getBoundingClientRect().height)); } catch (err) { height = 0; }",
+  "      post('" + RUNTIME_MESSAGE_TYPES.height + "', { height: height });",
+  "    }",
+  "    if (typeof ResizeObserver === 'function') {",
+  "      try {",
+  "        var observer = new ResizeObserver(function () { reportHeight(); });",
+  "        observer.observe(root);",
+  "      } catch (err) { /* fall through to the one-shot report */ }",
+  "    }",
+  "    reportHeight();",
+  "  }",
+  "  if (document.readyState === 'loading') {",
+  "    document.addEventListener('DOMContentLoaded', reportReady);",
+  "  } else {",
+  "    reportReady();",
+  "  }",
+  "})();",
+].join("\n");
 
 /** Attribute name grammar (HTML attribute names: letter first, then alnum/-_:). */
 const ATTR_NAME_RE = /^[a-zA-Z][a-zA-Z0-9:_-]*$/;
@@ -147,6 +229,10 @@ export function buildCustomCodeDocument(
 
   const styleBlock = css.length > 0 ? `<style>${escapeInlineStyle(css)}</style>` : "";
   const scriptBlock = js.length > 0 ? `<script>${escapeInlineScript(js)}</script>` : "";
+  // The runtime shell is emitted BEFORE any user code (in the head) so it
+  // can report ready/height and catch synchronous user-script errors. It is
+  // escaped like any inline script (`</script` can never close its block).
+  const shellBlock = `<script>${escapeInlineScript(SANDBOX_RUNTIME_SHELL)}</script>`;
   const wrapper = `<div id="buildora-root" data-buildora-custom-code="1"${wrapperAttributes}>${escapeHtmlFragment(html)}</div>`;
 
   return [
@@ -157,6 +243,7 @@ export function buildCustomCodeDocument(
     `<meta http-equiv="Content-Security-Policy" content="${SANDBOX_CSP}">`,
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     styleBlock,
+    shellBlock,
     "</head>",
     "<body>",
     wrapper,

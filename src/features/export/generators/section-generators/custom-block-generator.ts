@@ -26,6 +26,14 @@
 
 import type { OutputFile } from "../../pipeline/types";
 import { SANDBOX_POLICY } from "@/features/elements/custom-code/sandbox-policy";
+import {
+  HEARTBEAT_DEFAULTS,
+  MAX_FRAME_HEIGHT_PX,
+  MAX_RECOVERY_ATTEMPTS,
+  MAX_RUNTIME_ERROR_MESSAGE_LENGTH,
+  MAX_RUNTIME_ERROR_STACK_LENGTH,
+  RUNTIME_MESSAGE_TYPES,
+} from "@/features/elements/custom-code/constants";
 
 export function generateCustomBlockComponent(): OutputFile {
   const content = `"use client";
@@ -579,17 +587,183 @@ function IconGlyph() {
 // capabilities. Custom code runs ONLY inside this frame.
 const CUSTOM_CODE_SANDBOX = ${JSON.stringify(SANDBOX_POLICY)};
 
-// Phase P23-C — renders ONE validated custom-code srcdoc inside the
+// Phase P23-G — runtime protocol + heartbeat constants (mirror of the
+// editor's custom-code constants so the exported runtime stays in lockstep
+// with the tested controller semantics).
+const CUSTOM_CODE_MESSAGE_TYPES = ${JSON.stringify(RUNTIME_MESSAGE_TYPES)};
+const CUSTOM_CODE_HEARTBEAT = ${JSON.stringify(HEARTBEAT_DEFAULTS)};
+const CUSTOM_CODE_MAX_RECOVERY_ATTEMPTS = ${JSON.stringify(MAX_RECOVERY_ATTEMPTS)};
+const CUSTOM_CODE_MAX_FRAME_HEIGHT_PX = ${JSON.stringify(MAX_FRAME_HEIGHT_PX)};
+const CUSTOM_CODE_MAX_ERROR_MESSAGE_LENGTH = ${JSON.stringify(MAX_RUNTIME_ERROR_MESSAGE_LENGTH)};
+const CUSTOM_CODE_MAX_ERROR_STACK_LENGTH = ${JSON.stringify(MAX_RUNTIME_ERROR_STACK_LENGTH)};
+
+// Phase P23-C/G — renders ONE validated custom-code srcdoc inside the
 // sandboxed iframe. The frame is the only surface where custom code may
-// execute; the srcdoc itself carries the internal sandbox CSP. The document
-// is delivered via srcDoc — never injected into the parent document.
+// execute; the srcdoc itself carries the internal sandbox CSP plus the
+// child-side runtime shell (ready/height/error reporting).
+//
+// Phase P23-G — lifecycle hardening. Every mount owns a private runtime
+// instance: the frame is keyed by its srcdoc, so ANY payload change remounts
+// a fresh frame and the previous instance is disposed — stale frames,
+// timers, and messages can never drive the new one. Within a mount the
+// runtime validates every message (source identity + allow-listed payload),
+// runs ONE bounded heartbeat, allows a bounded number of recoveries after
+// the frame is declared unresponsive, and cleans up every listener/timer on
+// unmount. This is a faithful mirror of the editor's tested controller
+// (custom-code/runtime.ts) because exported files must be self-contained.
 function CustomCodeFrame({ srcDoc }: { srcDoc: string }) {
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const [frameHeight, setFrameHeight] = useState<number | null>(null);
+  const [runtimeStatus, setRuntimeStatus] = useState("mounting");
+  const [runtimeError, setRuntimeError] = useState(false);
+
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+
+    let disposed = false;
+    let status: "mounting" | "ready" | "unresponsive" | "recovering" = "mounting";
+    let lastSeen = Date.now();
+    let misses = 0;
+    let unresponsive = false;
+    let recoveryAttempts = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const applyStatus = (next: "mounting" | "ready" | "unresponsive" | "recovering") => {
+      status = next;
+      setRuntimeStatus(next);
+    };
+
+    // One bounded heartbeat per runtime instance: a tick that finds more
+    // than timeoutMs of silence counts a miss; maxMisses consecutive misses
+    // declare the frame unresponsive (callback latches — no repeated firing).
+    const tick = () => {
+      if (disposed) return;
+      if (Date.now() - lastSeen >= CUSTOM_CODE_HEARTBEAT.timeoutMs) {
+        misses += 1;
+        if (misses >= CUSTOM_CODE_HEARTBEAT.maxMisses && !unresponsive) {
+          unresponsive = true;
+          applyStatus("unresponsive");
+        }
+      } else {
+        misses = 0;
+      }
+      timer = setTimeout(tick, CUSTOM_CODE_HEARTBEAT.intervalMs);
+    };
+    timer = setTimeout(tick, CUSTOM_CODE_HEARTBEAT.intervalMs);
+
+    // Allow-listed payload validation (mirror of the editor protocol): exact
+    // shapes only — unknown types, extra fields, and malformed values are
+    // rejected before they can touch runtime state.
+    const parseMessage = (data: unknown): { type: string; height?: number; error?: { message: string; stack?: string } } | null => {
+      if (typeof data !== "object" || data === null || Array.isArray(data)) return null;
+      const msg = data as Record<string, unknown>;
+      const keys = Object.keys(msg);
+      if (msg.type === CUSTOM_CODE_MESSAGE_TYPES.ready) {
+        if (keys.length !== 1 || keys[0] !== "type") return null;
+        return { type: msg.type };
+      }
+      if (msg.type === CUSTOM_CODE_MESSAGE_TYPES.height) {
+        if (keys.length !== 2 || typeof msg.height !== "number" || !Number.isFinite(msg.height)) return null;
+        return { type: msg.type, height: Math.min(Math.max(Math.round(msg.height), 0), CUSTOM_CODE_MAX_FRAME_HEIGHT_PX) };
+      }
+      if (msg.type === CUSTOM_CODE_MESSAGE_TYPES.error) {
+        if (keys.length !== 2) return null;
+        const raw = msg.error;
+        if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+        const info = raw as Record<string, unknown>;
+        const infoKeys = Object.keys(info);
+        const hasStack = Object.prototype.hasOwnProperty.call(info, "stack");
+        if (hasStack ? infoKeys.length !== 2 : infoKeys.length !== 1) return null;
+        if (typeof info.message !== "string" || info.message.length === 0) return null;
+        if (hasStack && typeof info.stack !== "string") return null;
+        return {
+          type: msg.type,
+          error: hasStack
+            ? { message: info.message.slice(0, CUSTOM_CODE_MAX_ERROR_MESSAGE_LENGTH), stack: (info.stack as string).slice(0, CUSTOM_CODE_MAX_ERROR_STACK_LENGTH) }
+            : { message: info.message.slice(0, CUSTOM_CODE_MAX_ERROR_MESSAGE_LENGTH) },
+        };
+      }
+      return null;
+    };
+
+    const onMessage = (event: MessageEvent) => {
+      if (disposed) return;
+      // The sandbox has an opaque origin, so origin checks are meaningless —
+      // the source must be THIS frame's window, and each mount owns a private
+      // instance (keyed remounts dispose the previous one).
+      if (event.source !== iframe.contentWindow) return;
+      const message = parseMessage(event.data);
+      if (!message) return;
+
+      if (message.type === CUSTOM_CODE_MESSAGE_TYPES.ready) {
+        if (status === "unresponsive") {
+          // Bounded recovery — a frame may come back a finite number of times,
+          // then it is dead (timers stopped, messages ignored).
+          if (recoveryAttempts >= CUSTOM_CODE_MAX_RECOVERY_ATTEMPTS) {
+            if (timer !== undefined) clearTimeout(timer);
+            timer = undefined;
+            return;
+          }
+          recoveryAttempts += 1;
+          unresponsive = false;
+          applyStatus("recovering");
+        } else if (status === "recovering") {
+          applyStatus("ready");
+        } else if (status === "mounting") {
+          applyStatus("ready");
+        }
+        lastSeen = Date.now();
+        misses = 0;
+        return;
+      }
+
+      // height / error — only a frame that has anchored may send them; while
+      // mounting, non-ready messages are stale/foreign and are fenced out.
+      if (status === "mounting") return;
+      if (status === "unresponsive") {
+        if (recoveryAttempts >= CUSTOM_CODE_MAX_RECOVERY_ATTEMPTS) {
+          if (timer !== undefined) clearTimeout(timer);
+          timer = undefined;
+          return;
+        }
+        recoveryAttempts += 1;
+        unresponsive = false;
+        applyStatus("recovering");
+      } else if (status === "recovering") {
+        applyStatus("ready");
+      }
+      lastSeen = Date.now();
+      misses = 0;
+      if (message.type === CUSTOM_CODE_MESSAGE_TYPES.height) {
+        if (typeof message.height === "number") setFrameHeight(message.height);
+      } else if (message.type === CUSTOM_CODE_MESSAGE_TYPES.error && message.error) {
+        setRuntimeError(true);
+      }
+    };
+    window.addEventListener("message", onMessage);
+
+    return () => {
+      disposed = true;
+      window.removeEventListener("message", onMessage);
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, []);
+
   return (
     <iframe
+      ref={iframeRef}
       sandbox={CUSTOM_CODE_SANDBOX}
       srcDoc={srcDoc}
       title="Custom code"
-      style={{ width: "100%", border: "none", display: "block" }}
+      data-buildora-status={runtimeStatus}
+      data-buildora-error={runtimeError ? "1" : undefined}
+      style={{
+        width: "100%",
+        border: "none",
+        display: "block",
+        ...(frameHeight === null ? {} : { height: frameHeight }),
+      }}
     />
   );
 }
@@ -606,7 +780,10 @@ function NodeView({ node, tree, width, routes, srcdocs }: { node: BlockNode; tre
   if (srcdoc) {
     return (
       <div data-block-id={node.id} style={{ width: "100%", ...css }}>
-        <CustomCodeFrame srcDoc={srcdoc} />
+        {/* Phase P23-G — keying by the srcdoc means any payload change
+            (html/css/js/attributes/enabled) remounts a fresh iframe and
+            disposes the previous runtime instance deterministically. */}
+        <CustomCodeFrame key={srcdoc} srcDoc={srcdoc} />
       </div>
     );
   }
