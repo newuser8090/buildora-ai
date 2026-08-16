@@ -40,6 +40,14 @@ export interface FrameHeartbeat {
   start(): void;
   /** Record a validated frame message (resets the silence window). */
   markAlive(): void;
+  /**
+   * Clear the latched "unresponsive" flag and the miss counter WITHOUT
+   * stopping the loop (Phase P23-G — bounded recovery). Used when a frame
+   * that was declared unresponsive produces a validated message again; the
+   * same heartbeat instance can then detect a second stall. The caller is
+   * responsible for bounding how often recovery is allowed.
+   */
+  reset(): void;
   /** Stop all timers and reset state. Safe to call more than once. */
   dispose(): void;
   readonly running: boolean;
@@ -91,6 +99,11 @@ export function createFrameHeartbeat(
     markAlive() {
       lastSeen = now();
       misses = 0;
+    },
+    reset() {
+      unresponsive = false;
+      misses = 0;
+      lastSeen = now();
     },
     dispose() {
       if (timer !== undefined) clearTimer(timer);

@@ -42,10 +42,26 @@ export const SANDBOX_CSP =
 export const RUNTIME_MESSAGE_TYPES = {
   ready: "buildora:ready",
   height: "buildora:height",
+  error: "buildora:error",
 } as const;
 
 /** Hard cap on frame height reports (layout-bomb guard). */
 export const MAX_FRAME_HEIGHT_PX = 10_000;
+
+// ---------------------------------------------------------------------------
+// Runtime error reporting caps (Phase P23-G)
+//
+// The sandboxed frame may report a RUNTIME ERROR as structured, sanitized
+// data ONLY — arbitrary exception objects never cross the boundary. Message
+// text and stack traces are capped here so an oversized (or hostile) report
+// cannot flood the parent.
+// ---------------------------------------------------------------------------
+
+/** Max characters of a sanitized error message crossing the boundary. */
+export const MAX_RUNTIME_ERROR_MESSAGE_LENGTH = 512;
+
+/** Max characters of a sanitized error stack crossing the boundary. */
+export const MAX_RUNTIME_ERROR_STACK_LENGTH = 2_048;
 
 // ---------------------------------------------------------------------------
 // Heartbeat defaults (bounded, low frequency)
@@ -59,3 +75,12 @@ export const HEARTBEAT_DEFAULTS = {
   /** Consecutive misses before the frame is declared unresponsive. */
   maxMisses: 2,
 } as const;
+
+/**
+ * How many times ONE runtime instance may recover after being declared
+ * unresponsive before it is treated as permanently dead (bounded retry —
+ * there is never an infinite recover/declared-dead loop). Recovery is
+ * message-driven: a validated frame message after "unresponsive" consumes
+ * one attempt.
+ */
+export const MAX_RECOVERY_ATTEMPTS = 2;

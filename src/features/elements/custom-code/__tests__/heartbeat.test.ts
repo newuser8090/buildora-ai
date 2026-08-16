@@ -133,6 +133,48 @@ describe("disposal", () => {
   });
 });
 
+describe("reset (Phase P23-G — bounded recovery)", () => {
+  it("clears the latched unresponsive flag and miss counter without stopping the loop", () => {
+    const heartbeat = startHeartbeat();
+    vi.advanceTimersByTime(3_000); // miss 1
+    vi.advanceTimersByTime(3_000); // miss 2 → unresponsive
+    expect(heartbeat.unresponsive).toBe(true);
+    expect(onUnresponsive).toHaveBeenCalledTimes(1);
+
+    // The frame came back — reset clears the latch and keeps ticking.
+    heartbeat.reset();
+    expect(heartbeat.unresponsive).toBe(false);
+    expect(heartbeat.misses).toBe(0);
+    expect(heartbeat.running).toBe(true);
+
+    // A second silent period can now be detected again.
+    vi.advanceTimersByTime(3_000);
+    vi.advanceTimersByTime(3_000);
+    expect(heartbeat.unresponsive).toBe(true);
+    expect(onUnresponsive).toHaveBeenCalledTimes(2);
+    heartbeat.dispose();
+  });
+
+  it("reset on a healthy heartbeat is a no-op for the miss counter", () => {
+    const heartbeat = startHeartbeat();
+    heartbeat.markAlive();
+    heartbeat.reset();
+    expect(heartbeat.misses).toBe(0);
+    expect(heartbeat.unresponsive).toBe(false);
+    heartbeat.dispose();
+  });
+
+  it("reset after dispose is safe and keeps the heartbeat stopped", () => {
+    const heartbeat = startHeartbeat();
+    heartbeat.dispose();
+    heartbeat.reset();
+    expect(heartbeat.running).toBe(false);
+    expect(heartbeat.unresponsive).toBe(false);
+    vi.advanceTimersByTime(10_000);
+    expect(onUnresponsive).not.toHaveBeenCalled();
+  });
+});
+
 describe("start semantics", () => {
   it("start is idempotent (a second start does not double the timer)", () => {
     const heartbeat = createFrameHeartbeat(onUnresponsive, OPTIONS);

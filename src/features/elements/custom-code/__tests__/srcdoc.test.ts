@@ -25,10 +25,16 @@ function countOccurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }
 
-/** Extract the user JS between the shell's <script> tags. */
+/**
+ * Extract the user JS — the LAST inline <script> block. The fixed runtime
+ * shell script (Phase P23-G) always runs first in the head, so the user's
+ * block is always the last one; when no user JS was emitted (or the payload
+ * had none) this returns "".
+ */
 function extractScript(doc: string): string {
-  const match = doc.match(/<script>([\s\S]*?)<\/script>/);
-  return match ? match[1] : "";
+  const matches = [...doc.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+  if (matches.length < 2) return "";
+  return matches[matches.length - 1][1];
 }
 
 /** Extract the user CSS between the shell's <style> tags. */
@@ -86,12 +92,15 @@ describe("enabled custom code — shell structure", () => {
     expect(doc).toContain('data-buildora-custom-code="1"');
   });
 
-  it("emits an empty shell when all fields are empty", () => {
+  it("emits only the fixed runtime shell when all fields are empty", () => {
     const doc = buildCustomCodeDocument(enabledCode());
     expect(doc).not.toBeNull();
     if (!doc) return;
-    expect(doc).not.toContain("<script>");
+    // No user <style> and no user <script> — the ONLY script is the fixed
+    // child-side runtime shell (Phase P23-G).
     expect(doc).not.toContain("<style>");
+    expect(countOccurrences(doc, "<script>")).toBe(1);
+    expect(extractScript(doc)).toBe("");
   });
 
   it("introduces no eval / new Function / unsafe-eval", () => {
@@ -160,10 +169,11 @@ describe("shell cannot be trivially broken by closing sequences", () => {
     expect(doc).not.toBeNull();
     if (!doc) return;
 
-    // Only ONE literal </script remains — the shell's own closer. The user's
-    // occurrences were escaped to <\/script (semantics preserved — "\/" is a
-    // valid JS escape, so the code still evaluates identically).
-    expect(countOccurrences(doc, "</script")).toBe(1);
+    // Only the shell's and the user block's OWN closers remain (2 total).
+    // The user's inline occurrences were escaped to <\/script (semantics
+    // preserved — "\/" is a valid JS escape, so the code still evaluates
+    // identically).
+    expect(countOccurrences(doc, "</script")).toBe(2);
     // The full user code survives in escaped form.
     expect(extractScript(doc)).toBe('alert("<\\/script><script>evil()<\\/script>")');
   });
@@ -255,9 +265,10 @@ describe("user HTML fragment cannot break the shell (P23-C hardening)", () => {
     expect(doc).not.toBeNull();
     if (!doc) return;
 
-    // Only the shell's own script/style blocks remain (one each).
-    expect(countOccurrences(doc, "<script>")).toBe(1);
-    expect(countOccurrences(doc, "</script>")).toBe(1);
+    // Only the shell's + user's script blocks remain (one each); the
+    // user's fragment tags were neutralized and never create blocks.
+    expect(countOccurrences(doc, "<script>")).toBe(2);
+    expect(countOccurrences(doc, "</script>")).toBe(2);
     expect(countOccurrences(doc, "<style>")).toBe(1);
     expect(countOccurrences(doc, "</style>")).toBe(1);
     // The user's tags became text entities inside the wrapper.
@@ -306,7 +317,7 @@ describe("user HTML fragment cannot break the shell (P23-C hardening)", () => {
     expect(doc).not.toBeNull();
     if (!doc) return;
 
-    expect(countOccurrences(doc, "<script")).toBe(1); // shell's own only
+    expect(countOccurrences(doc, "<script")).toBe(2); // runtime shell + user
     expect(doc).toContain("&lt;ScRiPt type='text/javascript'");
     expect(doc).toContain("&lt;/SCRIPT>");
   });
@@ -324,6 +335,69 @@ describe("user HTML fragment cannot break the shell (P23-C hardening)", () => {
     expect(doc).not.toContain("unsafe-eval");
     expect(doc).not.toContain("eval(");
     expect(doc).not.toContain("new Function");
+  });
+});
+
+describe("child-side runtime shell (Phase P23-G)", () => {
+  it("runs in the head, BEFORE any user script, so it can catch sync errors", () => {
+    const doc = buildCustomCodeDocument(
+      enabledCode({ js: "console.log(1)", html: "<p>x</p>" }),
+    );
+    expect(doc).not.toBeNull();
+    if (!doc) return;
+
+    const shellIndex = doc.indexOf("window.parent.postMessage");
+    const userIndex = doc.indexOf("console.log(1)");
+    expect(shellIndex).toBeGreaterThan(-1);
+    expect(userIndex).toBeGreaterThan(-1);
+    expect(shellIndex).toBeLessThan(doc.indexOf("</head>"));
+    expect(shellIndex).toBeLessThan(userIndex);
+  });
+
+  it("reports ready, height, and error through the allowed message types only", () => {
+    const doc = buildCustomCodeDocument(enabledCode());
+    expect(doc).not.toBeNull();
+    if (!doc) return;
+
+    expect(doc).toContain("buildora:ready");
+    expect(doc).toContain("buildora:height");
+    expect(doc).toContain("buildora:error");
+    // The shell never injects anything else into the parent.
+    expect(doc).not.toContain("buildora:ping");
+    expect(doc).not.toContain("buildora:token");
+  });
+
+  it("sanitizes error reports to capped message/stack strings", () => {
+    const doc = buildCustomCodeDocument(enabledCode());
+    expect(doc).not.toBeNull();
+    if (!doc) return;
+
+    expect(doc).toContain("typeof value === 'string' ? value.slice(0, limit) : ''");
+    expect(doc).toContain("message: cap(message, 512)");
+    expect(doc).toContain("stack, 2048");
+  });
+
+  it("never weakens the sandbox posture or adds exec mechanisms", () => {
+    const doc = buildCustomCodeDocument(enabledCode({ js: "x()" }));
+    expect(doc).not.toBeNull();
+    if (!doc) return;
+
+    expect(doc).not.toContain("allow-same-origin");
+    expect(doc).not.toContain("unsafe-eval");
+    expect(doc).not.toContain("eval(");
+    expect(doc).not.toContain("new Function");
+    expect(countOccurrences(doc, "Content-Security-Policy")).toBe(1);
+  });
+
+  it("the shell is emitted (escaped) even when the payload is code-free", () => {
+    const doc = buildCustomCodeDocument(enabledCode({}));
+    expect(doc).not.toBeNull();
+    if (!doc) return;
+    expect(countOccurrences(doc, "<script>")).toBe(1);
+    expect(extractScript(doc)).toBe("");
+    // The shell block's own closer is the only user-visible one in the
+    // no-JS document.
+    expect(countOccurrences(doc, "</script>")).toBe(1);
   });
 });
 

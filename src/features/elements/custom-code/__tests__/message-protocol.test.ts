@@ -71,6 +71,60 @@ describe("buildora:height", () => {
   });
 });
 
+describe("buildora:error", () => {
+  it("accepts a minimal structured error", () => {
+    expect(
+      parseRuntimeMessage({ type: "buildora:error", error: { message: "boom" } }),
+    ).toEqual({ type: "buildora:error", error: { message: "boom" } });
+  });
+
+  it("accepts an error with an optional stack", () => {
+    expect(
+      parseRuntimeMessage({
+        type: "buildora:error",
+        error: { message: "boom", stack: "at fn (file.js:1:1)" },
+      }),
+    ).toEqual({
+      type: "buildora:error",
+      error: { message: "boom", stack: "at fn (file.js:1:1)" },
+    });
+  });
+
+  it("caps oversized message and stack at the approved limits", () => {
+    const message = "m".repeat(1_000);
+    const stack = "s".repeat(5_000);
+    const parsed = parseRuntimeMessage({ type: "buildora:error", error: { message, stack } });
+    expect(parsed).toEqual({
+      type: "buildora:error",
+      error: { message: "m".repeat(512), stack: "s".repeat(2_048) },
+    });
+  });
+
+  it("rejects non-object error payloads", () => {
+    expect(parseRuntimeMessage({ type: "buildora:error", error: "boom" })).toBeNull();
+    expect(parseRuntimeMessage({ type: "buildora:error", error: 42 })).toBeNull();
+    expect(parseRuntimeMessage({ type: "buildora:error", error: ["boom"] })).toBeNull();
+    expect(parseRuntimeMessage({ type: "buildora:error" })).toBeNull();
+  });
+
+  it("rejects malformed error fields", () => {
+    expect(parseRuntimeMessage({ type: "buildora:error", error: { message: 42 } })).toBeNull();
+    expect(parseRuntimeMessage({ type: "buildora:error", error: { message: "" } })).toBeNull();
+    expect(parseRuntimeMessage({ type: "buildora:error", error: { message: "x", stack: 5 } })).toBeNull();
+    expect(parseRuntimeMessage({ type: "buildora:error", error: { message: "x", extra: 1 } })).toBeNull();
+    expect(parseRuntimeMessage({ type: "buildora:error", error: { stack: "x" } })).toBeNull();
+  });
+
+  it("rejects an error message with any extra top-level field", () => {
+    expect(
+      parseRuntimeMessage({ type: "buildora:error", error: { message: "x" }, token: "abc" }),
+    ).toBeNull();
+    expect(
+      parseRuntimeMessage({ type: "buildora:error", error: { message: "x" }, height: 5 }),
+    ).toBeNull();
+  });
+});
+
 describe("unknown / malformed messages", () => {
   it("rejects unknown message types", () => {
     expect(parseRuntimeMessage({ type: "buildora:evil" })).toBeNull();

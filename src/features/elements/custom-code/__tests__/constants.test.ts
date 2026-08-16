@@ -10,6 +10,9 @@ import {
   MAX_CUSTOM_CODE_LENGTH,
   MAX_CUSTOM_CODE_TOTAL,
   MAX_FRAME_HEIGHT_PX,
+  MAX_RECOVERY_ATTEMPTS,
+  MAX_RUNTIME_ERROR_MESSAGE_LENGTH,
+  MAX_RUNTIME_ERROR_STACK_LENGTH,
   RUNTIME_MESSAGE_TYPES,
   SANDBOX_CSP,
 } from "../constants";
@@ -38,15 +41,27 @@ describe("payload caps (re-exported from the element schema)", () => {
 });
 
 describe("message protocol constants", () => {
-  it("defines exactly the two allowed message types", () => {
+  it("defines exactly the three allowed message types", () => {
     expect(RUNTIME_MESSAGE_TYPES).toEqual({
       ready: "buildora:ready",
       height: "buildora:height",
+      error: "buildora:error",
     });
   });
 
   it("caps frame height at 10,000px", () => {
     expect(MAX_FRAME_HEIGHT_PX).toBe(10_000);
+  });
+
+  it("caps sanitized error reports at the approved lengths", () => {
+    expect(MAX_RUNTIME_ERROR_MESSAGE_LENGTH).toBe(512);
+    expect(MAX_RUNTIME_ERROR_STACK_LENGTH).toBe(2_048);
+  });
+});
+
+describe("recovery budget (Phase P23-G — bounded retry)", () => {
+  it("allows a finite number of recoveries per runtime instance", () => {
+    expect(MAX_RECOVERY_ATTEMPTS).toBe(2);
   });
 });
 

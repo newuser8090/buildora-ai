@@ -23,6 +23,11 @@ import {
   buildValidatedCustomCodeSrcdoc,
 } from "@/features/elements/custom-code/srcdoc";
 import { SANDBOX_POLICY } from "@/features/elements/custom-code/sandbox-policy";
+import {
+  HEARTBEAT_DEFAULTS,
+  MAX_RECOVERY_ATTEMPTS,
+  RUNTIME_MESSAGE_TYPES,
+} from "@/features/elements/custom-code/constants";
 import { CUSTOM_BLOCK_SECTION_TYPE } from "@/features/code-import/schemas/custom-block-schema";
 
 // ---------------------------------------------------------------------------
@@ -154,6 +159,21 @@ describe("generatePageFile — srcdocs prop (P23-C)", () => {
     expect(page.content).toContain(encoded);
   });
 
+  it("every emitted srcdoc carries the child-side runtime shell (P23-G)", () => {
+    const tree = treeWithNodes({ n1: makeNode("n1", { customCode: ENABLED }) });
+    const routes = computePageRoutes(makeProject(tree).pages);
+    const page = generatePageFile(makeProject(tree), makeProject(tree).pages[0], routes);
+
+    // The shell script is part of the validated document, delivered as
+    // \u003c-escaped JSON — it never appears as literal markup in the parent
+    // page, and it reports only the allowed message types.
+    expect(page.content).toContain("\\u003cscript>(function () {");
+    expect(page.content).toContain("window.parent.postMessage");
+    expect(page.content).toContain("buildora:ready");
+    expect(page.content).toContain("buildora:height");
+    expect(page.content).toContain("buildora:error");
+  });
+
   it("the generated parent page contains no direct user script/style/html execution", () => {
     const tree = treeWithNodes({ n1: makeNode("n1", { customCode: ENABLED }) });
     const routes = computePageRoutes(makeProject(tree).pages);
@@ -216,6 +236,58 @@ describe("generateCustomBlockComponent — CustomCodeFrame (P23-C)", () => {
     expect(file.content).not.toContain("eval(");
     expect(file.content).not.toContain("new Function");
     expect(file.content).not.toContain("<script");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Generated component — P23-G runtime lifecycle hardening
+// ---------------------------------------------------------------------------
+
+describe("generateCustomBlockComponent — runtime hardening (P23-G)", () => {
+  it("emits the runtime protocol + heartbeat constants in lockstep with the editor", () => {
+    const file = generateCustomBlockComponent();
+    expect(file.content).toContain(
+      `const CUSTOM_CODE_MESSAGE_TYPES = ${JSON.stringify(RUNTIME_MESSAGE_TYPES)};`,
+    );
+    expect(file.content).toContain(
+      `const CUSTOM_CODE_HEARTBEAT = ${JSON.stringify(HEARTBEAT_DEFAULTS)};`,
+    );
+    expect(file.content).toContain(
+      `const CUSTOM_CODE_MAX_RECOVERY_ATTEMPTS = ${JSON.stringify(MAX_RECOVERY_ATTEMPTS)};`,
+    );
+  });
+
+  it("keyed remounts — a payload change deterministically disposes the old runtime", () => {
+    const file = generateCustomBlockComponent();
+    expect(file.content).toContain("<CustomCodeFrame key={srcdoc} srcDoc={srcdoc} />");
+  });
+
+  it("validates message source identity before accepting anything", () => {
+    const file = generateCustomBlockComponent();
+    expect(file.content).toContain("event.source !== iframe.contentWindow");
+  });
+
+  it("rejects unknown/malformed messages (allow-listed shape only)", () => {
+    const file = generateCustomBlockComponent();
+    expect(file.content).toContain("const parseMessage");
+    expect(file.content).toContain("Array.isArray(data)");
+    expect(file.content).toContain("CUSTOM_CODE_MAX_FRAME_HEIGHT_PX");
+    expect(file.content).toContain("CUSTOM_CODE_MAX_ERROR_MESSAGE_LENGTH");
+  });
+
+  it("bounds recovery and cleans up every listener/timer on unmount", () => {
+    const file = generateCustomBlockComponent();
+    expect(file.content).toContain("recoveryAttempts >= CUSTOM_CODE_MAX_RECOVERY_ATTEMPTS");
+    expect(file.content).toContain("window.removeEventListener(\"message\", onMessage)");
+    expect(file.content).toContain("clearTimeout(timer)");
+  });
+
+  it("exposes the runtime status/error state without changing the sandbox", () => {
+    const file = generateCustomBlockComponent();
+    expect(file.content).toContain("data-buildora-status={runtimeStatus}");
+    expect(file.content).toContain("data-buildora-error={runtimeError ? \"1\" : undefined}");
+    expect(file.content).not.toContain("allow-same-origin");
+    expect(file.content).not.toContain("allow-popups");
   });
 });
 
