@@ -23,6 +23,7 @@ import {
   CustomBlockTreeSchema,
   normalizeCustomBlockTree,
 } from "@/features/code-import/schemas/custom-block-schema";
+import { stripCustomCodeFromTree } from "@/features/code-import/services/strip-custom-code";
 import {
   isMyBlockCategory,
   type CreateMyBlockInput,
@@ -80,7 +81,9 @@ export function cloneTreeDeep(tree: BlockTree): BlockTree {
  */
 export function prepareTreeForStorage(tree: BlockTree): MyBlockResult<BlockTree> {
   const cloned = cloneTreeDeep(tree);
-  const stripped = stripInternalProps(cloned);
+  // P23-E: reusable My Blocks must never carry executable custom-code data.
+  const withoutCustomCode = stripCustomCodeFromTree(cloned);
+  const stripped = stripInternalProps(withoutCustomCode);
 
   // Defensive normalization repairs any over-limit values deterministically;
   // then the strict schema re-validates the result.

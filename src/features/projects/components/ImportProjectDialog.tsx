@@ -28,7 +28,7 @@
 
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useLayoutEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   Upload,
@@ -146,9 +146,14 @@ export function ImportProjectDialog({
   const mountedRef = useRef(true);
   const operationSeqRef = useRef(0);
 
-  // Mirrors of state for event handlers (single stable listener set). Updated
-  // in an effect after every render (never during render) so the stable
-  // keydown/focusin listeners always observe committed values.
+  // Mirrors of state for event handlers (single stable listener set). Synced
+  // with useLayoutEffect (flushed synchronously inside the commit) rather
+  // than useEffect, so event handlers and the stable keydown/focusin
+  // listeners never read a stale mirror. With an effect-synced mirror there
+  // is a window where the committed DOM (observed by a test's waitFor) is
+  // ahead of the mirror; a click/keydown in that window is silently dropped
+  // by the phase guards, which surfaced as an intermittent full-suite-only
+  // test flake.
   const stateRef = useRef(state);
   const resolutionRef = useRef(resolution);
   const customNameRef = useRef(customName);
@@ -157,7 +162,7 @@ export function ImportProjectDialog({
   const openRef = useRef(open);
   const onCloseRef = useRef(onClose);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     stateRef.current = state;
     resolutionRef.current = resolution;
     customNameRef.current = customName;
