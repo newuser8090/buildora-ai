@@ -1,17 +1,6 @@
 // @vitest-environment jsdom
 // ---------------------------------------------------------------------------
-// Phase P23-J — CustomCodePreview (safe authoring preview)
-//
-//   - disabled/absent/malformed code produces NO runtime (inert note only)
-//   - the preview frame uses the authoritative allow-scripts-only sandbox and
-//     the exact export srcdoc (buildValidatedCustomCodeSrcdoc)
-//   - the frame is keyed by its srcdoc — any payload change remounts a fresh
-//     frame and disposes the previous runtime
-//   - messages are source-fenced to the frame's own contentWindow; height
-//     reports are validated and coalesced into bounded writes (P23-I)
-//   - sanitized runtime errors surface as text; the frame stays usable
-//   - unmount disposes the runtime (no timers/listeners leak)
-//   - no allow-same-origin, no eval / new Function / dangerouslySetInnerHTML
+// Phase P23-J/K — CustomCodePreview (safe authoring preview)
 // ---------------------------------------------------------------------------
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -40,7 +29,6 @@ function previewFrame(): HTMLIFrameElement {
   return frame as HTMLIFrameElement;
 }
 
-/** Dispatch a postMessage-shaped event; testing-library does not wrap this. */
 function dispatchMessage(source: unknown, data: unknown): void {
   act(() => {
     window.dispatchEvent(
@@ -108,8 +96,6 @@ describe("CustomCodePreview — sandbox + srcdoc contract", () => {
     expect(container.innerHTML).not.toContain("dangerouslySetInnerHTML");
     expect(container.innerHTML).not.toContain("eval(");
     expect(container.innerHTML).not.toContain("new Function");
-    // The user's JS lives ONLY inside the escaped srcdoc data, never as a
-    // literal script element in the editor document.
     expect(container.querySelectorAll("script")).toHaveLength(0);
   });
 
@@ -122,8 +108,6 @@ describe("CustomCodePreview — sandbox + srcdoc contract", () => {
     rerender(<CustomCodePreview code={changed} />);
     const second = previewFrame();
     expect(firstDoc).not.toBe(buildValidatedCustomCodeSrcdoc(changed));
-    // A fresh element was mounted (React keyed the frame by its srcdoc) — the
-    // old instance was disposed, so stale messages can never drive the new one.
     expect(second).not.toBe(first);
     expect(second.getAttribute("srcDoc")).toBe(buildValidatedCustomCodeSrcdoc(changed));
   });
@@ -156,7 +140,6 @@ describe("CustomCodePreview — runtime wiring (source fencing + bounded height)
     dispatchMessage(frame.contentWindow, ready());
     dispatchMessage(frame.contentWindow, height(500));
 
-    // Coalesce window: no write yet — the validated height is pending.
     expect(frame.style.height).toBe("");
     act(() => {
       vi.advanceTimersByTime(HEIGHT_COALESCE_MS);
@@ -173,14 +156,12 @@ describe("CustomCodePreview — runtime wiring (source fencing + bounded height)
     dispatchMessage(frame.contentWindow, height(100));
     dispatchMessage(frame.contentWindow, height(200));
     dispatchMessage(frame.contentWindow, height(300));
-    // Intermediate heights never rendered — a chatty frame cannot thrash layout.
     expect(frame.style.height).toBe("");
     act(() => {
       vi.advanceTimersByTime(HEIGHT_COALESCE_MS);
     });
     expect(frame.style.height).toBe("300px");
 
-    // A repeat of the same height is change-detected — no extra write.
     dispatchMessage(frame.contentWindow, height(300));
     act(() => {
       vi.advanceTimersByTime(HEIGHT_COALESCE_MS);
@@ -196,8 +177,6 @@ describe("CustomCodePreview — runtime wiring (source fencing + bounded height)
     act(() => {
       vi.advanceTimersByTime(HEIGHT_COALESCE_MS);
     });
-    // The parent protocol clamps to the shared MAX_FRAME_HEIGHT_PX cap before
-    // the scheduler — no duplicated policy.
     expect(frame.style.height).toBe(`${MAX_FRAME_HEIGHT_PX}px`);
   });
 
@@ -207,17 +186,49 @@ describe("CustomCodePreview — runtime wiring (source fencing + bounded height)
     dispatchMessage(frame.contentWindow, ready());
 
     dispatchMessage(frame.contentWindow, errorMsg("boom"));
+    act(() => {
+      vi.advanceTimersByTime(HEIGHT_COALESCE_MS);
+    });
     expect(screen.getByTestId("custom-code-preview-error").textContent).toContain("boom");
     expect(frame.getAttribute("data-buildora-error")).toBe("1");
-    // The frame stays usable after an error report.
     expect(screen.getByTestId("custom-code-preview-status").textContent).toContain("Ready");
 
-    // Hostile payloads never surface raw text and never throw.
     dispatchMessage(frame.contentWindow, { type: "buildora:evil" });
     dispatchMessage(frame.contentWindow, errorMsg("x".repeat(10_000)));
+    act(() => {
+      vi.advanceTimersByTime(HEIGHT_COALESCE_MS);
+    });
     expect(
       screen.getByTestId("custom-code-preview-error").textContent!.length,
     ).toBeLessThanOrEqual(512 + "Runtime error: ".length);
+  });
+
+  it("coalesces repeated error reports and latest error wins (P23-K)", () => {
+    render(<CustomCodePreview code={ENABLED} />);
+    const frame = previewFrame();
+    dispatchMessage(frame.contentWindow, ready());
+
+    dispatchMessage(frame.contentWindow, errorMsg("first"));
+    dispatchMessage(frame.contentWindow, errorMsg("second"));
+    dispatchMessage(frame.contentWindow, errorMsg("third"));
+
+    // Accepted runtime errors are immediate at the controller boundary, but
+    // the authoring UI has not rendered an error state before the coalesce
+    // window expires.
+    expect(screen.queryByTestId("custom-code-preview-error")).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(HEIGHT_COALESCE_MS);
+    });
+    expect(screen.getByTestId("custom-code-preview-error").textContent).toContain("third");
+
+    // Identical repeats are change-detected and do not create another UI
+    // update window.
+    dispatchMessage(frame.contentWindow, errorMsg("third"));
+    act(() => {
+      vi.advanceTimersByTime(HEIGHT_COALESCE_MS);
+    });
+    expect(screen.getByTestId("custom-code-preview-error").textContent).toContain("third");
   });
 
   it("unmount disposes the runtime — no timers or listeners leak", () => {
@@ -225,6 +236,7 @@ describe("CustomCodePreview — runtime wiring (source fencing + bounded height)
     const frame = previewFrame();
     dispatchMessage(frame.contentWindow, ready());
     dispatchMessage(frame.contentWindow, height(100));
+    dispatchMessage(frame.contentWindow, errorMsg("pending"));
 
     unmount();
     expect(() => {
