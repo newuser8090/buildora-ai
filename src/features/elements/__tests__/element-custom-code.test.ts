@@ -218,6 +218,103 @@ describe("ElementCustomCodeSchema — attributes bounds", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Schema: attribute safety (P23-F)
+// ---------------------------------------------------------------------------
+
+describe("ElementCustomCodeSchema — attribute safety (P23-F)", () => {
+  it("accepts legitimate attributes (id, aria-*, data-*, class, …)", () => {
+    const parsed = ElementCustomCodeSchema.safeParse({
+      attributes: {
+        id: "widget",
+        title: "Widget",
+        "aria-label": "Widget",
+        "aria-describedby": "hint",
+        role: "region",
+        "data-count": "3",
+        class: "hero",
+        target: "_blank",
+        rel: "noopener",
+        download: "report.pdf",
+        tabindex: "0",
+      },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects event-handler attributes (case-insensitive)", () => {
+    for (const name of ["onclick", "onload", "onerror", "onmouseover", "ONKEYDOWN", "OnChange"]) {
+      expect(
+        ElementCustomCodeSchema.safeParse({ attributes: { [name]: "x()" } }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("rejects javascript: values for URL-bearing attributes", () => {
+    for (const name of ["href", "src", "action", "formaction", "poster", "cite", "background"]) {
+      expect(
+        ElementCustomCodeSchema.safeParse({
+          attributes: { [name]: "javascript:alert(1)" },
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("rejects whitespace/control-obfuscated javascript: values", () => {
+    expect(
+      ElementCustomCodeSchema.safeParse({
+        attributes: { href: "java\nscript:alert(1)" },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts safe URL values for URL-bearing attributes", () => {
+    expect(
+      ElementCustomCodeSchema.safeParse({
+        attributes: {
+          href: "https://example.com",
+          src: "data:image/png;base64,AA==",
+          cite: "/sources/1",
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects malformed attribute names (whitespace / invalid characters)", () => {
+    expect(
+      ElementCustomCodeSchema.safeParse({ attributes: { "bad key": "v" } }).success,
+    ).toBe(false);
+    expect(
+      ElementCustomCodeSchema.safeParse({ attributes: { "1digit": "v" } }).success,
+    ).toBe(false);
+  });
+
+  it("rejects reserved shell attributes (style / srcdoc)", () => {
+    expect(
+      ElementCustomCodeSchema.safeParse({ attributes: { style: "position:fixed" } }).success,
+    ).toBe(false);
+    expect(
+      ElementCustomCodeSchema.safeParse({ attributes: { srcdoc: "<script>x</script>" } }).success,
+    ).toBe(false);
+  });
+
+  it("keeps html/css/js intact when safe attributes round-trip", () => {
+    const parsed = ElementCustomCodeSchema.safeParse({
+      enabled: true,
+      html: "<p>hi</p>",
+      css: "p { color: red; }",
+      js: "console.log(1)",
+      attributes: { "data-x": "y", "aria-label": "w" },
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.html).toBe("<p>hi</p>");
+    expect(parsed.data.css).toBe("p { color: red; }");
+    expect(parsed.data.js).toBe("console.log(1)");
+    expect(parsed.data.attributes).toEqual({ "data-x": "y", "aria-label": "w" });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Operation boundary
 // ---------------------------------------------------------------------------
 
@@ -270,6 +367,72 @@ describe("updateElementCustomCode — authoring boundary (P23-A)", () => {
     expect(removed.ok).toBe(true);
     if (!removed.ok) return;
     expect(removed.value.nodes.cc.customCode).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Operation boundary: attribute safety (P23-F)
+// ---------------------------------------------------------------------------
+
+describe("updateElementCustomCode — attribute safety (P23-F)", () => {
+  it("stores safe attributes and keeps html/css/js", () => {
+    const result = updateElementCustomCode(customComponentTree(), "cc", {
+      enabled: true,
+      html: "<p>hi</p>",
+      css: "p {}",
+      js: "x()",
+      attributes: { "data-x": "y", "aria-label": "w" },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.nodes.cc.customCode?.enabled).toBe(true);
+    expect(result.value.nodes.cc.customCode?.html).toBe("<p>hi</p>");
+    expect(result.value.nodes.cc.customCode?.css).toBe("p {}");
+    expect(result.value.nodes.cc.customCode?.js).toBe("x()");
+    expect(result.value.nodes.cc.customCode?.attributes).toEqual({
+      "data-x": "y",
+      "aria-label": "w",
+    });
+    expect(validateElementTree(result.value).valid).toBe(true);
+  });
+
+  it("rejects event-handler attributes with ELEMENT_CUSTOM_CODE_INVALID", () => {
+    const result = updateElementCustomCode(customComponentTree(), "cc", {
+      enabled: true,
+      attributes: { onclick: "alert(1)" },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("ELEMENT_CUSTOM_CODE_INVALID");
+  });
+
+  it("rejects javascript: URL values with ELEMENT_CUSTOM_CODE_INVALID", () => {
+    const result = updateElementCustomCode(customComponentTree(), "cc", {
+      enabled: true,
+      attributes: { href: "javascript:alert(1)" },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("ELEMENT_CUSTOM_CODE_INVALID");
+  });
+
+  it("does not allow attribute edits to change the code payload", () => {
+    const seeded = updateElementCustomCode(customComponentTree(), "cc", {
+      enabled: true,
+      html: "<b>keep</b>",
+      attributes: { "data-x": "1" },
+    });
+    expect(seeded.ok).toBe(true);
+    if (!seeded.ok) return;
+    const edited = updateElementCustomCode(seeded.value, "cc", {
+      ...seeded.value.nodes.cc.customCode!,
+      attributes: { "data-x": "2", "aria-label": "w" },
+    });
+    expect(edited.ok).toBe(true);
+    if (!edited.ok) return;
+    expect(edited.value.nodes.cc.customCode?.html).toBe("<b>keep</b>");
+    expect(edited.value.nodes.cc.customCode?.attributes).toEqual({
+      "data-x": "2",
+      "aria-label": "w",
+    });
   });
 });
 
@@ -379,6 +542,53 @@ describe("normalizeElementTree — custom code repair (P23-A)", () => {
     // Every metadata field survives as schema-valid data — `enabled` is part
     // of the parsed shape, never raw input.
     expect(tree.nodes.sec.customCode).toMatchObject({ enabled: false, css: "x" });
+  });
+
+  it("preserves safe attributes through normalization", () => {
+    const tree = normalizeElementTree(
+      rawCustomComponentTree({
+        enabled: true,
+        html: "<p>hi</p>",
+        attributes: { "data-x": "y", "aria-label": "w", href: "https://example.com" },
+      }),
+    );
+    expect(tree).not.toBeNull();
+    if (!tree) return;
+    expect(tree.nodes.sec.customCode?.enabled).toBe(true);
+    expect(tree.nodes.sec.customCode?.html).toBe("<p>hi</p>");
+    expect(tree.nodes.sec.customCode?.attributes).toEqual({
+      "data-x": "y",
+      "aria-label": "w",
+      href: "https://example.com",
+    });
+  });
+
+  it("drops unsafe attribute values (javascript: strings) during normalization", () => {
+    const tree = normalizeElementTree(
+      rawCustomComponentTree({
+        enabled: true,
+        attributes: { href: "javascript:alert(1)", "data-x": "ok" },
+      }),
+    );
+    expect(tree).not.toBeNull();
+    if (!tree) return;
+    // sanitizeJson drops the javascript: value; the safe sibling survives.
+    expect(tree.nodes.sec.customCode?.attributes).toEqual({ "data-x": "ok" });
+  });
+
+  it("drops the whole customCode field (not the node) when attributes carry an event handler", () => {
+    const tree = normalizeElementTree(
+      rawCustomComponentTree({
+        enabled: true,
+        attributes: { onclick: "alert(1)", "data-x": "y" },
+      }),
+    );
+    expect(tree).not.toBeNull();
+    if (!tree) return;
+    // The event handler fails the schema safety boundary, so the metadata
+    // field is dropped while the node survives (normalizer repair policy).
+    expect(tree.nodes.sec.customCode).toBeUndefined();
+    expect(tree.nodes.sec.id).toBe("sec");
   });
 });
 
