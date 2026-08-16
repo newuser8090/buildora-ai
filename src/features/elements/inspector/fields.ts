@@ -452,7 +452,7 @@ export function customCodeField(): InspectorFieldDef {
     kind: "custom-code",
     source: "customCode",
     key: "customCode",
-    hint: "Advanced HTML/CSS/JS — runs only in the published site",
+    hint: "Advanced HTML/CSS/JS — runs inside a sandboxed frame (preview and published site)",
   };
 }
 

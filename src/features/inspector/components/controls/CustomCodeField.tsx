@@ -11,8 +11,9 @@
 // Security/UX contract:
 //   - Enabling custom code ALWAYS requires an explicit confirmation: the
 //     enable action opens an inline confirmation panel carrying the persistent
-//     warning — custom code runs ONLY in the published site inside a sandboxed
-//     frame and never in the editor, preview, or share.
+//     warning — custom code runs ONLY inside a sandboxed frame (the P23-J
+//     authoring preview and the published site) and never in the editor
+//     canvas, visitor preview, or share.
 //   - The warning stays visible (persistent banner) while custom code is
 //     enabled, and inside the confirmation panel.
 //   - `enabled` defaults false. Typing code never enables anything — the
@@ -26,11 +27,13 @@
 //     ElementCustomCodeSchema re-validates at the mutation boundary (defense
 //     in depth).
 //   - Removing commits null (deletes customCode from the node entirely).
-//   - No iframe, no srcDoc, no execution surface anywhere in this control.
+//   - The control itself is inert. The P23-J Preview section (opt-in, shown
+//     only for enabled code) mounts the SAME sandboxed iframe the published
+//     site uses — the editor document never executes custom code.
 // ---------------------------------------------------------------------------
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Code2, Plus, ShieldAlert, Trash2, X } from "lucide-react";
+import { Code2, Eye, Plus, ShieldAlert, Trash2, X } from "lucide-react";
 import { cn } from "@/utils/cn";
 import { useCommittedDraft } from "@/features/inspector/hooks/useCommittedDraft";
 import type { InspectorFieldDef } from "@/features/elements/inspector/types";
@@ -47,15 +50,16 @@ import {
   attributeValueProblem,
   normalizeAttributeName,
 } from "@/features/elements/custom-code/attribute-validation";
-import { FieldShell } from "./primitives";
+import { ChevronIcon, FieldShell } from "./primitives";
+import { CustomCodePreview } from "./CustomCodePreview";
 
 // ---------------------------------------------------------------------------
 // The persistent warning (P23-D D3)
 // ---------------------------------------------------------------------------
 
 export const CUSTOM_CODE_WARNING =
-  "Custom code runs only in the published site, inside a sandboxed frame. " +
-  "It never runs in the editor, preview, or share.";
+  "Custom code runs only inside a sandboxed frame — in this preview and the " +
+  "published site. It never runs in the editor canvas, visitor preview, or share.";
 
 const CODE_FIELDS = [
   { key: "html", label: "HTML", placeholder: "<div>…</div>" },
@@ -182,6 +186,8 @@ export function CustomCodeField({
   const enabled = code?.enabled === true;
   const [confirming, setConfirming] = useState(false);
   const [aggregateError, setAggregateError] = useState<string | null>(null);
+  // P23-J — opt-in sandboxed authoring preview (mounted only while expanded).
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   const htmlDraft = useCommittedDraft<string>(code?.html ?? "");
   const cssDraft = useCommittedDraft<string>(code?.css ?? "");
@@ -568,6 +574,36 @@ export function CustomCodeField({
         </button>
       </div>
 
+      {/* P23-J — safe authoring preview (sandboxed frame, opt-in, enabled only) */}
+      {enabled && (
+        <div className="border-t border-border/60 pt-2">
+          <button
+            type="button"
+            data-testid="custom-code-preview-toggle"
+            aria-expanded={previewOpen}
+            aria-controls="custom-code-preview-panel"
+            onClick={() => setPreviewOpen((open) => !open)}
+            className="flex h-7 w-full items-center justify-between gap-2 rounded-md border border-border bg-card/40 px-2 text-[11px] font-medium text-text-muted transition-colors hover:border-accent/50 hover:text-text-primary"
+          >
+            <span className="flex items-center gap-1.5">
+              <Eye className="h-3 w-3" />
+              Preview
+            </span>
+            <ChevronIcon
+              className={cn(
+                "h-3 w-3 transition-transform",
+                previewOpen && "rotate-180",
+              )}
+            />
+          </button>
+          {previewOpen && (
+            <div id="custom-code-preview-panel" className="mt-2">
+              <CustomCodePreview code={code} />
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="flex items-center justify-between gap-2">
         <span
           data-testid="custom-code-total"
@@ -631,8 +667,10 @@ export function CustomCodeField({
       {warning}
       <p className="text-[11px] leading-snug text-text-dim">
         Code you write here will run for visitors of the published site. It is
-        sandboxed, but you are responsible for what it does. Editor, preview,
-        and share views always show a placeholder instead.
+        sandboxed, but you are responsible for what it does. The editor canvas,
+        visitor preview, and share views always show a placeholder; the Preview
+        toggle here runs your code inside the same sandboxed frame the
+        published site uses.
       </p>
       <div className="flex items-center justify-end gap-1.5">
         <button

@@ -351,3 +351,43 @@ describe("CustomCodeField — attributes editor (P23-F)", () => {
     expect((screen.getByTestId("custom-code-attr-value-0") as HTMLInputElement).value).toBe("y");
   });
 });
+
+describe("CustomCodeField — authoring preview toggle (P23-J)", () => {
+  it("shows no preview toggle when no payload exists", () => {
+    renderField(undefined);
+    expect(screen.queryByTestId("custom-code-preview-toggle")).toBeNull();
+  });
+
+  it("shows no preview toggle for a disabled (legacy) payload", () => {
+    renderField({ css: "p{}", js: "x()" });
+    expect(screen.queryByTestId("custom-code-preview-toggle")).toBeNull();
+  });
+
+  it("shows a collapsed preview toggle for enabled code (inert until opened)", () => {
+    renderField({ enabled: true, css: "p{}" });
+    const toggle = screen.getByTestId("custom-code-preview-toggle");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.getAttribute("aria-controls")).toBe("custom-code-preview-panel");
+    // Collapsed by default — no iframe/runtime is mounted.
+    expect(screen.queryByTestId("custom-code-preview")).toBeNull();
+  });
+
+  it("expands to mount the sandboxed preview and collapses to dispose it", () => {
+    renderField({ enabled: true, css: "p{}", html: "<b>hi</b>" });
+    const toggle = screen.getByTestId("custom-code-preview-toggle");
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    const preview = screen.getByTestId("custom-code-preview");
+    const frame = preview.querySelector("iframe");
+    expect(frame).toBeTruthy();
+    // The preview uses the authoritative allow-scripts-only sandbox — never
+    // allow-same-origin — and renders the export srcdoc data.
+    expect(frame!.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame!.getAttribute("sandbox")).not.toContain("allow-same-origin");
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByTestId("custom-code-preview")).toBeNull();
+  });
+});
