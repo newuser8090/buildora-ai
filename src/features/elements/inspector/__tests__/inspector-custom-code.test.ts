@@ -285,3 +285,118 @@ describe("applyInspectorFieldChange — customCode source (P23-D)", () => {
     expect(result.value.nodes.h1.customCode).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// P23-F — attribute authoring through the mutate boundary
+// ---------------------------------------------------------------------------
+
+describe("validateInspectorFieldValue — custom-code attributes (P23-F)", () => {
+  const field = customCodeField();
+
+  it("accepts legitimate attributes (aria-*, data-*, class, …)", () => {
+    const result = validateInspectorFieldValue(field, {
+      enabled: true,
+      css: "p{}",
+      attributes: {
+        "aria-label": "Widget",
+        "data-count": "3",
+        class: "hero",
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toMatchObject({
+        enabled: true,
+        css: "p{}",
+        attributes: { "aria-label": "Widget", "data-count": "3", class: "hero" },
+      });
+    }
+  });
+
+  it("rejects event-handler attributes", () => {
+    const result = validateInspectorFieldValue(field, {
+      enabled: true,
+      attributes: { onclick: "alert(1)" },
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects javascript: URL values for URL-bearing attributes", () => {
+    const result = validateInspectorFieldValue(field, {
+      enabled: true,
+      attributes: { href: "javascript:alert(1)" },
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects malformed attribute names", () => {
+    const result = validateInspectorFieldValue(field, {
+      attributes: { "bad key": "v" },
+    });
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe("applyInspectorFieldChange — custom-code attributes (P23-F)", () => {
+  it("writes safe attributes through the whole-object path", () => {
+    const result = applyInspectorFieldChange(
+      headingTree(),
+      "h1",
+      schemaField("heading"),
+      { enabled: true, css: "p{}", attributes: { "data-x": "y" } },
+      "base",
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.nodes.h1.customCode?.enabled).toBe(true);
+    expect(result.value.nodes.h1.customCode?.css).toBe("p{}");
+    expect(result.value.nodes.h1.customCode?.attributes).toEqual({ "data-x": "y" });
+  });
+
+  it("editing attributes preserves the existing code fields", () => {
+    const seeded = updateElementCustomCode(headingTree(), "h1", {
+      enabled: true,
+      html: "<b>keep</b>",
+      attributes: { "data-x": "1" },
+    });
+    if (!seeded.ok) throw new Error("seed failed");
+    const result = applyInspectorFieldChange(
+      seeded.value,
+      "h1",
+      schemaField("heading"),
+      { enabled: true, html: "<b>keep</b>", attributes: { "data-x": "2", "aria-label": "w" } },
+      "base",
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.nodes.h1.customCode?.html).toBe("<b>keep</b>");
+    expect(result.value.nodes.h1.customCode?.attributes).toEqual({
+      "data-x": "2",
+      "aria-label": "w",
+    });
+  });
+
+  it("rejects event-handler attributes with a structured error", () => {
+    const result = applyInspectorFieldChange(
+      headingTree(),
+      "h1",
+      schemaField("heading"),
+      { enabled: true, attributes: { onload: "x()" } },
+      "base",
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("ELEMENT_TREE_INVALID");
+  });
+
+  it("rejects javascript: URL values with a structured error", () => {
+    const result = applyInspectorFieldChange(
+      headingTree(),
+      "h1",
+      schemaField("heading"),
+      { enabled: true, attributes: { src: "javascript:alert(1)" } },
+      "base",
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("ELEMENT_TREE_INVALID");
+  });
+});

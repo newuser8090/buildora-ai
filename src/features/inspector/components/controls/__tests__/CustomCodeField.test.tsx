@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // ---------------------------------------------------------------------------
-// Phase P23-D — CustomCodeField component
+// Phase P23-D + P23-F — CustomCodeField component
 //   - no payload → Add custom code; enabling requires an explicit confirmation
 //   - the confirmation carries the persistent warning; cancel never commits
 //   - the warning stays visible (persistent) while custom code is enabled
@@ -8,7 +8,9 @@
 //   - per-field counters (20k) and an aggregate counter (48k) are shown
 //   - over-aggregate edits are blocked with an error (no commit)
 //   - disable keeps the payload inert; remove commits null
-//   - the attributes editor is NOT present (deferred in P23-D)
+//   - Phase P23-F — a safe Attributes authoring section: add/edit/remove
+//     (name/value rows), empty state, per-row rejection of event handlers,
+//     reserved shell attributes, malformed names, and javascript: URLs
 // ---------------------------------------------------------------------------
 
 import { describe, it, expect, vi } from "vitest";
@@ -17,6 +19,7 @@ import { CustomCodeField, CUSTOM_CODE_WARNING } from "../CustomCodeField";
 import type { InspectorFieldDef } from "@/features/elements/inspector/types";
 import type { ElementCustomCode } from "@/features/elements/types";
 import {
+  ELEMENT_MAX_ATTRIBUTES,
   ELEMENT_MAX_CUSTOM_CODE_LENGTH,
   ELEMENT_MAX_CUSTOM_CODE_TOTAL,
 } from "@/features/elements/schemas/element-schemas";
@@ -148,7 +151,7 @@ describe("CustomCodeField — textareas, counters, limits (P23-D)", () => {
   });
 });
 
-describe("CustomCodeField — disable / remove / no attributes (P23-D)", () => {
+describe("CustomCodeField — disable / remove (P23-D)", () => {
   it("disable keeps the payload but commits enabled:false", () => {
     const onCommit = vi.fn(() => true);
     renderField({ enabled: true, css: "p{}" }, onCommit);
@@ -162,12 +165,189 @@ describe("CustomCodeField — disable / remove / no attributes (P23-D)", () => {
     fireEvent.click(screen.getByTestId("custom-code-remove"));
     expect(onCommit).toHaveBeenCalledWith(null);
   });
+});
 
-  it("does NOT expose an attributes editor (deferred in P23-D)", () => {
+describe("CustomCodeField — attributes editor (P23-F)", () => {
+  it("shows an empty state and an add button when no attributes exist", () => {
+    renderField({ enabled: true });
+    expect(screen.getByTestId("custom-code-attributes")).toBeTruthy();
+    expect(screen.getByTestId("custom-code-attributes-empty")).toBeTruthy();
+    expect(screen.getByTestId("custom-code-attr-add")).toBeTruthy();
+    expect(screen.getByTestId("custom-code-attr-count").textContent).toContain("0 /");
+  });
+
+  it("renders existing attribute rows (sorted) from the payload", () => {
+    renderField({ enabled: true, attributes: { "aria-label": "Widget", "data-id": "42" } });
+    expect((screen.getByTestId("custom-code-attr-name-0") as HTMLInputElement).value).toBe("aria-label");
+    expect((screen.getByTestId("custom-code-attr-value-0") as HTMLInputElement).value).toBe("Widget");
+    expect((screen.getByTestId("custom-code-attr-name-1") as HTMLInputElement).value).toBe("data-id");
+    expect((screen.getByTestId("custom-code-attr-value-1") as HTMLInputElement).value).toBe("42");
+  });
+
+  it("adds an attribute and commits name + value", () => {
+    const onCommit = vi.fn(() => true);
+    renderField({ enabled: true, html: "<div></div>" }, onCommit);
+    fireEvent.click(screen.getByTestId("custom-code-attr-add"));
+    const nameInput = screen.getByTestId("custom-code-attr-name-0") as HTMLInputElement;
+    const valueInput = screen.getByTestId("custom-code-attr-value-0") as HTMLInputElement;
+    fireEvent.change(nameInput, { target: { value: "data-x" } });
+    fireEvent.blur(nameInput);
+    expect(onCommit).toHaveBeenLastCalledWith({
+      enabled: true,
+      html: "<div></div>",
+      attributes: { "data-x": "" },
+    });
+    fireEvent.change(valueInput, { target: { value: "y" } });
+    fireEvent.blur(valueInput);
+    expect(onCommit).toHaveBeenLastCalledWith({
+      enabled: true,
+      html: "<div></div>",
+      attributes: { "data-x": "y" },
+    });
+  });
+
+  it("edits an attribute value and commits", () => {
+    const onCommit = vi.fn(() => true);
+    renderField({ enabled: true, attributes: { "data-x": "y" } }, onCommit);
+    const valueInput = screen.getByTestId("custom-code-attr-value-0") as HTMLInputElement;
+    fireEvent.change(valueInput, { target: { value: "z" } });
+    fireEvent.blur(valueInput);
+    expect(onCommit).toHaveBeenCalledWith({
+      enabled: true,
+      attributes: { "data-x": "z" },
+    });
+  });
+
+  it("renames an attribute (old key removed, value preserved)", () => {
+    const onCommit = vi.fn(() => true);
+    renderField({ enabled: true, attributes: { "data-x": "y" } }, onCommit);
+    const nameInput = screen.getByTestId("custom-code-attr-name-0") as HTMLInputElement;
+    fireEvent.change(nameInput, { target: { value: "data-y" } });
+    fireEvent.blur(nameInput);
+    expect(onCommit).toHaveBeenCalledWith({
+      enabled: true,
+      attributes: { "data-y": "y" },
+    });
+  });
+
+  it("removes an attribute and commits the remaining set", () => {
+    const onCommit = vi.fn(() => true);
+    renderField({ enabled: true, attributes: { "aria-label": "w", "data-x": "y" } }, onCommit);
+    fireEvent.click(screen.getByTestId("custom-code-attr-remove-0")); // aria-label sorts first
+    expect(onCommit).toHaveBeenCalledWith({
+      enabled: true,
+      attributes: { "data-x": "y" },
+    });
+  });
+
+  it("removing the last attribute drops the attributes key", () => {
+    const onCommit = vi.fn(() => true);
+    renderField({ enabled: true, attributes: { "data-x": "y" } }, onCommit);
+    fireEvent.click(screen.getByTestId("custom-code-attr-remove-0"));
+    expect(onCommit).toHaveBeenCalledWith({ enabled: true });
+  });
+
+  it("rejects an empty attribute name without committing", () => {
+    const onCommit = vi.fn(() => true);
+    renderField({ enabled: true }, onCommit);
+    fireEvent.click(screen.getByTestId("custom-code-attr-add"));
+    fireEvent.blur(screen.getByTestId("custom-code-attr-name-0"));
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(screen.getByTestId("custom-code-attr-error")).toBeTruthy();
+  });
+
+  it("rejects event-handler attribute names without committing", () => {
+    const onCommit = vi.fn(() => true);
+    renderField({ enabled: true }, onCommit);
+    fireEvent.click(screen.getByTestId("custom-code-attr-add"));
+    const nameInput = screen.getByTestId("custom-code-attr-name-0") as HTMLInputElement;
+    fireEvent.change(nameInput, { target: { value: "onclick" } });
+    fireEvent.blur(nameInput);
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(screen.getByTestId("custom-code-attr-error").textContent).toContain("on");
+  });
+
+  it("rejects the reserved style attribute", () => {
+    const onCommit = vi.fn(() => true);
+    renderField({ enabled: true }, onCommit);
+    fireEvent.click(screen.getByTestId("custom-code-attr-add"));
+    const nameInput = screen.getByTestId("custom-code-attr-name-0") as HTMLInputElement;
+    fireEvent.change(nameInput, { target: { value: "style" } });
+    fireEvent.blur(nameInput);
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(screen.getByTestId("custom-code-attr-error")).toBeTruthy();
+  });
+
+  it("rejects the reserved srcdoc attribute", () => {
+    const onCommit = vi.fn(() => true);
+    renderField({ enabled: true }, onCommit);
+    fireEvent.click(screen.getByTestId("custom-code-attr-add"));
+    const nameInput = screen.getByTestId("custom-code-attr-name-0") as HTMLInputElement;
+    fireEvent.change(nameInput, { target: { value: "srcdoc" } });
+    fireEvent.blur(nameInput);
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(screen.getByTestId("custom-code-attr-error")).toBeTruthy();
+  });
+
+  it("rejects javascript: values for URL-bearing attributes without committing", () => {
+    const onCommit = vi.fn(() => true);
+    renderField({ enabled: true }, onCommit);
+    fireEvent.click(screen.getByTestId("custom-code-attr-add"));
+    const nameInput = screen.getByTestId("custom-code-attr-name-0") as HTMLInputElement;
+    fireEvent.change(nameInput, { target: { value: "href" } });
+    fireEvent.blur(nameInput);
+    expect(onCommit).toHaveBeenLastCalledWith({ enabled: true, attributes: { href: "" } });
+    const valueInput = screen.getByTestId("custom-code-attr-value-0") as HTMLInputElement;
+    fireEvent.change(valueInput, { target: { value: "javascript:alert(1)" } });
+    fireEvent.blur(valueInput);
+    expect(onCommit).toHaveBeenCalledTimes(1); // only the name commit went through
+    expect(screen.getByTestId("custom-code-attr-error").textContent).toContain("javascript");
+  });
+
+  it("accepts legitimate aria-* and data-* attributes", () => {
+    const onCommit = vi.fn(() => true);
+    renderField({ enabled: true, attributes: { "data-id": "7" } }, onCommit);
+    const nameInput = screen.getByTestId("custom-code-attr-name-0") as HTMLInputElement;
+    fireEvent.change(nameInput, { target: { value: "aria-label" } });
+    fireEvent.blur(nameInput);
+    expect(onCommit).toHaveBeenLastCalledWith({
+      enabled: true,
+      attributes: { "aria-label": "7" },
+    });
+  });
+
+  it("caps the attribute count at the schema limit", () => {
+    const attributes: Record<string, string> = {};
+    for (let i = 0; i < ELEMENT_MAX_ATTRIBUTES; i += 1) attributes[`k${i}`] = "v";
+    renderField({ enabled: true, attributes });
+    const add = screen.getByTestId("custom-code-attr-add") as HTMLButtonElement;
+    expect(add.disabled).toBe(true);
+    expect(screen.getByTestId("custom-code-attr-count").textContent).toContain(
+      `${ELEMENT_MAX_ATTRIBUTES} / ${ELEMENT_MAX_ATTRIBUTES}`,
+    );
+  });
+
+  it("attribute edits preserve the code payload", () => {
+    const onCommit = vi.fn(() => true);
+    renderField(
+      { enabled: true, html: "<p>hi</p>", css: "p {}", attributes: { "data-x": "y" } },
+      onCommit,
+    );
+    const valueInput = screen.getByTestId("custom-code-attr-value-0") as HTMLInputElement;
+    fireEvent.change(valueInput, { target: { value: "z" } });
+    fireEvent.blur(valueInput);
+    expect(onCommit).toHaveBeenCalledWith({
+      enabled: true,
+      html: "<p>hi</p>",
+      css: "p {}",
+      attributes: { "data-x": "z" },
+    });
+  });
+
+  it("shows the attributes editor instead of hiding it (P23-F)", () => {
     renderField({ enabled: true, attributes: { "data-x": "y" } });
-    expect(screen.queryByText(/attributes/i)).toBeNull();
-    expect(screen.queryByTestId(/custom-code-attr/)).toBeNull();
-    // Only the three code textareas exist.
-    expect(screen.getAllByRole("textbox")).toHaveLength(3);
+    expect(screen.getByTestId("custom-code-attributes")).toBeTruthy();
+    expect((screen.getByTestId("custom-code-attr-name-0") as HTMLInputElement).value).toBe("data-x");
+    expect((screen.getByTestId("custom-code-attr-value-0") as HTMLInputElement).value).toBe("y");
   });
 });

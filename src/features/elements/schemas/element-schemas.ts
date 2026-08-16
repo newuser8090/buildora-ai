@@ -17,6 +17,11 @@
 
 import { z } from "zod";
 import { ALL_BLOCK_TYPES } from "@/features/blocks/registry/default-blocks";
+import {
+  MAX_ATTRIBUTE_NAME_LENGTH,
+  MAX_ATTRIBUTE_VALUE_LENGTH,
+  firstCustomCodeAttributeProblem,
+} from "../custom-code/attribute-validation";
 import { ELEMENT_ONLY_TYPES } from "../types";
 import type { ElementStyleTokens, ElementTree } from "../types";
 
@@ -281,11 +286,28 @@ export const ElementCustomCodeSchema = z
     js: z.string().max(ELEMENT_MAX_CUSTOM_CODE_LENGTH).optional(),
     html: z.string().max(ELEMENT_MAX_CUSTOM_CODE_LENGTH).optional(),
     attributes: z
-      .record(z.string().max(128), z.string().max(2048))
+      .record(
+        z.string().max(MAX_ATTRIBUTE_NAME_LENGTH),
+        z.string().max(MAX_ATTRIBUTE_VALUE_LENGTH),
+      )
       .refine(
         (record) => Object.keys(record).length <= ELEMENT_MAX_ATTRIBUTES,
         { message: "Too many custom attributes." },
       )
+      // Phase P23-F — attribute safety at the shared schema boundary: event
+      // handlers, reserved shell attributes, malformed names, and script-
+      // capable URL values are rejected here (the single boundary used by
+      // the inspector, the element ops, and the export re-validation).
+      .superRefine((record, ctx) => {
+        const problem = firstCustomCodeAttributeProblem(record);
+        if (problem) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["attributes"],
+            message: problem,
+          });
+        }
+      })
       .optional(),
   })
   .refine(
