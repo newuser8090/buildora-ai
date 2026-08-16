@@ -1,38 +1,7 @@
 "use client";
 
 // ---------------------------------------------------------------------------
-// CustomCodePreview (Phase P23-J) — safe authoring preview for custom code
-//
-// Renders the EXACT document the published site will execute — built through
-// the SINGLE authoritative srcdoc path (buildValidatedCustomCodeSrcdoc:
-// schema validation → explicit `enabled === true` → deterministic clamping →
-// buildCustomCodeDocument) — inside the SAME sandboxed iframe the export
-// uses (allow-scripts ONLY; opaque origin; never allow-same-origin).
-//
-// Security/isolation contract (all inherited from the tested runtime
-// foundation — nothing here invents new policy):
-//   - The editor document stays INERT: custom code executes only inside this
-//     sandboxed frame, never in the editor page itself. The canvas
-//     BlockRenderer placeholder is unchanged.
-//   - The frame carries the authoritative SANDBOX_POLICY ("allow-scripts")
-//     and the srcdoc carries the approved SANDBOX_CSP.
-//   - The parent-side runtime controller (createCustomCodeRuntime, P23-G/H)
-//     is wired in for the first time: source fencing (only THIS frame's
-//     contentWindow may drive the runtime), allow-listed payload validation,
-//     one bounded heartbeat, bounded recovery, idempotent disposal.
-//   - Per-instance isolation (P23-G/I): the frame is keyed by its srcdoc, so
-//     ANY payload change (html/css/js/attributes/enabled) remounts a fresh
-//     frame and deterministically disposes the previous runtime.
-//   - Bounded height propagation (P23-I): validated heights are
-//     change-detected and coalesced into at most ONE write per
-//     HEIGHT_COALESCE_MS window (reuses the shared constant — no duplicated
-//     policy).
-//   - Safe observability (P23-H): only the lifecycle status and the
-//     protocol-sanitized error message surface; never raw payloads,
-//     exception objects, or frame references.
-//   - No eval, no new Function, no dangerouslySetInnerHTML, no global
-//     runtime state — every timer/listener is owned by one mount and cleared
-//     on unmount.
+// CustomCodePreview (Phase P23-J/K) — safe authoring preview for custom code
 // ---------------------------------------------------------------------------
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -65,8 +34,6 @@ export interface CustomCodePreviewProps {
 export function CustomCodePreview({ code }: CustomCodePreviewProps) {
   const srcdoc = useMemo(() => buildValidatedCustomCodeSrcdoc(code), [code]);
 
-  // Disabled/absent/malformed code produces NO runtime document — the preview
-  // is inert and explains why (never a blank or executing frame).
   if (srcdoc === null) {
     return (
       <div
@@ -79,8 +46,7 @@ export function CustomCodePreview({ code }: CustomCodePreviewProps) {
     );
   }
 
-  // Keying by the srcdoc remounts a FRESH frame + runtime on every payload
-  // change, so a stale instance can never affect the new one (P23-G/I).
+  // Keying by srcdoc remounts a fresh frame + runtime for every payload change.
   return <CustomCodePreviewFrame key={srcdoc} srcdoc={srcdoc} />;
 }
 
@@ -91,43 +57,53 @@ function CustomCodePreviewFrame({ srcdoc }: { srcdoc: string }) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    // Per-mount height scheduler (P23-I): validated heights are
-    // change-detected and coalesced into at most ONE state write per
-    // HEIGHT_COALESCE_MS window, so a chatty/hostile frame cannot cause
-    // layout thrashing or unbounded re-renders. The latest height always
-    // wins; normal dynamic resizing is preserved.
     let pendingHeight: number | null = null;
     let heightTimer: ReturnType<typeof setTimeout> | undefined;
+    let pendingError: string | null = null;
+    let errorTimer: ReturnType<typeof setTimeout> | undefined;
 
     const flushHeight = () => {
       heightTimer = undefined;
       if (pendingHeight === null) return;
       const next = pendingHeight;
       pendingHeight = null;
-      setHeight(next);
+      setHeight((previous) => (previous === next ? previous : next));
     };
 
-    const scheduleHeight = (h: number) => {
-      if (pendingHeight === h) return; // change detection — no-op repeats
-      pendingHeight = h;
+    const scheduleHeight = (nextHeight: number) => {
+      if (pendingHeight === nextHeight) return;
+      pendingHeight = nextHeight;
       if (heightTimer !== undefined) clearTimeout(heightTimer);
       heightTimer = setTimeout(flushHeight, HEIGHT_COALESCE_MS);
     };
 
-    // One runtime controller per mount (the tested P23-G/H reference). The
-    // content window is read FRESH for every message so the source check
-    // always compares against the CURRENT frame — a replaced frame's old
-    // window can never match.
+    // P23-K: runtime errors are coalesced at the same bounded cadence as
+    // heights. Runtime state/diagnostics remain immediate, but the authoring
+    // UI performs at most one error-text state write per window. The latest
+    // sanitized error wins, and identical repeats are ignored.
+    const flushError = () => {
+      errorTimer = undefined;
+      const next = pendingError;
+      pendingError = null;
+      if (next === null) return;
+      setErrorMessage((previous) => (previous === next ? previous : next));
+    };
+
+    const scheduleError = (message: string) => {
+      if (pendingError === message) return;
+      pendingError = message;
+      if (errorTimer !== undefined) clearTimeout(errorTimer);
+      errorTimer = setTimeout(flushError, HEIGHT_COALESCE_MS);
+    };
+
     const runtime = createCustomCodeRuntime({
       getContentWindow: () => iframeRef.current?.contentWindow ?? null,
       onStateChange: (next) => setStatus(next),
-      onHeight: (h) => scheduleHeight(h),
-      onError: (error) => setErrorMessage(error.message),
+      onHeight: (nextHeight) => scheduleHeight(nextHeight),
+      onError: (error) => scheduleError(error.message),
     });
 
     const onMessage = (event: MessageEvent) => {
-      // P23-I containment: a hostile/throwable event must never escape as an
-      // uncaught exception into the editor application.
       try {
         runtime.handleMessage(event.source, event.data);
       } catch {
@@ -142,7 +118,11 @@ function CustomCodePreviewFrame({ srcdoc }: { srcdoc: string }) {
       window.removeEventListener("message", onMessage);
       runtime.dispose();
       if (heightTimer !== undefined) clearTimeout(heightTimer);
+      if (errorTimer !== undefined) clearTimeout(errorTimer);
       heightTimer = undefined;
+      errorTimer = undefined;
+      pendingHeight = null;
+      pendingError = null;
     };
   }, []);
 
