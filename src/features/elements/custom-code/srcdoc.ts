@@ -267,9 +267,40 @@ export function buildCustomCodeDocument(
  * persisted data to an emitted srcdoc.
  */
 export function buildValidatedCustomCodeSrcdoc(code: unknown): string | null {
+  const parsed = parseEmittableCustomCode(code);
+  if (!parsed) return null;
+  return buildCustomCodeDocument(parsed);
+}
+
+/**
+ * The emission GATE, expressed once (Phase P25).
+ *
+ * A stored payload is emittable only when it is schema-valid AND explicitly
+ * enabled; anything else must never produce a runtime document. Returns the
+ * validated payload, or null.
+ *
+ * Keeping the gate here means the document builder and the validation-only
+ * predicate below can never disagree about which elements carry real custom
+ * code.
+ */
+function parseEmittableCustomCode(code: unknown): ElementCustomCode | null {
   if (code === undefined || code === null) return null;
   const parsed = ElementCustomCodeSchema.safeParse(code);
   if (!parsed.success) return null;
   if (parsed.data.enabled !== true) return null;
-  return buildCustomCodeDocument(parsed.data);
+  return parsed.data;
+}
+
+/**
+ * Validation-only form of the emission gate: true when a stored custom-code
+ * payload WOULD produce a runtime document.
+ *
+ * Render paths use this to decide whether an element is a custom-code element
+ * WITHOUT constructing (or ever executing) a sandbox document. It answers the
+ * exact question the export asks, so the editor canvas and the export pipeline
+ * cannot disagree about which elements carry emittable code — the parity rule
+ * of Phase P25 (decision D8).
+ */
+export function customCodeIsEmittable(code: unknown): boolean {
+  return parseEmittableCustomCode(code) !== null;
 }

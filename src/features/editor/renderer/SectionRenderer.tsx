@@ -2,6 +2,8 @@ import { createElement } from "react";
 import { sectionRegistry } from "@/features/editor/registry/section-registry";
 import { SelectableSection } from "@/features/editor/components/SelectableSection";
 import { ErrorBoundary } from "@/features/editor/components/ErrorBoundary";
+import { DurableTreeSection } from "@/features/editor/sections/DurableTreeSection";
+import { durableTreeEnablesCustomCode } from "@/features/elements/adapters/section-element-adapter";
 import { validateSectionSafe } from "@/features/editor/schemas/section-schemas";
 import { InlineEditPageProvider } from "@/features/inline-editing/context/InlineEditPageContext";
 import { InsertionPoint } from "@/features/guided-builder/components/InsertionPoint";
@@ -36,8 +38,37 @@ export interface SectionRendererProps {
 // Module-level helpers (outside of components, so they are stable)
 // ---------------------------------------------------------------------------
 
-/** Resolve a section component from the registry and render it. */
+/**
+ * Resolve how a section renders (Phase P25, decisions D1/D2/D8).
+ *
+ * Additive dispatch — exactly one of two paths, never a third state:
+ *
+ *   1. TREE PATH — a non-`custom-block` section whose durable tree carries
+ *      custom code that the export would emit renders through the block
+ *      runtime (`DurableTreeSection` → `BlockRenderer`), so the inert
+ *      custom-code placeholder is visible on the canvas. The predicate is the
+ *      SAME emission gate the export pipeline consults, so the section the
+ *      canvas renders as a tree is exactly the section the export emits as a
+ *      sandboxed frame (OQ-1 resolved export-aligned).
+ *   2. REGISTRY PATH — everything else, unchanged: `custom-block` keeps its
+ *      dedicated `CustomBlockSection` (itself a `BlockRenderer` surface), and
+ *      every other section keeps its props-driven component, so a durable
+ *      section WITHOUT custom code (and every legacy section) preserves its
+ *      bespoke layout byte-for-byte.
+ *
+ * `custom-block` is excluded from the tree path on purpose: its durable tree
+ * lives in `props.tree` and its registered component also carries the section
+ * chrome (empty-state, save-to-library). Routing it through the tree path would
+ * silently drop that behaviour.
+ */
 function resolveSectionComponent(section: BaseSection): ReactNode {
+  if (
+    section.type !== CUSTOM_BLOCK_SECTION_TYPE &&
+    durableTreeEnablesCustomCode(section)
+  ) {
+    return <DurableTreeSection section={section} />;
+  }
+
   const Component = sectionRegistry.get(section.type);
   if (!Component) {
     return (

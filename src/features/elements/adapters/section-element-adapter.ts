@@ -29,6 +29,7 @@ import {
   type BlockCommitResult,
 } from "@/features/blocks/adapters/section-block-adapter";
 import type { BlockNode, BlockTree, BlockResult } from "@/features/blocks/types";
+import { customCodeIsEmittable } from "../custom-code/srcdoc";
 import {
   SECTION_ELEMENT_ID_KEY,
   SECTION_ELEMENT_TYPE_KEY,
@@ -168,6 +169,29 @@ export function materializeSectionElement(
 /** True when a section already carries a durable element tree. */
 export function sectionHasDurableTree(section: BaseSection): boolean {
   return (section as SectionElement).tree !== undefined;
+}
+
+/**
+ * True when a section's DURABLE tree carries custom code that the export would
+ * actually emit — at least one node whose stored payload passes the shared
+ * emission gate (schema-valid + `enabled === true`).
+ *
+ * Phase P25 (decision D8) — the canvas and the export pipeline consult this
+ * SAME question, so the section the canvas renders as a tree runtime is exactly
+ * the section the export emits as a sandboxed frame. Scanning the durable tree
+ * is sufficient: the reconciliation pass only refreshes bound TEXT props, never
+ * `customCode`.
+ *
+ * Validation-only — it never builds, stores or executes a sandbox document,
+ * and never mutates the section. Legacy sections (no durable tree) are false.
+ */
+export function durableTreeEnablesCustomCode(section: BaseSection): boolean {
+  const tree = (section as SectionElement).tree;
+  if (!tree) return false;
+  for (const node of Object.values(tree.nodes)) {
+    if (customCodeIsEmittable(node.customCode)) return true;
+  }
+  return false;
 }
 
 /**
