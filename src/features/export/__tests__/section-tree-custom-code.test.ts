@@ -26,6 +26,7 @@ import { elementTreeToBlockTree } from "@/features/elements/adapters/section-ele
 import { ELEMENT_MAX_CUSTOM_CODE_LENGTH } from "@/features/elements/schemas/element-schemas";
 import { generatePageFile } from "../generators/page-generator";
 import { generateExportProject } from "../generators/project-generator";
+import { generateCustomBlockComponent } from "../generators/section-generators/custom-block-generator";
 import {
   buildSrcdocsForTreeRecord,
   projectNodeForExport,
@@ -404,6 +405,49 @@ describe("generatePageFile — durable section tree custom code (P24-C REQ-5)", 
     expect(content).toContain(`"h-hero":${encodedSrcdoc(ENABLED_CODE)}`);
     expect(content).toContain(`"p-hero":${encodedSrcdoc(second)}`);
     expect(encodedSrcdoc(ENABLED_CODE)).not.toBe(encodedSrcdoc(second));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Generated type fidelity (P24-C closeout)
+//
+// A section exported through the tree runtime emits the editor's FULL P22-G
+// interaction data. The generated BlockNode declaration must therefore accept
+// every authored interaction target, or the generated site fails its own
+// type-check on valid data. These assertions pin the declaration so it cannot
+// silently regress to a narrower shape.
+// ---------------------------------------------------------------------------
+
+describe("generated BlockNode — P22-G interaction type fidelity (P24-C closeout)", () => {
+  it("declares every authored click-action target", () => {
+    const { content } = generateCustomBlockComponent();
+    // navigate/scroll-to/toggle/open-modal/start-animation use target/elementId;
+    // submit-form and custom add their own target field.
+    expect(content).toContain("elementId?: string;");
+    expect(content).toContain("formId?: string;");
+    expect(content).toContain("handlerId?: string;");
+  });
+
+  it("declares the sticky/parallax scroll options", () => {
+    const { content } = generateCustomBlockComponent();
+    expect(content).toContain("offset?: number;");
+    expect(content).toContain("speed?: number;");
+  });
+
+  it("declares the nested hover/focus animations", () => {
+    const { content } = generateCustomBlockComponent();
+    // hover, focus and scroll each accept an embedded animation payload.
+    const occurrences = content.split("animation?: Record<string, unknown>;").length - 1;
+    expect(occurrences).toBeGreaterThanOrEqual(3);
+  });
+
+  it("keeps the widening type-only — the runtime still resolves a bounded set", () => {
+    const { content } = generateCustomBlockComponent();
+    // The sandbox capability model and the runtime entry points are unchanged.
+    expect(content).toContain("function CustomCodeFrame");
+    expect(content).toContain("event.source !== iframe.contentWindow");
+    expect(content).not.toContain("allow-same-origin");
+    expect(content).not.toContain("eval(");
   });
 });
 

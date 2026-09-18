@@ -66,11 +66,46 @@ export interface BlockNode {
     repeat?: "none" | "infinite" | number;
     direction?: string;
   } | null;
+  // Phase P24-C (closeout) — the declaration mirrors the FULL Phase P22-G
+  // interaction model so a tree emitted from the editor always type-checks.
+  // This is a TYPE-ONLY widening: the baEffective / baResolveClick helpers
+  // below still consume only the kinds they implement, and every extra field is inert
+  // data (an unsupported action degrades to a non-interactive render rather
+  // than failing the generated site's build).
   interaction?: {
-    click?: { kind: string; target?: Record<string, unknown>; elementId?: string } | null;
-    hover?: { color?: string; backgroundColor?: string; scale?: number; shadow?: string } | null;
-    focus?: { color?: string; backgroundColor?: string; scale?: number; shadow?: string } | null;
-    scroll?: { kind: string; animation?: Record<string, unknown> } | null;
+    click?: {
+      kind: string;
+      target?: Record<string, unknown>;
+      elementId?: string;
+      /** P22-G submit-form target (not resolved by this runtime). */
+      formId?: string;
+      /** P22-G registered custom handler id (not resolved by this runtime). */
+      handlerId?: string;
+    } | null;
+    hover?: {
+      color?: string;
+      backgroundColor?: string;
+      scale?: number;
+      shadow?: string;
+      /** P22-G hover-triggered animation. */
+      animation?: Record<string, unknown>;
+    } | null;
+    focus?: {
+      color?: string;
+      backgroundColor?: string;
+      scale?: number;
+      shadow?: string;
+      /** P22-G focus-triggered animation. */
+      animation?: Record<string, unknown>;
+    } | null;
+    scroll?: {
+      kind: string;
+      animation?: Record<string, unknown>;
+      /** P22-G sticky offset (not resolved by this runtime). */
+      offset?: number;
+      /** P22-G parallax speed (not resolved by this runtime). */
+      speed?: number;
+    } | null;
     load?: Record<string, unknown> | null;
   } | null;
   // Phase P23-C — custom-code opt-in flag (data only; the validated sandbox

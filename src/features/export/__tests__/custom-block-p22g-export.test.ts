@@ -24,10 +24,26 @@ describe("generateCustomBlockComponent — P22-G emission", () => {
   it("carries animation + interaction on the BlockNode interface", () => {
     expect(code).toContain("animation?: {");
     expect(code).toContain("interaction?: {");
-    expect(code).toContain("click?: { kind: string; target?: Record<string, unknown>; elementId?: string } | null");
-    expect(code).toContain("hover?: { color?: string; backgroundColor?: string; scale?: number; shadow?: string } | null");
-    expect(code).toContain("focus?: { color?: string; backgroundColor?: string; scale?: number; shadow?: string } | null");
-    expect(code).toContain("scroll?: { kind: string; animation?: Record<string, unknown> } | null");
+    // Phase P24-C closeout — the declaration is deliberately WIDER than the
+    // kinds this runtime resolves, so a tree emitted from the editor with the
+    // full P22-G interaction vocabulary still type-checks in the generated
+    // site (formId / handlerId / offset / speed / nested animations). These
+    // assertions therefore check the DECLARED MEMBERS rather than one-line
+    // formatting, which would break on every faithful widening of the type.
+    expect(code).toContain("click?: {");
+    expect(code).toContain("hover?: {");
+    expect(code).toContain("focus?: {");
+    expect(code).toContain("scroll?: {");
+    // P22-G members still present on the interaction surface.
+    expect(code).toContain("target?: Record<string, unknown>;");
+    expect(code).toContain("elementId?: string;");
+    expect(code).toContain("scale?: number;");
+    expect(code).toContain("shadow?: string;");
+    // P24-C widening — the remaining authored interaction targets.
+    expect(code).toContain("formId?: string;");
+    expect(code).toContain("handlerId?: string;");
+    expect(code).toContain("offset?: number;");
+    expect(code).toContain("speed?: number;");
   });
 
   it("emits keyframes for every supported preset", () => {
