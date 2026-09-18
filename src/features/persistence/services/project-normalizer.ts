@@ -8,6 +8,7 @@
 import type { Project } from "@/types/project";
 import { normalizeResponsiveDecisions } from "@/features/elements/responsive/decisions";
 import { normalizeCollections } from "@/features/elements/schemas/collection-schema";
+import { normalizeElementTree } from "@/features/elements/serialization/element-normalizer";
 import type { ProjectNormalizationResult } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -125,6 +126,19 @@ export function normalizeProject(input: unknown): ProjectNormalizationResult {
         if (typeof section.visible !== "boolean") section.visible = true;
         if (!section.props || typeof section.props !== "object") section.props = {};
         if (!section.styles || typeof section.styles !== "object") section.styles = {};
+        // Phase P24-B — durable element trees are accepted, preserved, and
+        // clamped through the shared element normalizer (depth/node/text caps,
+        // geometry/animation/interaction/binding/customCode validation). Trees
+        // too corrupt to repair are dropped — the section stays legacy and its
+        // props remain the content source. Never coerced, never invented.
+        if (section.tree !== undefined) {
+          const tree = normalizeElementTree(section.tree);
+          if (tree === null) {
+            delete section.tree;
+          } else {
+            section.tree = tree;
+          }
+        }
       }
     });
 

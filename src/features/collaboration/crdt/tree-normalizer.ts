@@ -29,6 +29,7 @@ import type { BaseSection } from "@/types/section";
 import type { BlockTree } from "@/features/blocks/types";
 import { normalizeResponsiveDecisions } from "@/features/elements/responsive/decisions";
 import { normalizeCollections } from "@/features/elements/schemas/collection-schema";
+import { normalizeElementTree } from "@/features/elements/serialization/element-normalizer";
 import {
   ElementAnimationSchema,
   ElementBindingSchema,
@@ -317,6 +318,16 @@ export function normalizeSections(sections: unknown): BaseSection[] {
         delete (section.props as Record<string, unknown>).tree;
       } else {
         (section.props as Record<string, unknown>).tree = tree;
+      }
+    }
+    // Phase P24-B — durable section-level element trees flow through the
+    // same protective normalization before CRDT projection (depth/node/text
+    // caps, element field clamps, malformed payloads sanitized). Old sections
+    // without the field normalize unchanged.
+    if (raw.tree !== undefined) {
+      const tree = normalizeElementTree(raw.tree);
+      if (tree !== null) {
+        section.tree = tree;
       }
     }
     out.push(section);

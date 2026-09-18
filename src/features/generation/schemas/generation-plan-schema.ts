@@ -3,6 +3,7 @@ import { AssetRefSchema } from "@/features/assets/schemas/asset-schema";
 import { SiteSettingsSchema } from "@/features/site-settings/schema";
 import { ResponsiveDecisionsSchema } from "@/features/elements/responsive/decisions";
 import { CollectionsSchema } from "@/features/elements/schemas/collection-schema";
+import { ElementTreeSchema } from "@/features/elements/schemas/element-schemas";
 import { validateSlug } from "@/features/routing/routes";
 
 // ---------------------------------------------------------------------------
@@ -147,6 +148,11 @@ const BaseSectionSchema = z.object({
   visible: z.boolean(),
   props: z.record(z.string(), z.unknown()),
   styles: z.record(z.string(), z.unknown()),
+  // Phase P24-B — optional durable element tree. Without this declared key the
+  // non-strict object would STRIP the tree at every ProjectSchema boundary
+  // (serializer, export validator, publish, templates, cloud save/load). The
+  // tree is validated here so corrupt payloads fail loudly instead of leaking.
+  tree: ElementTreeSchema.optional(),
 });
 
 const PageMetaSchema = z.object({

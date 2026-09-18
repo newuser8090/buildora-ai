@@ -40,7 +40,10 @@ import { simulatePlan } from "@/features/ai-editing/services/plan-simulator";
 import { updateEditableField } from "@/features/inline-editing/services/field-update";
 import type { EditableFieldDescriptor } from "@/features/inline-editing/types";
 import type { InlineFieldUpdateResult } from "@/features/inline-editing/types";
-import { blockTreeToSection } from "@/features/blocks/adapters/section-block-adapter";
+import {
+  blockTreeToSection,
+  isCustomBlockSection,
+} from "@/features/blocks/adapters/section-block-adapter";
 import type { BlockTree } from "@/features/blocks/types";
 import {
   elementTreeToSection,
@@ -51,10 +54,12 @@ import {
   ElementAnimationSchema,
   ElementInteractionSchema,
 } from "@/features/elements/schemas/element-schemas";
+import { normalizeElementTree } from "@/features/elements/serialization/element-normalizer";
 import type {
   ElementAnimation,
   ElementInteraction,
   ElementTree,
+  SectionElement,
 } from "@/features/elements/types";
 import type { ResponsiveDecision } from "@/features/elements/responsive/types";
 import {
@@ -318,6 +323,20 @@ export interface EditorState {
     tree: ElementTree,
   ) => EditorMutationResult;
 
+  // Section tree commit (Phase P24-B) — commit an element tree as the
+  // section's DURABLE tree. Regular sections persist `section.tree` (the tree
+  // becomes authoritative for element data; folded props stay in sync for
+  // legacy renderers), materializing legacy sections on the first real edit.
+  // Custom-block sections keep their existing props.tree fold path exactly.
+  // ONE withHistory entry; a no-op (unchanged durable tree / unchanged
+  // materialization) skips history. This is the persistence boundary the
+  // canvas/inspector element flows commit through once a tree is durable.
+  commitSectionTree: (
+    pageId: string,
+    sectionId: string,
+    tree: ElementTree,
+  ) => EditorMutationResult;
+
   // Phase P22-G — declarative element animations + interactions. Each update
   // validates through the shared P22-A schema boundary, applies ONE element op
   // to the freshest tree, and commits through commitElementTree as ONE atomic
@@ -429,6 +448,132 @@ function commitLocalProject(
     return {};
   }
   return { project: updated };
+}
+
+// ---------------------------------------------------------------------------
+// Phase P24-B — durable section-tree commit boundary
+// ---------------------------------------------------------------------------
+
+/**
+ * Key-order-insensitive deep equality for plain JSON values. Used for no-op
+ * detection on durable trees (JSON.stringify is key-order sensitive and would
+ * produce false "changed" results after schema re-parsing).
+ */
+function deepEqualJson(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== typeof b) return false;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false;
+    return a.every((value, index) => deepEqualJson(value, b[index]));
+  }
+  if (
+    a !== null && b !== null &&
+    typeof a === "object" && typeof b === "object" &&
+    !Array.isArray(a) && !Array.isArray(b)
+  ) {
+    const aKeys = Object.keys(a as Record<string, unknown>);
+    const bKeys = Object.keys(b as Record<string, unknown>);
+    if (aKeys.length !== bKeys.length) return false;
+    return aKeys.every((key) =>
+      deepEqualJson(
+        (a as Record<string, unknown>)[key],
+        (b as Record<string, unknown>)[key],
+      ),
+    );
+  }
+  return false;
+}
+
+type SectionTreeCommit =
+  | { ok: false; error: EditorMutationError }
+  | { ok: true; changed: false }
+  | {
+      ok: true;
+      changed: true;
+      /** The committed section (durable tree + synced props/styles). */
+      section: BaseSection;
+    };
+
+function pageNotFound(pageId: string): SectionTreeCommit {
+  return {
+    ok: false,
+    error: { code: "PAGE_NOT_FOUND", message: `Page "${pageId}" does not exist.` },
+  };
+}
+
+function sectionNotFound(sectionId: string): SectionTreeCommit {
+  return {
+    ok: false,
+    error: { code: "SECTION_NOT_FOUND", message: `Section "${sectionId}" does not exist.` },
+  };
+}
+
+function invalidTree(message: string): SectionTreeCommit {
+  return { ok: false, error: { code: "INVALID_TREE", message } };
+}
+
+/**
+ * Prepare a durable section-tree commit (pure — the caller applies it through
+ * withHistory as ONE history entry).
+ *
+ * Regular sections: the tree is repaired/clamped through the shared element
+ * normalizer and becomes the durable `section.tree`; the folded props stay in
+ * sync so legacy renderers show identical content. Custom-block sections keep
+ * the existing whole-tree fold path exactly (their authoritative tree already
+ * lives in props.tree) — never rewritten, never duplicated.
+ *
+ * No-op detection: a regular section is unchanged when the incoming tree deep-
+ * equals its durable tree, or (legacy section) when it deep-equals what the
+ * current props materialize to — so no-op commits never create useless history
+ * entries and never eagerly materialize legacy sections.
+ */
+function prepareSectionTreeCommit(
+  state: EditorState,
+  pageId: string,
+  sectionId: string,
+  tree: ElementTree,
+): SectionTreeCommit {
+  const page = state.project.pages.find((p) => p.id === pageId);
+  if (!page) return pageNotFound(pageId);
+  const section = page.sections.find((s) => s.id === sectionId);
+  if (!section) return sectionNotFound(sectionId);
+
+  // ---- Custom-block: existing fold path (unchanged behavior) ----
+  if (isCustomBlockSection(section)) {
+    const folded = elementTreeToSection(tree, section);
+    if (!folded.ok) return invalidTree(folded.error.message);
+    if (JSON.stringify(folded.value.section.props) === JSON.stringify(section.props)) {
+      return { ok: true, changed: false };
+    }
+    return { ok: true, changed: true, section: folded.value.section };
+  }
+
+  // ---- Regular sections: durable tree path ----
+  const normalized = normalizeElementTree(tree);
+  if (!normalized) {
+    return invalidTree("The element tree is too corrupt to repair.");
+  }
+  const folded = elementTreeToSection(normalized, section);
+  if (!folded.ok) return invalidTree(folded.error.message);
+
+  const durable = (section as SectionElement).tree;
+  if (durable) {
+    // Already durable — no-op only when the tree is truly unchanged.
+    if (deepEqualJson(durable, normalized)) return { ok: true, changed: false };
+  } else {
+    // Legacy — no-op when the tree is exactly what the current props
+    // materialize to (nothing new would be persisted).
+    const materialized = sectionToElementTree(section);
+    if (deepEqualJson(materialized, normalized)) return { ok: true, changed: false };
+  }
+
+  const durableSection: SectionElement = {
+    ...section,
+    tree: normalized,
+    props: folded.value.section.props,
+    styles: folded.value.section.styles,
+  };
+  return { ok: true, changed: true, section: durableSection };
 }
 
 /** Map a structure-layer error into an EditorMutationResult. */
@@ -1229,58 +1374,54 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     return { ok: true, changed: true };
   },
 
-  // ---- Element tree commit (Phase P22-B) ----
+  // ---- Element tree commit (Phase P22-B / P24-B) ----
   //
-  // The canvas manipulation layer folds its element tree back into the target
-  // section through the P22-A element adapter (which validates bindings AND
-  // the resulting section schema) as ONE history entry. Custom-block sections
-  // persist the whole tree (including element geometry); regular sections fold
-  // their bound fields. A no-op (identical props) skips history.
+  // The canvas manipulation / inspector layer commits its element tree
+  // through the P24-B durable boundary: regular sections persist the tree as
+  // `section.tree` (authoritative) with folded props kept in sync; custom-
+  // block sections keep their existing whole-tree props.tree fold. ONE
+  // history entry; a no-op skips history.
 
   commitElementTree: (pageId, sectionId, tree) => {
     if (!isEditorWritable()) return readonlyDenied();
-    const state = get();
-    const page = state.project.pages.find((p) => p.id === pageId);
-    if (!page) {
-      return {
-        ok: false,
-        error: { code: "PAGE_NOT_FOUND", message: `Page "${pageId}" does not exist.` },
-      };
-    }
-    const section = page.sections.find((s) => s.id === sectionId);
-    if (!section) {
-      return {
-        ok: false,
-        error: { code: "SECTION_NOT_FOUND", message: `Section "${sectionId}" does not exist.` },
-      };
-    }
-
-    const folded = elementTreeToSection(tree, section);
-    if (!folded.ok) {
-      return {
-        ok: false,
-        error: { code: "INVALID_TREE", message: folded.error.message },
-      };
-    }
-
-    // No-op detection by durable content: identical folded props mean no
-    // durable change (regular-section geometry folds nowhere today).
-    if (JSON.stringify(folded.value.section.props) === JSON.stringify(section.props)) {
-      return { ok: true, changed: false };
-    }
-
-    // Commit the folded section as ONE history entry. Selection is separate
-    // store state and is preserved untouched.
+    const commit = prepareSectionTreeCommit(get(), pageId, sectionId, tree);
+    if (!commit.ok) return { ok: false, error: commit.error };
+    if (!commit.changed) return { ok: true, changed: false };
+    const committed = commit.section;
     set(
-      withHistory(state, (project) => {
+      withHistory(get(), (project) => {
         for (const p of project.pages) {
           const idx = p.sections.findIndex((s) => s.id === sectionId);
           if (idx !== -1) {
-            p.sections[idx] = {
-              ...p.sections[idx],
-              props: folded.value.section.props,
-              styles: folded.value.section.styles,
-            };
+            p.sections[idx] = committed;
+            project.updatedAt = new Date().toISOString();
+            return;
+          }
+        }
+      }),
+    );
+    return { ok: true, changed: true };
+  },
+
+  // ---- Section tree commit (Phase P24-B) ----
+  //
+  // The dedicated durable-tree persistence boundary. Regular sections become
+  // durable on the first real edit (tree materialized + persisted), and all
+  // subsequent element-tree edits operate against the durable tree. Same
+  // withHistory / no-op semantics as commitElementTree.
+
+  commitSectionTree: (pageId, sectionId, tree) => {
+    if (!isEditorWritable()) return readonlyDenied();
+    const commit = prepareSectionTreeCommit(get(), pageId, sectionId, tree);
+    if (!commit.ok) return { ok: false, error: commit.error };
+    if (!commit.changed) return { ok: true, changed: false };
+    const committed = commit.section;
+    set(
+      withHistory(get(), (project) => {
+        for (const p of project.pages) {
+          const idx = p.sections.findIndex((s) => s.id === sectionId);
+          if (idx !== -1) {
+            p.sections[idx] = committed;
             project.updatedAt = new Date().toISOString();
             return;
           }
@@ -1346,23 +1487,19 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
         error: { code: "INVALID_TREE", message: applied.error.message },
       };
     }
-    const folded = elementTreeToSection(applied.value as ElementTree, section);
-    if (!folded.ok) {
-      return {
-        ok: false,
-        error: { code: "INVALID_TREE", message: folded.error.message },
-      };
-    }
+    // Phase P24-B — commit through the durable boundary so regular sections
+    // persist the tree (not just the folded props) and custom-block sections
+    // keep their existing whole-tree fold. One history entry; no-op skips.
+    const commit = prepareSectionTreeCommit(state, pageId, sectionId, applied.value as ElementTree);
+    if (!commit.ok) return { ok: false, error: commit.error };
+    if (!commit.changed) return { ok: true, changed: false };
+    const committed = commit.section;
     set(
       withHistory(state, (project) => {
         for (const p of project.pages) {
           const idx = p.sections.findIndex((s) => s.id === sectionId);
           if (idx !== -1) {
-            p.sections[idx] = {
-              ...p.sections[idx],
-              props: folded.value.section.props,
-              styles: folded.value.section.styles,
-            };
+            p.sections[idx] = committed;
             project.updatedAt = new Date().toISOString();
             return;
           }
@@ -1420,23 +1557,19 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
         error: { code: "INVALID_TREE", message: applied.error.message },
       };
     }
-    const folded = elementTreeToSection(applied.value as ElementTree, section);
-    if (!folded.ok) {
-      return {
-        ok: false,
-        error: { code: "INVALID_TREE", message: folded.error.message },
-      };
-    }
+    // Phase P24-B — commit through the durable boundary so regular sections
+    // persist the tree (not just the folded props) and custom-block sections
+    // keep their existing whole-tree fold. One history entry; no-op skips.
+    const commit = prepareSectionTreeCommit(state, pageId, sectionId, applied.value as ElementTree);
+    if (!commit.ok) return { ok: false, error: commit.error };
+    if (!commit.changed) return { ok: true, changed: false };
+    const committed = commit.section;
     set(
       withHistory(state, (project) => {
         for (const p of project.pages) {
           const idx = p.sections.findIndex((s) => s.id === sectionId);
           if (idx !== -1) {
-            p.sections[idx] = {
-              ...p.sections[idx],
-              props: folded.value.section.props,
-              styles: folded.value.section.styles,
-            };
+            p.sections[idx] = committed;
             project.updatedAt = new Date().toISOString();
             return;
           }

@@ -119,7 +119,8 @@ describe("Migrate — V1 → V2", () => {
     const result = migrateProjectEnvelope(v1);
     expect(result.applied).toContain("v1→v2");
     const envelope = result.data as Record<string, unknown>;
-    expect(envelope.formatVersion).toBe(2);
+    // Phase P24-B — v1 migrates through v2 (envelope) and v3 (version bump).
+    expect(envelope.formatVersion).toBe(CURRENT_FORMAT_VERSION);
     expect(envelope.project).toBeDefined();
     const projectData = envelope.project as Record<string, unknown>;
     expect(projectData.id).toBe("proj-1");
@@ -249,5 +250,91 @@ describe("Migrate — sequential application", () => {
     const result = migrateProjectEnvelope(v1);
     expect(result.applied.length).toBeGreaterThan(0);
     expect(result.applied[0]).toBe("v1→v2");
+  });
+});
+
+describe("Migrate — V2 → V3 (Phase P24-B durable trees)", () => {
+  function makeV2Project(overrides?: Record<string, unknown>): Record<string, unknown> {
+    return { formatVersion: 2, project: makeV1Project(overrides) };
+  }
+
+  it("bumps the version without rewriting any section", () => {
+    const v2 = makeV2Project();
+    const result = migrateProjectEnvelope(v2);
+    expect(result.applied).toContain("v2→v3");
+    const envelope = result.data as Record<string, unknown>;
+    expect(envelope.formatVersion).toBe(3);
+    const projectData = envelope.project as Record<string, unknown>;
+    const section = (projectData.pages as Record<string, unknown>[])[0]
+      .sections as Record<string, unknown>[];
+    // Legacy sections stay lazy — no tree is materialized by migration.
+    expect(section[0].tree).toBeUndefined();
+  });
+
+  it("sections without tree remain without tree", () => {
+    const v2 = makeV2Project();
+    const result = migrateProjectEnvelope(v2);
+    const projectData = (result.data as Record<string, unknown>)
+      .project as Record<string, unknown>;
+    for (const page of projectData.pages as Record<string, unknown>[]) {
+      for (const section of page.sections as Record<string, unknown>[]) {
+        expect(section.tree).toBeUndefined();
+      }
+    }
+  });
+
+  it("preserves unrelated fields and section content untouched", () => {
+    const v2 = makeV2Project({
+      id: "special-id",
+      createdAt: "2025-06-15T12:00:00.000Z",
+      updatedAt: "2025-06-15T12:00:00.000Z",
+    });
+    const result = migrateProjectEnvelope(v2);
+    const projectData = (result.data as Record<string, unknown>)
+      .project as Record<string, unknown>;
+    expect(projectData.id).toBe("special-id");
+    expect(projectData.createdAt).toBe("2025-06-15T12:00:00.000Z");
+    expect(projectData.updatedAt).toBe("2025-06-15T12:00:00.000Z");
+    const section = (projectData.pages as Record<string, unknown>[])[0]
+      .sections as Record<string, unknown>[];
+    expect((section[0].props as Record<string, unknown>).headline).toBe("Hello");
+  });
+
+  it("preserves an existing durable section tree verbatim", () => {
+    const tree = {
+      rootIds: ["s1"],
+      nodes: {
+        s1: {
+          id: "s1",
+          type: "container",
+          parentId: null,
+          children: [],
+          props: { _sectionType: "hero", _sectionId: "s1" },
+          style: {},
+          responsive: {},
+          visible: true,
+          locked: false,
+          hidden: false,
+          geometry: { mode: "flow", x: 10, y: 20 },
+        },
+      },
+    };
+    const v1 = makeV1Project();
+    const sections = (v1.pages as Record<string, unknown>[])[0]
+      .sections as Record<string, unknown>[];
+    sections[0].tree = tree;
+    const result = migrateProjectEnvelope(makeV2Project(v1));
+    const projectData = (result.data as Record<string, unknown>)
+      .project as Record<string, unknown>;
+    const section = (projectData.pages as Record<string, unknown>[])[0]
+      .sections as Record<string, unknown>[];
+    expect(section[0].tree).toEqual(tree);
+  });
+
+  it("does not mutate the input project", () => {
+    const v2 = makeV2Project();
+    const before = JSON.stringify(v2);
+    migrateProjectEnvelope(v2);
+    expect(JSON.stringify(v2)).toBe(before);
   });
 });

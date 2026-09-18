@@ -2,6 +2,15 @@
 // Base section — the generic shape the store and renderer work with
 // ---------------------------------------------------------------------------
 
+import type { ElementTree } from "@/features/elements/types";
+import type { AssetRef } from "@/features/assets/types";
+import type { BlockTree } from "@/features/blocks/types";
+import type { ImportedCodeLanguage } from "@/features/code-import/types";
+
+// ---------------------------------------------------------------------------
+// Base section — the generic shape the store and renderer work with
+// ---------------------------------------------------------------------------
+
 export interface BaseSection {
   id: string;
   type: string;
@@ -9,11 +18,16 @@ export interface BaseSection {
   visible: boolean;
   props: Record<string, unknown>;
   styles: Record<string, unknown>;
+  /**
+   * Phase P24-B — optional durable element tree. Present once the section has
+   * been edited through the element-tree system; the tree then becomes the
+   * authoritative element representation (geometry, animation, interaction,
+   * custom code, …) while `props`/`styles` remain for backward-compatible
+   * rendering. Legacy sections without the field are unchanged and materialize
+   * lazily on the first element-tree edit.
+   */
+  tree?: ElementTree;
 }
-
-import type { AssetRef } from "@/features/assets/types";
-import type { BlockTree } from "@/features/blocks/types";
-import type { ImportedCodeLanguage } from "@/features/code-import/types";
 
 // ---------------------------------------------------------------------------
 // Typed props for each known section type

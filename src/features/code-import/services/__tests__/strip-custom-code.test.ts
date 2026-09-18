@@ -110,4 +110,67 @@ describe("stripCustomCodeFromProject", () => {
     const result = stripCustomCodeFromProject(project);
     expect((result.pages[0].sections[0].props as Record<string, unknown>).customCode).toEqual(customCode());
   });
+
+  it("strips customCode from durable section trees on ANY section type (P24-B)", () => {
+    const durableTree = {
+      rootIds: ["root"],
+      nodes: {
+        root: {
+          id: "root",
+          type: "container",
+          parentId: null,
+          children: ["b1"],
+          props: { _sectionType: "hero", _sectionId: "section-1" },
+          style: {},
+          responsive: {},
+          visible: true,
+          locked: false,
+          hidden: false,
+          customCode: customCode(),
+        },
+        b1: {
+          id: "b1",
+          type: "heading",
+          parentId: "root",
+          children: [],
+          props: { text: "Hello" },
+          style: {},
+          responsive: {},
+          visible: true,
+          locked: false,
+          hidden: false,
+          customCode: customCode(),
+        },
+      },
+    };
+    const project = {
+      pages: [{
+        id: "page-1",
+        title: "Home",
+        slug: "/",
+        sections: [{
+          id: "section-1",
+          type: "hero",
+          order: 1,
+          visible: true,
+          props: { headline: "Hello", primaryCta: { text: "Go", href: "#" } },
+          styles: {},
+          tree: durableTree,
+        }],
+      }],
+    } as unknown as Project;
+
+    const result = stripCustomCodeFromProject(project);
+    const section = result.pages[0].sections[0] as {
+      tree?: { nodes?: Record<string, { customCode?: unknown; props?: unknown }> };
+    };
+    expect(section.tree).toBeDefined();
+    expect(section.tree?.nodes?.root.customCode).toBeUndefined();
+    expect(section.tree?.nodes?.b1.customCode).toBeUndefined();
+    // The rest of the durable tree survives.
+    expect(section.tree?.nodes?.b1.props).toEqual({ text: "Hello" });
+    // The original project is untouched.
+    const original = (project.pages[0].sections[0] as { tree?: typeof durableTree }).tree;
+    expect(original?.nodes.root.customCode).toEqual(customCode());
+  });
 });

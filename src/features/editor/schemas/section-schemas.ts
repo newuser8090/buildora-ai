@@ -4,6 +4,7 @@ import {
   CUSTOM_BLOCK_SECTION_TYPE,
   CustomBlockSectionPropsSchema,
 } from "@/features/code-import/schemas/custom-block-schema";
+import { ElementTreeSchema } from "@/features/elements/schemas/element-schemas";
 
 // ---------------------------------------------------------------------------
 // Canonical link item schema
@@ -114,6 +115,10 @@ export const BaseSectionSchema = z.object({
   order: z.number().int(),
   visible: z.boolean().default(true),
   styles: z.record(z.string(), z.unknown()).default({}),
+  // Phase P24-B — optional durable element tree. Absent on legacy sections;
+  // when present it is validated at the schema boundary (bounded, schema-safe)
+  // so projections (collab, share, export) keep or reject it deterministically.
+  tree: ElementTreeSchema.optional(),
 });
 
 export const HeaderSectionSchema = BaseSectionSchema.extend({

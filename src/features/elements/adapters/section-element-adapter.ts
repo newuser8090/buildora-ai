@@ -1,13 +1,18 @@
 // ---------------------------------------------------------------------------
-// Section ↔ Element adapter (Phase P22-A)
+// Section ↔ Element adapter (Phase P22-A / P24-B)
 //
 // Reuses the EXISTING section-block-adapter as the materialization engine:
 //
-//   sectionToElementTree   — section → BlockTree (existing) → ElementTree (upcast)
+//   sectionToElementTree   — section → BlockTree (existing) → ElementTree (upcast).
+//                            Phase P24-B: when the section already carries a
+//                            durable tree, that tree is returned (content
+//                            reconciled from the current props) instead of
+//                            re-materializing from scratch.
 //   elementTreeToBlockTree — ElementTree → BlockTree (deep-strips element fields)
 //   elementTreeToSection   — fold a section-derived element tree back into the
 //                            validated section model (existing fold path)
-//   materializeSectionElement — the future additive durable shape (NOT wired)
+//   materializeSectionElement — the durable additive shape (Phase P24-B): a
+//                            legacy section plus its persisted element tree.
 //
 // Because every element field is optional, the upcast is structurally free;
 // the downcast strips element-only metadata so the existing block pipeline
@@ -45,17 +50,68 @@ const ELEMENT_ONLY_NODE_KEYS = [
 
 /**
  * Project a section into a one-root element tree.
+ *
+ * Phase P24-B — durable preference: once a section carries a durable tree it
+ * is authoritative for element data (geometry, animation, interaction, …) and
+ * is returned directly. Bound-child CONTENT is reconciled from the current
+ * section props so content edits made outside the element-tree path (inline
+ * editing, AI plans, prop updates) are never silently reverted by a later
+ * tree commit. Legacy sections (no durable tree) still materialize through
+ * the existing block adapter.
+ *
  * The section markers (`_sectionType`, `_sectionId`) carried by the existing
  * adapter are preserved so the tree can be folded back later.
  */
 export function sectionToElementTree(section: BaseSection): ElementTree {
-  const blockTree =
-    isCustomBlockSection(section)
-      ? sectionToBlockTree(section) // handles custom-block projection
-      : sectionToBlockTree(section);
+  const durable = (section as SectionElement).tree;
+  if (durable) {
+    return reconcileDurableTreeWithProps(durable, section);
+  }
+  const blockTree = sectionToBlockTree(section); // handles custom-block projection
   // Upcast: every BlockNode is structurally an ElementNode (all fields
   // optional), so no transformation is required.
   return blockTree as unknown as ElementTree;
+}
+
+/**
+ * Refresh bound-child text on a durable tree from the CURRENT section props.
+ * Only nodes carrying the block binding markers (`_bindPath` / `_bindValueKey`)
+ * are touched — element-only metadata and structural edits survive untouched.
+ * Returns the input tree unchanged when nothing differs.
+ */
+function reconcileDurableTreeWithProps(
+  tree: ElementTree,
+  section: BaseSection,
+): ElementTree {
+  let changed = false;
+  const nodes: Record<string, ElementNode> = {};
+  for (const [id, node] of Object.entries(tree.nodes)) {
+    const path = node.props["_bindPath"];
+    const valueKey = node.props["_bindValueKey"];
+    let next: ElementNode = node;
+    if (Array.isArray(path) && typeof valueKey === "string") {
+      const current = getSectionPropAtPath(section.props, path as (string | number)[]);
+      if (typeof current === "string" && current !== node.props[valueKey]) {
+        next = { ...node, props: { ...node.props, [valueKey]: current } };
+        changed = true;
+      }
+    }
+    nodes[id] = next;
+  }
+  return changed ? { rootIds: [...tree.rootIds], nodes } : tree;
+}
+
+/** Read a value at a section.props path (numeric entries index arrays). */
+function getSectionPropAtPath(
+  props: Record<string, unknown>,
+  path: (string | number)[],
+): unknown {
+  let current: unknown = props;
+  for (const key of path) {
+    if (typeof current !== "object" || current === null) return undefined;
+    current = (current as Record<string | number, unknown>)[key];
+  }
+  return current;
 }
 
 /**
@@ -96,15 +152,22 @@ export function sectionTypeOfElementTree(tree: ElementTree): string | null {
 }
 
 /**
- * Materialize a section as a root element: returns the future durable shape
- * (section + tree). P22-A does NOT persist this — durability wiring is a
- * later sub-phase. Materialization is additive: `props`/`styles` are kept.
+ * Materialize a section as a root element: returns the durable shape
+ * (section + tree). Phase P24-B wires this into the persistence path — the
+ * store's commitSectionTree persists exactly this shape on regular sections
+ * so the tree survives reload, sync, collaboration, and export. Materialization
+ * is additive: `props`/`styles` are kept for backward-compatible rendering.
  */
 export function materializeSectionElement(
   section: BaseSection,
   tree: ElementTree,
 ): SectionElement {
   return { ...section, tree };
+}
+
+/** True when a section already carries a durable element tree. */
+export function sectionHasDurableTree(section: BaseSection): boolean {
+  return (section as SectionElement).tree !== undefined;
 }
 
 /**

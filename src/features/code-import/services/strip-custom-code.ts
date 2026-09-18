@@ -34,31 +34,38 @@ export function stripCustomCodeFromTree(tree: BlockTree): BlockTree {
   };
 }
 
+/** Remove node-level customCode from any tree-shaped payload. */
+function stripCustomCodeFromTreeRecord(tree: unknown): void {
+  if (!tree || typeof tree !== "object") return;
+  const treeRecord = tree as Record<string, unknown>;
+  const nodes = treeRecord.nodes;
+  if (!nodes || typeof nodes !== "object" || Array.isArray(nodes)) return;
+
+  for (const node of Object.values(nodes as Record<string, unknown>)) {
+    if (node && typeof node === "object" && !Array.isArray(node)) {
+      delete (node as Record<string, unknown>).customCode;
+    }
+  }
+}
+
 /**
- * Remove customCode from all custom-block trees in a Project without
- * mutating the input. Non-custom-block sections and all unrelated fields are
- * preserved verbatim.
+ * Remove customCode from all trees in a Project without mutating the input.
+ * Covers both persisted custom-block trees (`props.tree`) and Phase P24-B
+ * durable section-level element trees (`section.tree` on ANY section type),
+ * so an enabled editor node can never reach a distributed artifact through
+ * the new durable surface. All unrelated fields are preserved verbatim.
  */
 export function stripCustomCodeFromProject(project: Project): Project {
   const cloned = JSON.parse(JSON.stringify(project)) as Project;
 
   for (const page of cloned.pages) {
     for (const section of page.sections) {
-      if (section.type !== "custom-block") continue;
-
-      const props = section.props as Record<string, unknown> | undefined;
-      const tree = props?.tree;
-      if (!tree || typeof tree !== "object") continue;
-
-      const treeRecord = tree as Record<string, unknown>;
-      const nodes = treeRecord.nodes;
-      if (!nodes || typeof nodes !== "object" || Array.isArray(nodes)) continue;
-
-      for (const node of Object.values(nodes as Record<string, unknown>)) {
-        if (node && typeof node === "object" && !Array.isArray(node)) {
-          delete (node as Record<string, unknown>).customCode;
-        }
+      if (section.type === "custom-block") {
+        const props = section.props as Record<string, unknown> | undefined;
+        stripCustomCodeFromTreeRecord(props?.tree);
       }
+      // Phase P24-B — durable section-level element trees (regular sections).
+      stripCustomCodeFromTreeRecord((section as { tree?: unknown }).tree);
     }
   }
 

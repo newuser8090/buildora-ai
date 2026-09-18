@@ -13,8 +13,12 @@
  *   1 — Original projects (no formatVersion field). Assets field may be absent.
  *   2 — Added SerializedBuildoraProject envelope, formatVersion: 2, project.assets
  *       normalized to [].
+ *   3 — Phase P24-B: regular sections MAY carry an optional durable element
+ *       tree (`section.tree`, validated by the element schemas). The v2→v3
+ *       migration is a tolerant version bump only — legacy sections are
+ *       materialized lazily on the first element-tree edit, never eagerly.
  */
-export const CURRENT_FORMAT_VERSION = 2;
+export const CURRENT_FORMAT_VERSION = 3;
 
 // ---------------------------------------------------------------------------
 // Import limits

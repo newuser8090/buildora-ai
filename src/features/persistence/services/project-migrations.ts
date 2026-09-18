@@ -21,6 +21,7 @@ type MigrationFn = (input: unknown) => { data: unknown; warnings: ProjectFileWar
 
 const migrationRegistry: Record<number, MigrationFn> = {
   1: migrateV1ToV2,
+  2: migrateV2ToV3,
 };
 
 // ---------------------------------------------------------------------------
@@ -214,6 +215,33 @@ function migrateV1ToV2(input: unknown): { data: unknown; warnings: ProjectFileWa
   });
 
   return { data: envelope, warnings };
+}
+
+// ---------------------------------------------------------------------------
+// Migration: V2 → V3
+// ---------------------------------------------------------------------------
+
+/**
+ * Migrate from format version 2 to version 3.
+ *
+ * Phase P24-B: format version 3 declares that sections MAY carry an optional
+ * durable element tree (`section.tree`). No data is rewritten here:
+ *
+ *   - sections without a tree stay legacy (materialized lazily on first edit)
+ *   - existing durable trees (whenever present) are preserved verbatim
+ *   - all other fields are preserved untouched
+ *
+ * A tolerant version bump keeps migration rollback-safe and never inflates
+ * stored payloads. Does NOT mutate the input.
+ */
+function migrateV2ToV3(input: unknown): { data: unknown; warnings: ProjectFileWarning[] } {
+  const warnings: ProjectFileWarning[] = [];
+
+  // Deep clone to avoid mutating input.
+  const raw = JSON.parse(JSON.stringify(input)) as Record<string, unknown>;
+  raw.formatVersion = 3;
+
+  return { data: raw, warnings };
 }
 
 // ---------------------------------------------------------------------------

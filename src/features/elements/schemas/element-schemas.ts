@@ -23,7 +23,7 @@ import {
   firstCustomCodeAttributeProblem,
 } from "../custom-code/attribute-validation";
 import { ELEMENT_ONLY_TYPES } from "../types";
-import type { ElementStyleTokens, ElementTree } from "../types";
+import type { ElementStyleTokens, ElementTree, ElementType } from "../types";
 
 // ---------------------------------------------------------------------------
 // Caps
@@ -327,7 +327,10 @@ const elementTypeRefine = z
   .string()
   .min(1)
   .max(64)
-  .refine(isKnownElementType, { message: "Unknown element type." });
+  .refine(isKnownElementType, { message: "Unknown element type." })
+  // Narrow the output so schema-validated trees are assignable to the
+  // ElementNode/ElementTree model types (runtime value unchanged).
+  .transform((type) => type as ElementType);
 
 /** True when the type is part of the built-in catalogue (block or element-only). */
 export function isKnownElementType(type: string): boolean {
