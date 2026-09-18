@@ -8,7 +8,12 @@ import {
   resolveInternalHref,
   type PageRoute,
 } from "@/features/routing/routes";
-import { buildValidatedCustomCodeSrcdoc } from "@/features/elements/custom-code/srcdoc";
+import {
+  buildSrcdocsForTreeRecord,
+  projectSectionTreeForExport,
+} from "./section-tree-export";
+import { CUSTOM_BLOCK_SECTION_TYPE } from "@/features/code-import/schemas/custom-block-schema";
+import type { SectionElement } from "@/features/elements/types";
 import type { OutputFile } from "../pipeline/types";
 
 // ---------------------------------------------------------------------------
@@ -30,6 +35,13 @@ const SECTION_COMPONENTS: Record<string, SectionComponentInfo> = {
   footer:   { importPath: "@/components/sections/footer",   componentName: "Footer" },
   "custom-block": { importPath: "@/components/sections/custom-block", componentName: "CustomBlock" },
 };
+
+/**
+ * Phase P24-C (D4) — the bounded tree runtime reused for durable section
+ * trees. `custom-block-generator` is always emitted by the export, so a
+ * section exported through it needs no new generated component.
+ */
+const TREE_RUNTIME_COMPONENT = SECTION_COMPONENTS[CUSTOM_BLOCK_SECTION_TYPE];
 
 // ---------------------------------------------------------------------------
 // Asset field mapping — which AssetRef fields map to which generated props
@@ -198,14 +210,49 @@ export function generatePageFile(
     .filter((s) => s.visible !== false)
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
-  // Collect unique component types used (for import deduplication)
-  const usedTypes = new Set(visibleSections.map((s) => s.type));
+  // Phase P24-C (D4) — resolve each visible section to the component it is
+  // exported through. A REGULAR section whose DURABLE element tree enables
+  // custom code is exported through the bounded tree runtime (its sandboxed
+  // frames + srcdoc map are emitted); every other section keeps its existing
+  // props-driven component and byte-identical output.
+  interface SectionPlan {
+    section: BaseSection;
+    /** Resolved component for this section (may be the tree runtime). */
+    info: SectionComponentInfo;
+    /** Set only for durable-tree sections that enable custom code. */
+    treeRuntime: { tree: ReturnType<typeof projectSectionTreeForExport>; srcdocs: Record<string, string> } | null;
+  }
+
+  const plans: SectionPlan[] = [];
+  for (const section of visibleSections) {
+    const info = SECTION_COMPONENTS[section.type];
+    if (!info) continue;
+
+    let treeRuntime: SectionPlan["treeRuntime"] = null;
+    if (section.type !== CUSTOM_BLOCK_SECTION_TYPE) {
+      const durableTree = (section as SectionElement).tree;
+      const srcdocs = durableTree ? buildSrcdocsForTreeRecord(durableTree) : null;
+      if (durableTree && srcdocs) {
+        treeRuntime = { tree: projectSectionTreeForExport(durableTree), srcdocs };
+      }
+    }
+
+    plans.push({
+      section,
+      info: treeRuntime ? TREE_RUNTIME_COMPONENT : info,
+      treeRuntime,
+    });
+  }
+
+  // Collect unique components actually used (for import deduplication).
+  const usedComponents = new Map<string, SectionComponentInfo>();
+  for (const plan of plans) {
+    usedComponents.set(plan.info.componentName, plan.info);
+  }
 
   // Build import statements
   const imports: string[] = [];
-  for (const type of usedTypes) {
-    const info = SECTION_COMPONENTS[type];
-    if (!info) continue; // skip unknown types
+  for (const info of usedComponents.values()) {
     imports.push(`import { ${info.componentName} } from "${info.importPath}";`);
   }
   imports.sort();
@@ -213,25 +260,39 @@ export function generatePageFile(
   // Build rendered elements — hrefs are resolved against ALL page routes so
   // cross-page internal links point at real exported routes.
   const rendered: string[] = [];
-  for (const section of visibleSections) {
-    const info = SECTION_COMPONENTS[section.type];
-    if (!info) continue;
+  for (const { section, info, treeRuntime } of plans) {
+    // Phase P22-G — element trees carry typed NavTargets, resolved through the
+    // page route map (pageId → routeUrl) supplied to the tree runtime.
+    const routeMap = JSON.stringify(
+      Object.fromEntries(routes.map((route) => [route.page.id, route.routeUrl])),
+    );
+
+    // Phase P24-C (D4) — a durable section tree with enabled custom code is
+    // emitted as the same flag-only tree + separately validated `srcdocs` map
+    // the custom-block path uses, so the parent page holds no user code.
+    if (treeRuntime) {
+      const treeSection: BaseSection = {
+        ...section,
+        type: CUSTOM_BLOCK_SECTION_TYPE,
+        props: { name: section.type, tree: treeRuntime.tree },
+      };
+      const treePropsLines = serializePropsForComponent(treeSection, manifest, routes);
+      const srcdocsAttr = ` srcdocs={${serializeSrcdocsForExport(treeRuntime.srcdocs)}}`;
+      rendered.push(
+        `      <${info.componentName} key="${section.id}" ${treePropsLines} routes={${routeMap}}${srcdocsAttr} />`,
+      );
+      continue;
+    }
 
     // Phase P23-C — custom-block sections may carry OPT-IN custom code. The
     // emitted tree keeps only the `enabled` flag (never the code text), and
     // validated sandbox documents are passed separately via `srcdocs`, so the
     // generated parent page contains no directly executable user code.
     const serializableSection =
-      section.type === "custom-block" ? customBlockSectionForExport(section) : section;
+      section.type === CUSTOM_BLOCK_SECTION_TYPE ? customBlockSectionForExport(section) : section;
     const propsLines = serializePropsForComponent(serializableSection, manifest, routes);
 
-    // Phase P22-G — custom-block sections carry typed NavTargets inside their
-    // element trees. The exported CustomBlock needs the page route map to
-    // resolve them to real exported routes (pageId → routeUrl).
-    if (section.type === "custom-block") {
-      const routeMap = JSON.stringify(
-        Object.fromEntries(routes.map((route) => [route.page.id, route.routeUrl])),
-      );
+    if (section.type === CUSTOM_BLOCK_SECTION_TYPE) {
       // Phase P23-C — srcdocs prop is omitted entirely when no custom-code
       // element is enabled (projects without custom code stay unchanged).
       const srcdocs = buildCustomCodeSrcdocsForSection(section);
@@ -539,27 +600,19 @@ function customBlockSectionForExport(section: BaseSection): BaseSection {
 
 /**
  * Build the `srcdocs` map (nodeId → validated srcdoc) for a custom-block
- * section. One entry per node with EXPLICITLY ENABLED, schema-valid custom
- * code; every document comes from the single authoritative builder. Returns
- * null when no node qualifies (callers omit the srcdocs prop entirely).
+ * section (its persisted `props.tree`). One entry per node with EXPLICITLY
+ * ENABLED, schema-valid custom code; every document comes from the single
+ * authoritative builder. Returns null when no node qualifies (callers omit the
+ * srcdocs prop entirely).
+ *
+ * Phase P24-C — delegates to the shared tree-record discovery so the
+ * custom-block path and the durable `section.tree` path can never diverge.
  */
 function buildCustomCodeSrcdocsForSection(
   section: BaseSection,
 ): Record<string, string> | null {
   const props = section.props as Record<string, unknown> | undefined;
-  const tree = props?.tree as { nodes?: Record<string, unknown> } | undefined;
-  if (!tree || !tree.nodes || typeof tree.nodes !== "object") return null;
-
-  const srcdocs: Record<string, string> = {};
-  for (const [nodeId, node] of Object.entries(tree.nodes)) {
-    if (!node || typeof node !== "object" || Array.isArray(node)) continue;
-    const customCode = (node as Record<string, unknown>).customCode;
-    if (customCode === undefined || customCode === null) continue;
-    const srcdoc = buildValidatedCustomCodeSrcdoc(customCode);
-    if (srcdoc === null) continue;
-    srcdocs[nodeId] = srcdoc;
-  }
-  return Object.keys(srcdocs).length > 0 ? srcdocs : null;
+  return buildSrcdocsForTreeRecord(props?.tree);
 }
 
 /**

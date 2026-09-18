@@ -111,6 +111,96 @@ describe("stripCustomCodeFromProject", () => {
     expect((result.pages[0].sections[0].props as Record<string, unknown>).customCode).toEqual(customCode());
   });
 
+  it("covers BOTH tree surfaces in one pass — custom-block props.tree and durable section.tree (P24-C)", () => {
+    const customBlockTree = makeTree();
+    const durableTree = {
+      rootIds: ["hero"],
+      nodes: {
+        hero: {
+          id: "hero",
+          type: "container",
+          parentId: null,
+          children: ["mid"],
+          props: { _sectionType: "hero", _sectionId: "s-hero" },
+          style: {},
+          responsive: {},
+          visible: true,
+          locked: false,
+          hidden: false,
+        },
+        // Deliberately a GRANDCHILD — discovery must not stop at depth 1.
+        mid: {
+          id: "mid",
+          type: "container",
+          parentId: "hero",
+          children: ["deep"],
+          props: {},
+          style: {},
+          responsive: {},
+          visible: true,
+          locked: false,
+          hidden: false,
+        },
+        deep: {
+          id: "deep",
+          type: "heading",
+          parentId: "mid",
+          children: [],
+          props: { text: "Deep" },
+          style: {},
+          responsive: {},
+          visible: true,
+          locked: false,
+          hidden: false,
+          customCode: customCode(),
+        },
+      },
+    };
+
+    const project = {
+      pages: [{
+        id: "page-1",
+        title: "Home",
+        slug: "/",
+        sections: [
+          {
+            id: "s-custom",
+            type: "custom-block",
+            order: 1,
+            visible: true,
+            props: { name: "Custom", tree: customBlockTree },
+            styles: {},
+          },
+          {
+            id: "s-hero",
+            type: "hero",
+            order: 2,
+            visible: true,
+            props: { headline: "Hello", primaryCta: { text: "Go", href: "#" } },
+            styles: {},
+            tree: durableTree,
+          },
+        ],
+      }],
+    } as unknown as Project;
+
+    const result = stripCustomCodeFromProject(project);
+
+    // 1. Legacy custom-block surface.
+    const blockTree = (result.pages[0].sections[0].props as { tree: BlockTree }).tree;
+    expect((blockTree.nodes.root as { customCode?: unknown }).customCode).toBeUndefined();
+    // 2. Durable section-tree surface, including a deeply nested node.
+    const section = result.pages[0].sections[1] as {
+      tree?: { nodes?: Record<string, { customCode?: unknown; type?: string }> };
+    };
+    expect(section.tree?.nodes?.deep.customCode).toBeUndefined();
+    // Unrelated data survives on both surfaces.
+    expect(section.tree?.nodes?.mid.type).toBe("container");
+    // The source project is untouched (pure, non-mutating).
+    const original = (project.pages[0].sections[1] as { tree?: typeof durableTree }).tree;
+    expect(original?.nodes.deep.customCode).toEqual(customCode());
+  });
+
   it("strips customCode from durable section trees on ANY section type (P24-B)", () => {
     const durableTree = {
       rootIds: ["root"],
