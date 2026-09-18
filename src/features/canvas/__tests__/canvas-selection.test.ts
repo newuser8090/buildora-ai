@@ -18,6 +18,7 @@ import {
   purgeSelection,
   removeFromSelection,
   selectOnly,
+  singleNestedSelectionId,
   splitManipulable,
   toggleSelection,
   topLevelSelection,
@@ -172,5 +173,52 @@ describe("selection validity against the tree", () => {
     const r1 = insertElement(treeWith(section), "root", card);
     if (!r1.ok) return;
     expect(r1.value.nodes.card.parentId).toBe("root");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// singleNestedSelectionId (Phase P24-C, D2/D3)
+//
+// The inspector routing/targeting rule: only a single NESTED element id of the
+// section's own tree resolves; everything else falls through to null so the
+// caller keeps its previous behaviour.
+// ---------------------------------------------------------------------------
+
+describe("singleNestedSelectionId — inspector element target", () => {
+  const tree: ElementTree = {
+    rootIds: ["root"],
+    nodes: {
+      root: node("container", "root", { children: ["text", "cta"] }),
+      text: node("heading", "text", { parentId: "root" }),
+      cta: node("button", "cta", { parentId: "root" }),
+    },
+  };
+
+  it("resolves a single nested element", () => {
+    expect(singleNestedSelectionId(tree, ["text"])).toBe("text");
+  });
+
+  it("treats the section root as the section-level selection, not an element", () => {
+    expect(singleNestedSelectionId(tree, ["root"])).toBeNull();
+  });
+
+  it("resolves nothing for an empty selection", () => {
+    expect(singleNestedSelectionId(tree, [])).toBeNull();
+  });
+
+  it("resolves nothing for a multi-selection (ambiguous)", () => {
+    expect(singleNestedSelectionId(tree, ["text", "cta"])).toBeNull();
+  });
+
+  it("resolves nothing for a stale id from another section's tree", () => {
+    expect(singleNestedSelectionId(tree, ["not-in-this-tree"])).toBeNull();
+  });
+
+  it("resolves nothing for an empty-string id", () => {
+    expect(singleNestedSelectionId(tree, [""])).toBeNull();
+  });
+
+  it("resolves nothing for an empty tree", () => {
+    expect(singleNestedSelectionId({ rootIds: [], nodes: {} }, ["text"])).toBeNull();
   });
 });

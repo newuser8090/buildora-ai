@@ -4,9 +4,13 @@
 // useElementInspector (Phase P22-C) — selection → node → model → commit
 //
 // The inspector's target element is:
-//   1. the block selected on canvas / in the build tree (block-editor-store)
-//      when it belongs to the selected section's element tree, else
-//   2. the selected section's ROOT element.
+//   1. the single NESTED element selected on canvas (transient
+//      canvas-interaction-store selection) when it belongs to this section's
+//      element tree — Phase P24-C (D2/D3), so the panel inspects the ELEMENT
+//      the routing mounted it for, in ANY section type;
+//   2. else the block selected in the build tree (block-editor-store) when it
+//      belongs to this section's element tree;
+//   3. else the selected section's ROOT element.
 //
 // The model (schema + resolved values) is derived from the materialized
 // element tree; every commit re-materializes the tree from the FRESHEST store
@@ -18,6 +22,8 @@
 import { useCallback, useMemo } from "react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { sectionToElementTree } from "@/features/elements/adapters/section-element-adapter";
+import { singleNestedSelectionId } from "@/features/canvas/engine/selection";
+import { useCanvasInteractionStore } from "@/features/canvas/store/canvas-interaction-store";
 import {
   applyInspectorFieldChange,
   applySpacingSideChange,
@@ -74,6 +80,7 @@ export function useElementInspector(
   const viewport = useEditorStore((s) => s.viewport);
   const commitElementTree = useEditorStore((s) => s.commitElementTree);
   const selectedBlockId = useBlockEditorStore((s) => s.selectedBlockId);
+  const canvasSelectionIds = useCanvasInteractionStore((s) => s.selection.ids);
 
   const sectionId = section?.id ?? "";
   const breakpoint: InspectorBreakpoint = VIEWPORT_TO_BREAKPOINT[viewport] ?? "base";
@@ -84,9 +91,18 @@ export function useElementInspector(
     [section],
   );
 
-  // Target element: the selected block when it belongs to this section's tree.
-  const targetId =
+  // Phase P24-C — a single nested canvas selection wins (same rule the
+  // RightSidebar routing consults, so routing and target can never disagree).
+  const canvasTargetId = useMemo(
+    () => singleNestedSelectionId(tree, canvasSelectionIds),
+    [tree, canvasSelectionIds],
+  );
+
+  // Target element: the canvas element selection, else the selected block when
+  // it belongs to this section's tree, else the section root.
+  const blockTargetId =
     selectedBlockId && tree.nodes[selectedBlockId] ? selectedBlockId : sectionId;
+  const targetId = canvasTargetId ?? blockTargetId;
   const node = tree.nodes[targetId];
 
   const model = useMemo(
@@ -110,13 +126,18 @@ export function useElementInspector(
       const freshest = page?.sections.find((s) => s.id === sectionId);
       if (!page || !freshest) return false;
       const freshestTree = sectionToElementTree(freshest);
+      // Same precedence as the rendered target, resolved against the FRESHEST
+      // tree so a commit can never land on a stale element id.
       const nodeId =
-        selectedBlockId && freshestTree.nodes[selectedBlockId] ? selectedBlockId : sectionId;
+        singleNestedSelectionId(freshestTree, canvasSelectionIds) ??
+        (selectedBlockId && freshestTree.nodes[selectedBlockId]
+          ? selectedBlockId
+          : sectionId);
       const result = apply(freshestTree, nodeId);
       if (!result.ok) return false;
       return commitTree(result.value);
     },
-    [pageId, sectionId, selectedBlockId, commitTree],
+    [pageId, sectionId, selectedBlockId, canvasSelectionIds, commitTree],
   );
 
   const commitField = useCallback(
@@ -146,7 +167,15 @@ export function useElementInspector(
 
   const selectRoot = useCallback(() => {
     useBlockEditorStore.getState().selectBlock(null);
-  }, []);
+    // A nested canvas selection would otherwise outrank the root fallback, so
+    // "Section ↑" also restores the section-level selection marker the
+    // manipulation layer uses (never an empty selection — that would drop the
+    // canvas handles while a section is still selected).
+    const interaction = useCanvasInteractionStore.getState();
+    if (singleNestedSelectionId(tree, interaction.selection.ids)) {
+      interaction.setSelection([sectionId], { multi: false, anchorId: sectionId });
+    }
+  }, [sectionId, tree]);
 
   if (!node || !model) return null;
   return {

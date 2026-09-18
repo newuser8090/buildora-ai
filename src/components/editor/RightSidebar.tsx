@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, createElement } from "react";
+import { useState, useMemo, createElement } from "react";
 import { cn } from "@/utils/cn";
 import {
   ChevronDown,
@@ -31,6 +31,13 @@ import { ElementInspectorPanel } from "@/features/inspector/components/ElementIn
 import { ElementLibrary } from "@/features/library/components/ElementLibrary";
 import { DataPanel } from "@/features/integrations/components/DataPanel";
 import { CUSTOM_BLOCK_SECTION_TYPE } from "@/features/code-import/schemas/custom-block-schema";
+// Phase P24-C (D2/D3) — element-selection routing for the universal inspector.
+import { useCanvasInteractionStore } from "@/features/canvas/store/canvas-interaction-store";
+import { singleNestedSelectionId } from "@/features/canvas/engine/selection";
+import {
+  sectionHasDurableTree,
+  sectionToElementTree,
+} from "@/features/elements/adapters/section-element-adapter";
 import type { BaseSection } from "@/types/section";
 // Phase P22-K — collapsible/resizable shell chrome (UI-only, no project state).
 import { MAX_PANEL_WIDTH, MIN_PANEL_WIDTH } from "@/features/editor/ui/editor-ui-prefs";
@@ -202,6 +209,34 @@ function InspectorPanel({ guided }: { guided: boolean }) {
 }
 
 // ---------------------------------------------------------------------------
+// useActiveElementSelectionId (Phase P24-C, decisions D2/D3)
+//
+// The element the universal inspector is mounted and targeted for.
+//
+// Reads the TRANSIENT canvas element selection (the store the manipulation
+// layer writes, and the only authoritative element-focus signal — it is UI
+// state that is never persisted or synchronized) and resolves it against this
+// section's element tree. Guards, in order:
+//   - custom-block sections already route to the universal inspector, so they
+//     resolve against their own durable tree (`props.tree`);
+//   - any other section must carry a durable `section.tree` (Phase P24-B) to
+//     have an element surface at all, so legacy sections are unaffected;
+//   - an empty, multi, stale (other section) or section-root selection
+//     resolves to null, so the caller falls back to the existing section
+//     inspector and never throws.
+// ---------------------------------------------------------------------------
+
+function useActiveElementSelectionId(section: BaseSection): string | null {
+  const selectionIds = useCanvasInteractionStore((s) => s.selection.ids);
+
+  return useMemo(() => {
+    const isCustomBlock = section.type === CUSTOM_BLOCK_SECTION_TYPE;
+    if (!isCustomBlock && !sectionHasDurableTree(section)) return null;
+    return singleNestedSelectionId(sectionToElementTree(section), selectionIds);
+  }, [section, selectionIds]);
+}
+
+// ---------------------------------------------------------------------------
 // InspectorSlot — resolves the inspector component from the registry
 // and renders it. Extracted into a separate component to avoid the
 // "components created during render" ESLint rule.
@@ -223,6 +258,10 @@ function InspectorSlot({
   const InspectorComponent = inspectorRegistry.get(section.type);
   const isRegistered = sectionRegistry.has(section.type);
 
+  // Phase P24-C — the active element selection (null when none/ambiguous).
+  // Read unconditionally: hooks must run before any early return.
+  const elementSelectionId = useActiveElementSelectionId(section);
+
   // Phase N: guided mode uses the simplified inspector (advanced controls
   // stay reachable through "More options").
   if (guided) {
@@ -236,9 +275,12 @@ function InspectorSlot({
   }
 
   // Phase P22-C: custom-block sections carry fully editable + durable element
-  // trees, so they use the universal element inspector. Regular sections keep
-  // their section-specific inspectors (existing E2E surface preserved).
-  if (section.type === CUSTOM_BLOCK_SECTION_TYPE) {
+  // trees, so they use the universal element inspector.
+  // Phase P24-C (D3): any other section routes there too WHILE an element of
+  // its element tree is actively selected — the element surface now exists on
+  // every section type (P24-B durable trees). With no element selected the
+  // section keeps its section-specific inspector (existing surface preserved).
+  if (section.type === CUSTOM_BLOCK_SECTION_TYPE || elementSelectionId !== null) {
     return <ElementInspectorPanel pageId={pageId} sectionId={section.id} />;
   }
 

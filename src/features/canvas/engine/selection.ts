@@ -114,6 +114,32 @@ export function removeFromSelection(state: SelectionState, id: string): Selectio
 }
 
 /**
+ * Resolve the single NESTED selected element id of a tree — the element
+ * selection the inspector routes and targets on (Phase P24-C, decisions D2/D3).
+ *
+ * Rules (mirroring the manipulation layer's own convention):
+ *   - the SECTION ROOT id is the section-level selection (the manipulation
+ *     layer mirrors the selected section id into the selection), so it is NOT
+ *     an element target — it resolves to null;
+ *   - only EXACTLY ONE id resolves; a multi-selection is ambiguous and
+ *     resolves to null (multi-element inspector routing is an open decision);
+ *   - an id that does not belong to this tree resolves to null, so selections
+ *     from another section can never leak a stale target.
+ *
+ * Pure and deterministic — callers fall through to their previous behaviour on
+ * null, which is what makes this safe to consult from render paths.
+ */
+export function singleNestedSelectionId(
+  tree: ElementTree,
+  selectionIds: readonly string[],
+): string | null {
+  if (selectionIds.length !== 1) return null;
+  const id = selectionIds[0];
+  if (!id || tree.rootIds.includes(id)) return null;
+  return tree.nodes[id] ? id : null;
+}
+
+/**
  * Drop ids that no longer exist in the tree (self-cleaning when elements are
  * deleted). Deterministic, preserves order.
  */
