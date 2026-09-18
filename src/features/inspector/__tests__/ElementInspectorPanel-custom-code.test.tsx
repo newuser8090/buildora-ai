@@ -123,7 +123,9 @@ function expandSection(sectionId: string) {
   fireEvent.click(screen.getByTestId(`inspector-section-${sectionId}-toggle`));
 }
 
-describe("P23-D inspector — Custom Code section (leaf blocks only)", () => {
+// Phase P24-C (D1) — the section is no longer leaf-only: every renderable
+// element type exposes it. The container assertion is intentionally inverted.
+describe("inspector — Custom Code section (renderable elements, P24-C D1)", () => {
   it("renders the Custom Code section for a leaf heading node", () => {
     renderPanelFor("b1");
     expandSection("custom-code");
@@ -131,9 +133,9 @@ describe("P23-D inspector — Custom Code section (leaf blocks only)", () => {
     expect(screen.queryByTestId("custom-code-html")).toBeNull();
   });
 
-  it("does not render the Custom Code section for the container root", () => {
+  it("renders the Custom Code section for the container root", () => {
     renderPanelFor("s-custom");
-    expect(screen.queryByTestId("inspector-section-custom-code-toggle")).toBeNull();
+    expect(screen.getByTestId("inspector-section-custom-code-toggle")).toBeTruthy();
   });
 });
 

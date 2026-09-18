@@ -72,8 +72,12 @@ function headingTree(): ElementTree {
 // Schema — Custom Code section gating
 // ---------------------------------------------------------------------------
 
-describe("getInspectorSchema — Custom Code section (P23-D)", () => {
-  it("adds the custom-code section for every curated leaf content block", () => {
+// Phase P24-C (decision D1) — the Custom Code group follows the capability
+// rule (renderable/durable eligibility). The P23-D leaf assertions are retained
+// and the container/composite/navigation assertions are intentionally inverted;
+// only the non-renderable element-only families stay excluded.
+describe("getInspectorSchema — Custom Code section (P24-C D1)", () => {
+  it("adds the custom-code section for every legacy leaf content block", () => {
     for (const type of ["heading", "paragraph", "button", "badge", "image", "video", "icon"]) {
       const schema = getInspectorSchema(type as never);
       const section = schema.sections.find((s) => s.id === "custom-code");
@@ -84,8 +88,37 @@ describe("getInspectorSchema — Custom Code section (P23-D)", () => {
     }
   });
 
-  it("never adds the section for containers, composites, or custom-component", () => {
-    for (const type of ["container", "card", "form", "navbar", "custom-component", "section", "text"]) {
+  it("adds the section for container, layout, composite, interactive and navigation types", () => {
+    for (const type of [
+      "container",
+      "grid",
+      "card",
+      "pricing-card",
+      "form",
+      "tabs",
+      "accordion",
+      "navbar",
+      "menu",
+    ]) {
+      const schema = getInspectorSchema(type as never);
+      expect(
+        schema.sections.some((s) => s.id === "custom-code"),
+        `missing custom-code section for ${type}`,
+      ).toBe(true);
+    }
+  });
+
+  it("never adds the section for the non-renderable element-only families", () => {
+    for (const type of [
+      "section",
+      "text",
+      "logo",
+      "list",
+      "carousel",
+      "product-card",
+      "price",
+      "custom-component",
+    ]) {
       const schema = getInspectorSchema(type as never);
       expect(
         schema.sections.some((s) => s.id === "custom-code"),

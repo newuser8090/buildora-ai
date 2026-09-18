@@ -12,8 +12,8 @@
 //   - clone (duplicateElement) preserves enabled + the code payload
 //   - the normalizer clamps custom-code strings to the 20k code cap (not the
 //     4k prose cap), preserves booleans, and strips dangerous metadata as before
-//   - the registry exposes the opt-in capability for the curated LEAF content
-//     blocks only (P23-D); custom-component is not an authoring vehicle
+//   - the registry exposes the custom-code capability for every RENDERABLE
+//     element type (P24-C D1); element-only families stay ineligible
 // ---------------------------------------------------------------------------
 
 import { describe, it, expect, beforeEach } from "vitest";
@@ -596,27 +596,45 @@ describe("normalizeElementTree — custom code repair (P23-A)", () => {
 // Registry capability
 // ---------------------------------------------------------------------------
 
-describe("elementSupportsCustomCode — registry capability (P23-D)", () => {
-  it("is true for the curated leaf content blocks only", () => {
+// Phase P24-C (decision D1) — the capability is now renderable/durable
+// eligibility, not a curated leaf allow-list. The P23-D leaf assertions are
+// intentionally RETAINED (the legacy surface must keep working) and the
+// previously-negative container/composite/interactive/navigation assertions are
+// intentionally INVERTED. Element-only families stay ineligible.
+describe("elementSupportsCustomCode — registry capability (P24-C D1)", () => {
+  it("is true for the legacy P23-D leaf content blocks", () => {
     for (const type of ["heading", "paragraph", "button", "badge", "image", "video", "icon"]) {
       expect(elementSupportsCustomCode(type as never)).toBe(true);
     }
   });
 
-  it("is false for custom-component (not a custom-code vehicle)", () => {
-    expect(elementSupportsCustomCode("custom-component")).toBe(false);
+  it("is true for container / composite / interactive / navigation types", () => {
+    for (const type of ["container", "row", "column", "grid", "card", "form", "navbar", "menu"]) {
+      expect(elementSupportsCustomCode(type as never)).toBe(true);
+    }
   });
 
-  it("is false for every non-leaf type", () => {
-    // Element-only types without the flag.
-    expect(elementSupportsCustomCode("section")).toBe(false);
-    expect(elementSupportsCustomCode("text")).toBe(false);
-    expect(elementSupportsCustomCode("logo")).toBe(false);
-    // Containers / composites / interactive / navigation — never eligible.
-    expect(elementSupportsCustomCode("container")).toBe(false);
-    expect(elementSupportsCustomCode("card")).toBe(false);
-    expect(elementSupportsCustomCode("form")).toBe(false);
-    expect(elementSupportsCustomCode("navbar")).toBe(false);
+  it("is false for the non-renderable element-only families", () => {
+    // No renderer and no durable persistence path — ineligible by construct.
+    for (const type of [
+      "section",
+      "text",
+      "logo",
+      "list",
+      "carousel",
+      "product-card",
+      "price",
+      "custom-component",
+    ]) {
+      expect(elementSupportsCustomCode(type as never)).toBe(false);
+    }
+  });
+
+  it("is false for invalid, empty and unrecognized input", () => {
+    expect(elementSupportsCustomCode("" as never)).toBe(false);
+    expect(elementSupportsCustomCode("gizmo" as never)).toBe(false);
+    expect(elementSupportsCustomCode(undefined as never)).toBe(false);
+    expect(elementSupportsCustomCode(null as never)).toBe(false);
   });
 });
 

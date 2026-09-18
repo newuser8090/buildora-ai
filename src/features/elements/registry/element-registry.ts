@@ -25,16 +25,18 @@ import { schemaToValidateProps } from "./validate-props-helper";
 import { GenericElementPropsSchema } from "../schemas/element-props-schemas";
 
 // ---------------------------------------------------------------------------
-// Phase P23-D — the curated leaf-block types eligible for user-authored custom
-// code
+// Phase P23-D — the canonical LEGACY leaf set of the custom-code authoring
+// surface, retained and exported for reference/compatibility.
 //
-// The capability is opt-in per registry definition and granted ONLY to these
-// seven leaf content blocks (no children, single visual unit). Containers,
-// composites, interactive/form blocks, navigation, and custom-component stay
-// ineligible — custom code is never a broad capability.
+// Phase P24-C (decision D1) — this set is NO LONGER the capability gate.
+// Custom-code authoring now follows renderable/durable eligibility
+// (`isRenderableElementType`): every registered, renderable element type is
+// eligible, while element-only families (text, logo, list, carousel,
+// product-card, price, section, custom-component) remain ineligible because
+// they have no renderer and no durable persistence path.
 // ---------------------------------------------------------------------------
 
-const CUSTOM_CODE_LEAF_TYPES = new Set<BlockType>([
+export const CUSTOM_CODE_LEAF_TYPES = new Set<BlockType>([
   "heading",
   "paragraph",
   "button",
@@ -73,8 +75,12 @@ function deriveElementDefinitionFromBlock(
     editor: {
       defaultLayout: "flow",
       supportsViewportOverrides: true,
-      // Phase P23-D — leaf content blocks only (explicit, never broad).
-      supportsCustomCode: CUSTOM_CODE_LEAF_TYPES.has(definition.type),
+      // Phase P24-C (D1) — capability follows renderable/durable eligibility.
+      // Block-derived definitions are by construction registered and renderable
+      // (the block pipeline renders and persists them), so every one of them is
+      // eligible. The element-only exclusion lives in `isRenderableElementType`
+      // / `elementSupportsCustomCode` — the single capability rule.
+      supportsCustomCode: true,
       rendererKey: definition.type,
     },
   };
@@ -155,14 +161,27 @@ export function isRenderableElementType(type: string): boolean {
 }
 
 /**
- * True when an element type is explicitly allowed to carry user-authored
- * custom code (Phase P23-D). Opt-in per registry definition — never broad:
- * only types whose definition sets `editor.supportsCustomCode` qualify, and
- * the flag is granted ONLY to the curated leaf content blocks (heading,
- * paragraph, button, badge, image, video, icon). custom-component is NOT an
- * authoring vehicle for custom code. Pure and deterministic — safe for
- * server-side validation.
+ * True when an element type may carry user-authored custom code.
+ *
+ * Phase P24-C (decision D1) — the capability is now defined by
+ * renderable/durable eligibility rather than a curated leaf allow-list:
+ * every REGISTERED, RENDERABLE element type is eligible (containers, layout,
+ * composites, interactive/form blocks, and navigation included), because the
+ * P24-B durable `section.tree` gives all of them a persistence and export
+ * home.
+ *
+ * Still ineligible — deliberately and structurally:
+ *   - element-only families (text, logo, list, carousel, product-card, price,
+ *     section, custom-component): registry definitions + inspector schemas but
+ *     no renderer and no durable persistence path, so emitted custom code
+ *     could never be rendered or persisted;
+ *   - unrecognized / invalid / non-string input.
+ *
+ * The registry definition flag (`editor.supportsCustomCode`) mirrors this same
+ * rule for derived block definitions, so the two can never disagree.
+ * Pure and deterministic — safe for server-side validation.
  */
 export function elementSupportsCustomCode(type: ElementType): boolean {
-  return elementRegistry.get(type)?.editor?.supportsCustomCode === true;
+  if (typeof type !== "string" || type.length === 0) return false;
+  return isRenderableElementType(type);
 }

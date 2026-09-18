@@ -7,12 +7,19 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { registerDefaultBlocks, blockRegistry } from "@/features/blocks/registry/block-registry";
-import { ElementRegistry, elementRegistry } from "../registry/element-registry";
+import {
+  CUSTOM_CODE_LEAF_TYPES,
+  ElementRegistry,
+  elementRegistry,
+  elementSupportsCustomCode,
+  isRenderableElementType,
+} from "../registry/element-registry";
 import { ELEMENT_ONLY_DEFINITIONS } from "../registry/default-elements";
 import {
   isDefaultElementsRegistered,
   registerDefaultElements,
 } from "../registry/register-default-elements";
+import { isElementOnlyType } from "../types";
 import type { ElementCategory, ElementDefinition, ElementType } from "../types";
 
 beforeEach(() => {
@@ -116,5 +123,110 @@ describe("element registry", () => {
     expect(text?.editor?.supportsViewportOverrides).toBe(true);
     const section = elementRegistry.get("section");
     expect(section?.editor?.defaultLayout).toBe("flow");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Custom-code capability (Phase P24-C, decision D1 / REQ-1)
+//
+// The capability moved from a curated leaf allow-list to renderable/durable
+// eligibility. These tests pin the new rule, the retained legacy leaf set, and
+// the structural element-only exclusion.
+// ---------------------------------------------------------------------------
+
+describe("elementSupportsCustomCode — renderable-type capability (P24-C)", () => {
+  const LEGACY_LEAF_TYPES = [
+    "heading",
+    "paragraph",
+    "button",
+    "badge",
+    "image",
+    "video",
+    "icon",
+  ];
+
+  const ELEMENT_ONLY_FAMILIES = [
+    "section",
+    "text",
+    "logo",
+    "list",
+    "carousel",
+    "product-card",
+    "price",
+    "custom-component",
+  ];
+
+  it("keeps CUSTOM_CODE_LEAF_TYPES exported and intact as the legacy leaf set", () => {
+    expect(CUSTOM_CODE_LEAF_TYPES).toBeInstanceOf(Set);
+    expect([...CUSTOM_CODE_LEAF_TYPES].sort()).toEqual([...LEGACY_LEAF_TYPES].sort());
+  });
+
+  it("keeps every legacy leaf type eligible", () => {
+    for (const type of LEGACY_LEAF_TYPES) {
+      expect(elementSupportsCustomCode(type as ElementType)).toBe(true);
+    }
+  });
+
+  it("makes container, layout, composite, interactive and navigation types eligible", () => {
+    const newlyEligible = [
+      "container",
+      "row",
+      "column",
+      "grid",
+      "stack",
+      "divider",
+      "spacer",
+      "card",
+      "pricing-card",
+      "feature-card",
+      "review-card",
+      "faq-item",
+      "team-member",
+      "form",
+      "input",
+      "textarea",
+      "checkbox",
+      "tabs",
+      "accordion",
+      "navbar",
+      "footer",
+      "menu",
+    ];
+    for (const type of newlyEligible) {
+      expect(blockRegistry.has(type as never)).toBe(true);
+      expect(elementSupportsCustomCode(type as ElementType)).toBe(true);
+    }
+  });
+
+  it("keeps the non-renderable element-only families ineligible", () => {
+    for (const type of ELEMENT_ONLY_FAMILIES) {
+      expect(isElementOnlyType(type)).toBe(true);
+      expect(isRenderableElementType(type)).toBe(false);
+      expect(elementSupportsCustomCode(type as ElementType)).toBe(false);
+    }
+  });
+
+  it("follows exactly one capability rule: capability === renderable/durable", () => {
+    expect(elementRegistry.types.length).toBeGreaterThan(0);
+    for (const type of elementRegistry.types) {
+      expect(elementSupportsCustomCode(type)).toBe(isRenderableElementType(type));
+    }
+  });
+
+  it("keeps the registry definition flag in agreement with the capability rule", () => {
+    for (const type of elementRegistry.types) {
+      if (isElementOnlyType(type)) continue;
+      const flag = elementRegistry.get(type)?.editor?.supportsCustomCode === true;
+      expect(flag).toBe(elementSupportsCustomCode(type));
+    }
+  });
+
+  it("returns false for invalid, empty and unrecognized input", () => {
+    expect(elementSupportsCustomCode("" as ElementType)).toBe(false);
+    expect(elementSupportsCustomCode("gizmo" as ElementType)).toBe(false);
+    expect(elementSupportsCustomCode("HEADING" as ElementType)).toBe(false);
+    expect(elementSupportsCustomCode(undefined as never)).toBe(false);
+    expect(elementSupportsCustomCode(null as never)).toBe(false);
+    expect(elementSupportsCustomCode(42 as never)).toBe(false);
   });
 });
