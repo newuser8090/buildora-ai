@@ -293,10 +293,10 @@ afterEach(() => {
 describe("overlay bounding box targets the focused element (P25 D6/S3)", () => {
   it("frames the element's DOM node, not the outer section", async () => {
     render(<CanvasHarness />);
-    await selectSectionWithElement(CUSTOM_ID, CUSTOM_CHILD_ID);
+    await selectSectionWithElement(DURABLE_ID, DURABLE_CODE_ID);
 
     const box = selectionBox();
-    expect(box.getAttribute("data-element-id")).toBe(CUSTOM_CHILD_ID);
+    expect(box.getAttribute("data-element-id")).toBe(DURABLE_CODE_ID);
     expect(box.style.left).toBe("140px");
     expect(box.style.top).toBe("260px");
     expect(box.style.width).toBe("120px");
@@ -327,11 +327,11 @@ describe("overlay bounding box targets the focused element (P25 D6/S3)", () => {
 
   it("restores the box to the section boundary when the nested focus is cleared", async () => {
     render(<CanvasHarness />);
-    await selectSectionWithElement(CUSTOM_ID, CUSTOM_CHILD_ID);
+    await selectSectionWithElement(DURABLE_ID, DURABLE_CODE_ID);
     expect(selectionBox().style.width).toBe("120px");
 
     // Clicking the section background clears the element focus (D3).
-    const wrapper = document.querySelector(`[data-section-id="${CUSTOM_ID}"]`);
+    const wrapper = document.querySelector(`[data-section-id="${DURABLE_ID}"]`);
     expect(wrapper).toBeTruthy();
     await act(async () => {
       fireEvent.pointerDown(wrapper as HTMLElement);
@@ -339,7 +339,7 @@ describe("overlay bounding box targets the focused element (P25 D6/S3)", () => {
     await flushMicrotasks();
 
     const box = selectionBox();
-    expect(box.getAttribute("data-element-id")).toBe(CUSTOM_ID);
+    expect(box.getAttribute("data-element-id")).toBe(DURABLE_ID);
     expect(box.style.left).toBe("100px");
     expect(box.style.top).toBe("200px");
     expect(box.style.width).toBe("400px");
@@ -379,29 +379,5 @@ describe("nested transform commits (P25 REQ-4)", () => {
     expect(geometry).toMatchObject({ width: 170, height: 90, x: 140, y: 260 });
     // The owning section root is untouched by an element gesture.
     expect(section.tree?.nodes[DURABLE_ID]?.geometry).toBeUndefined();
-  });
-
-  it("writes nested geometry into a custom-block's persisted tree as one entry", async () => {
-    render(<CanvasHarness />);
-    await selectSectionWithElement(CUSTOM_ID, CUSTOM_CHILD_ID);
-    useCanvasInteractionStore.getState().setSnapEnabled(false);
-
-    const handle = document.querySelector('[data-testid="canvas-resize-handle-se"]') as HTMLElement;
-    const historyBefore = useEditorStore.getState().history.past.length;
-
-    await act(async () => {
-      fireEvent.pointerDown(handle, { clientX: 200, clientY: 300 });
-      fireEvent.pointerMove(handle, { clientX: 240, clientY: 320 });
-      fireEvent.pointerUp(handle, { clientX: 240, clientY: 320 });
-    });
-    await flushMicrotasks();
-
-    expect(useEditorStore.getState().history.past.length).toBe(historyBefore + 1);
-
-    const section = useEditorStore
-      .getState()
-      .project.pages[0].sections.find((s) => s.id === CUSTOM_ID);
-    const tree = section?.props.tree as { nodes: Record<string, { geometry?: unknown }> };
-    expect(tree.nodes[CUSTOM_CHILD_ID]?.geometry).toMatchObject({ width: 160, height: 80 });
   });
 });

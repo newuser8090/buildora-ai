@@ -279,7 +279,39 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("nested element selection producer (P25 D3)", () => {
-  it("focuses the nested element a pointerdown hits", async () => {
+  it("focuses the nested element a pointerdown hits in a durable tree section", async () => {
+    render(<CanvasHarness />);
+    await act(async () => {
+      useEditorStore.getState().selectSection(DURABLE_ID);
+      useCanvasInteractionStore.getState().setSelection([DURABLE_ID], {
+        multi: false,
+        anchorId: DURABLE_ID,
+      });
+    });
+
+    await act(async () => {
+      fireEvent.pointerDown(nodeById(DURABLE_CODE_ID));
+    });
+
+    expect(selectionIds()).toEqual([DURABLE_CODE_ID]);
+  });
+
+  it("activates the owning section and focuses its element in one gesture", async () => {
+    render(<CanvasHarness />);
+    await act(async () => {
+      useEditorStore.getState().selectSection(LEGACY_ID);
+    });
+
+    await act(async () => {
+      fireEvent.pointerDown(nodeById(DURABLE_CODE_ID));
+    });
+    await flushMicrotasks();
+
+    expect(useEditorStore.getState().selectedSectionId).toBe(DURABLE_ID);
+    expect(selectionIds()).toEqual([DURABLE_CODE_ID]);
+  });
+
+  it("keeps the section root selected for legacy custom-block clicks (frozen contract)", async () => {
     render(<CanvasHarness />);
     await act(async () => {
       useEditorStore.getState().selectSection(CUSTOM_ID);
@@ -293,67 +325,54 @@ describe("nested element selection producer (P25 D3)", () => {
       fireEvent.pointerDown(nodeById(CUSTOM_CHILD_ID));
     });
 
-    expect(selectionIds()).toEqual([CUSTOM_CHILD_ID]);
-  });
-
-  it("activates the owning section and focuses its element in one gesture", async () => {
-    render(<CanvasHarness />);
-    await act(async () => {
-      useEditorStore.getState().selectSection(LEGACY_ID);
-    });
-
-    await act(async () => {
-      fireEvent.pointerDown(nodeById(CUSTOM_CHILD_ID));
-    });
-    await flushMicrotasks();
-
-    expect(useEditorStore.getState().selectedSectionId).toBe(CUSTOM_ID);
-    expect(selectionIds()).toEqual([CUSTOM_CHILD_ID]);
+    // D3 scopes the nested write to non-custom-block sections (the build tree
+    // remains custom-block's element-selection surface, P22-C).
+    expect(selectionIds()).toEqual([CUSTOM_ID]);
   });
 
   it("selects the section root when the section ROOT node is hit", async () => {
     render(<CanvasHarness />);
     await act(async () => {
-      useEditorStore.getState().selectSection(CUSTOM_ID);
-      useCanvasInteractionStore.getState().setSelection([CUSTOM_CHILD_ID], {
+      useEditorStore.getState().selectSection(DURABLE_ID);
+      useCanvasInteractionStore.getState().setSelection([DURABLE_CODE_ID], {
         multi: false,
-        anchorId: CUSTOM_CHILD_ID,
+        anchorId: DURABLE_CODE_ID,
       });
     });
 
     await act(async () => {
-      fireEvent.pointerDown(nodeById(CUSTOM_ID));
+      fireEvent.pointerDown(nodeById(DURABLE_ID));
     });
 
-    expect(selectionIds()).toEqual([CUSTOM_ID]);
+    expect(selectionIds()).toEqual([DURABLE_ID]);
   });
 
   it("selects the section root when the section background is hit", async () => {
     render(<CanvasHarness />);
     await act(async () => {
-      useEditorStore.getState().selectSection(CUSTOM_ID);
-      useCanvasInteractionStore.getState().setSelection([CUSTOM_CHILD_ID], {
+      useEditorStore.getState().selectSection(DURABLE_ID);
+      useCanvasInteractionStore.getState().setSelection([DURABLE_CODE_ID], {
         multi: false,
-        anchorId: CUSTOM_CHILD_ID,
+        anchorId: DURABLE_CODE_ID,
       });
     });
 
-    const wrapper = document.querySelector(`[data-section-id="${CUSTOM_ID}"]`);
+    const wrapper = document.querySelector(`[data-section-id="${DURABLE_ID}"]`);
     expect(wrapper).toBeTruthy();
     await act(async () => {
       fireEvent.pointerDown(wrapper as HTMLElement);
     });
 
-    expect(selectionIds()).toEqual([CUSTOM_ID]);
+    expect(selectionIds()).toEqual([DURABLE_ID]);
   });
 
   it("never rewrites the selection when the manipulation overlay is pressed", async () => {
     render(<CanvasHarness />);
     await act(async () => {
-      useEditorStore.getState().selectSection(CUSTOM_ID);
-      useCanvasInteractionStore.getState().setSelection([CUSTOM_CHILD_ID], {
+      useEditorStore.getState().selectSection(DURABLE_ID);
+      useCanvasInteractionStore.getState().setSelection([DURABLE_CODE_ID], {
         multi: false,
-        anchorId: CUSTOM_CHILD_ID,
+        anchorId: DURABLE_CODE_ID,
       });
     });
     await flushMicrotasks();
@@ -365,7 +384,7 @@ describe("nested element selection producer (P25 D3)", () => {
     });
 
     // The handle/box pointerdown must not reset the focused element.
-    expect(selectionIds()).toEqual([CUSTOM_CHILD_ID]);
+    expect(selectionIds()).toEqual([DURABLE_CODE_ID]);
   });
 });
 
@@ -377,22 +396,22 @@ describe("section-sync precedence (P25 D3)", () => {
   it("does not overwrite an active nested element focus within the same section", async () => {
     render(<CanvasHarness />);
     await act(async () => {
-      useEditorStore.getState().selectSection(CUSTOM_ID);
-      useCanvasInteractionStore.getState().setSelection([CUSTOM_CHILD_ID], {
+      useEditorStore.getState().selectSection(DURABLE_ID);
+      useCanvasInteractionStore.getState().setSelection([DURABLE_CODE_ID], {
         multi: false,
-        anchorId: CUSTOM_CHILD_ID,
+        anchorId: DURABLE_CODE_ID,
       });
     });
     await flushMicrotasks();
-    expect(selectionIds()).toEqual([CUSTOM_CHILD_ID]);
+    expect(selectionIds()).toEqual([DURABLE_CODE_ID]);
 
     // A project/tree update re-runs the sync effect — the element focus wins.
     await act(async () => {
-      useEditorStore.getState().updateSectionStyles(CUSTOM_ID, { paddingTop: "4px" });
+      useEditorStore.getState().updateSectionStyles(DURABLE_ID, { paddingTop: "4px" });
     });
     await flushMicrotasks();
 
-    expect(selectionIds()).toEqual([CUSTOM_CHILD_ID]);
+    expect(selectionIds()).toEqual([DURABLE_CODE_ID]);
   });
 
   it("re-syncs the transient selection when the active section genuinely changes", async () => {
@@ -418,29 +437,29 @@ describe("section-sync precedence (P25 D3)", () => {
   it("re-syncs to the new section even while a nested element of the old one is focused", async () => {
     render(<CanvasHarness />);
     await act(async () => {
-      useEditorStore.getState().selectSection(CUSTOM_ID);
-    });
-    await act(async () => {
-      fireEvent.pointerDown(nodeById(CUSTOM_CHILD_ID));
-    });
-    await flushMicrotasks();
-    expect(selectionIds()).toEqual([CUSTOM_CHILD_ID]);
-
-    await act(async () => {
       useEditorStore.getState().selectSection(DURABLE_ID);
     });
+    await act(async () => {
+      fireEvent.pointerDown(nodeById(DURABLE_CODE_ID));
+    });
+    await flushMicrotasks();
+    expect(selectionIds()).toEqual([DURABLE_CODE_ID]);
+
+    await act(async () => {
+      useEditorStore.getState().selectSection(CUSTOM_ID);
+    });
     await flushMicrotasks();
 
-    expect(selectionIds()).toEqual([DURABLE_ID]);
+    expect(selectionIds()).toEqual([CUSTOM_ID]);
   });
 
   it("clears the transient selection when the section selection is cleared", async () => {
     render(<CanvasHarness />);
     await act(async () => {
-      useEditorStore.getState().selectSection(CUSTOM_ID);
-      useCanvasInteractionStore.getState().setSelection([CUSTOM_CHILD_ID], {
+      useEditorStore.getState().selectSection(DURABLE_ID);
+      useCanvasInteractionStore.getState().setSelection([DURABLE_CODE_ID], {
         multi: false,
-        anchorId: CUSTOM_CHILD_ID,
+        anchorId: DURABLE_CODE_ID,
       });
     });
     await flushMicrotasks();
@@ -462,7 +481,7 @@ describe("element focus stays transient (P25 REQ-9)", () => {
   it("produces zero mutations in the project, history or serialized JSON", async () => {
     render(<CanvasHarness />);
     await act(async () => {
-      useEditorStore.getState().selectSection(CUSTOM_ID);
+      useEditorStore.getState().selectSection(DURABLE_ID);
     });
     await flushMicrotasks();
 
@@ -471,10 +490,10 @@ describe("element focus stays transient (P25 REQ-9)", () => {
     const serializedBefore = serializeProject(before);
 
     await act(async () => {
-      fireEvent.pointerDown(nodeById(CUSTOM_CHILD_ID));
+      fireEvent.pointerDown(nodeById(DURABLE_CODE_ID));
     });
 
-    expect(selectionIds()).toEqual([CUSTOM_CHILD_ID]);
+    expect(selectionIds()).toEqual([DURABLE_CODE_ID]);
     // Identical reference: no project mutation, no history entry.
     expect(useEditorStore.getState().project).toBe(before);
     expect(useEditorStore.getState().history.past.length).toBe(historyBefore);
@@ -527,7 +546,7 @@ describe("canvas click → universal inspector routing (P24-C integration)", () 
 describe("durable-geometry handles (P25 D6/S3)", () => {
   const HANDLE = '[data-testid="canvas-resize-handle-se"]';
 
-  it("keeps handles for a custom-block section while a nested element is focused", async () => {
+  it("keeps handles for a custom-block section (legacy selection unchanged)", async () => {
     render(<CanvasHarness />);
     await act(async () => {
       useEditorStore.getState().selectSection(CUSTOM_ID);
@@ -544,8 +563,27 @@ describe("durable-geometry handles (P25 D6/S3)", () => {
     });
     await flushMicrotasks();
 
+    // Legacy custom-block keeps its root selection, and the handle gate no
+    // longer depends on selection membership (R3).
+    expect(selectionIds()).toEqual([CUSTOM_ID]);
+    expect(document.querySelector(HANDLE)).toBeTruthy();
+  });
+
+  it("keeps handles while a nested element of a durable section is focused", async () => {
+    render(<CanvasHarness />);
+    await act(async () => {
+      useEditorStore.getState().selectSection(DURABLE_ID);
+    });
+    await flushMicrotasks();
+    expect(document.querySelector(HANDLE)).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.pointerDown(nodeById(DURABLE_CODE_ID));
+    });
+    await flushMicrotasks();
+
     // Dropping the selection-membership clause is what keeps this true (R3).
-    expect(selectionIds()).toEqual([CUSTOM_CHILD_ID]);
+    expect(selectionIds()).toEqual([DURABLE_CODE_ID]);
     expect(document.querySelector(HANDLE)).toBeTruthy();
   });
 

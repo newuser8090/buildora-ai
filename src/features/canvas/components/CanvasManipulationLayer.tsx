@@ -34,7 +34,9 @@
 // `[data-section-id]` exactly as before. Handles render only for sections the
 // canvas actually renders through `BlockRenderer` — `custom-block`, or a
 // durable tree whose custom code the export emits (D8) — so D6's clamp stays
-// export-aligned instead of widening to props-rendered sections. Marquee
+// export-aligned instead of widening to props-rendered sections. Nested focus
+// is produced for the durable tree path only; legacy `custom-block` keeps its
+// frozen canvas selection contract (see the producer below, D3). Marquee
 // selection is engine/store-ready; multi-element overlays remain out of scope
 // (OQ-4).
 // ---------------------------------------------------------------------------
@@ -207,10 +209,18 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
   // routing was unreachable at runtime. This listens for pointerdowns inside
   // the preview content and focuses the element node that was hit:
   //   - a node carrying `data-element-id` / `data-block-id` that resolves to a
-  //     NESTED node of its owning section's tree → `setSelection([elementId])`
-  //     (and selects the owning section if it was not already active);
-  //   - the section ROOT node, or section/canvas background → the section-root
-  //     selection (`[selectedSectionId]`).
+  //     NESTED node of a section the P25 TREE PATH renders (a durable tree) →
+  //     `setSelection([elementId])` (and selects the owning section if it was
+  //     not already active);
+  //   - the section ROOT node, section/canvas background, or any node inside a
+  //     legacy `custom-block` → the section-root selection.
+  //
+  // Legacy `custom-block` is deliberately EXCLUDED from the nested write: its
+  // element-selection surface is the build tree (P22-C), and its canvas click
+  // contract (click bubbles to the container) is frozen by §5. D3 scopes the
+  // write to non-`custom-block` sections for exactly this reason; widening it
+  // would silently change every existing custom-block canvas flow.
+  //
   // Pure transient write: no durable state, no history, no editor-store key.
   useEffect(() => {
     const el = contentRef.current;
@@ -238,8 +248,10 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
           const owner = findSection(editor.project, ownerSectionId);
           const ownerTree = owner ? sectionToElementTree(owner) : null;
           if (
-            ownerTree &&
-            ownerTree.nodes[elementId] &&
+            owner !== null &&
+            !isCustomBlockSection(owner) &&
+            ownerTree !== null &&
+            ownerTree.nodes[elementId] !== undefined &&
             !ownerTree.rootIds.includes(elementId)
           ) {
             if (editor.selectedSectionId !== ownerSectionId) {
@@ -248,7 +260,8 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
             interaction.setSelection([elementId], { multi: false, anchorId: elementId });
             return;
           }
-          // The section's ROOT node (or an unknown node) is section-level.
+          // The section ROOT node, an unknown node, or a legacy custom-block
+          // click is section-level (the frozen contract).
           interaction.setSelection([ownerSectionId], { multi: false, anchorId: ownerSectionId });
           return;
         }
