@@ -16,18 +16,35 @@
 //   - wires canvas keyboard shortcuts that do NOT collide with the existing
 //     section-level shortcuts (Escape / Cmd+C / Cmd+V / arrows)
 //
-// Handles are rendered only for custom-block sections, whose element trees
-// persist geometry durably. Regular sections get the selection box + quick
-// actions; their geometry gains a durable home when the element renderer +
-// tree persistence land (P22-C/D). Marquee selection is engine/store-ready
-// and activates with the element renderer.
+// Phase P25 (Slice 2, decisions D3/D6): the layer is also the canvas's nested
+// ELEMENT SELECTION PRODUCER. A pointerdown on an element node carrying
+// `data-element-id` / `data-block-id` writes a single nested element focus to
+// the transient interaction store (`setSelection([elementId])`), and a
+// pointerdown on section/canvas background mirrors the section root. The
+// section-sync effect yields to an active element focus so the two writers can
+// never fight (D3). Selection remains UI state only — never persisted, never
+// history, never synchronized.
+//
+// Handles are rendered for every section whose geometry is durable —
+// `custom-block` (persisted `props.tree`) and any section carrying a durable
+// element tree (P24-B) — per D6. The membership clause is deliberately gone:
+// an active nested element focus legitimately replaces `section.id` in the
+// selection, and keeping the clause would silently remove handles from
+// `custom-block` (the regression R3 warns about). Marquee selection is
+// engine/store-ready; per-element overlays remain a later concern (OQ-4).
 // ---------------------------------------------------------------------------
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
-import { sectionToElementTree } from "@/features/elements/adapters/section-element-adapter";
+import {
+  sectionHasDurableTree,
+  sectionToElementTree,
+} from "@/features/elements/adapters/section-element-adapter";
 import { isCustomBlockSection } from "@/features/blocks/adapters/section-block-adapter";
 import { useCanvasInteractionStore } from "../store/canvas-interaction-store";
+import { singleNestedSelectionId } from "../engine/selection";
+import type { BaseSection } from "@/types/section";
+import type { Project } from "@/types/project";
 import { useCanvasManipulation } from "../hooks/useCanvasManipulation";
 import { useCanvasKeyboard } from "../hooks/useCanvasKeyboard";
 import { SelectionOverlay } from "./SelectionOverlay";
@@ -47,6 +64,15 @@ export interface CanvasManipulationLayerProps {
   contentRef: React.RefObject<HTMLDivElement | null>;
 }
 
+/** Find a section anywhere in the project (the owner of a clicked node). */
+function findSection(project: Project, sectionId: string): BaseSection | null {
+  for (const page of project.pages) {
+    const found = page.sections.find((s) => s.id === sectionId);
+    if (found) return found;
+  }
+  return null;
+}
+
 export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerProps) {
   // ---- Editor store (durable + selection source of truth) ----
   const selectedSectionId = useEditorStore((s) => s.selectedSectionId);
@@ -59,11 +85,8 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
   const deleteSection = useEditorStore((s) => s.deleteSection);
 
   // ---- Transient interaction store ----
-  const selectionIds = useCanvasInteractionStore((s) => s.selection.ids);
   const previewRects = useCanvasInteractionStore((s) => s.previewRects);
   const previewRotation = useCanvasInteractionStore((s) => s.previewRotation);
-  const setSelection = useCanvasInteractionStore((s) => s.setSelection);
-  const clearInteractionSelection = useCanvasInteractionStore((s) => s.clearSelection);
   const setClipboard = useCanvasInteractionStore((s) => s.setClipboard);
   const clipboard = useCanvasInteractionStore((s) => s.clipboard);
 
@@ -116,15 +139,98 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
   // ---- Selection sync: editor section selection → transient selection ----
   // Mirrored asynchronously (microtask) so the transient store write never
   // happens synchronously inside the effect body.
+  //
+  // Phase P25 (D3) precedence rule: the section-root mirror is written ONLY
+  // when no element of the CURRENT section is focused. An explicit nested
+  // element focus always wins until it is cleared — so a section/tree re-render
+  // (or a project edit) can never clobber the element the inspector is showing.
+  // The sync still fires when the active section genuinely changes or when the
+  // current transient selection does not belong to the selected section.
   useEffect(() => {
     queueMicrotask(() => {
-      if (selectedSectionId) {
-        setSelection([selectedSectionId], { multi: false, anchorId: selectedSectionId });
-      } else {
-        clearInteractionSelection();
+      // Re-read the FRESHEST store state inside the microtask so a queued
+      // microtask from a previous section can never clobber a newer element
+      // focus with stale data.
+      const editor = useEditorStore.getState();
+      const sectionId = editor.selectedSectionId;
+      const interaction = useCanvasInteractionStore.getState();
+      if (!sectionId) {
+        interaction.clearSelection();
+        return;
       }
+      const owner = findSection(editor.project, sectionId);
+      const freshTree = owner ? sectionToElementTree(owner) : null;
+      if (freshTree && singleNestedSelectionId(freshTree, interaction.selection.ids)) return;
+      interaction.setSelection([sectionId], { multi: false, anchorId: sectionId });
     });
-  }, [selectedSectionId, setSelection, clearInteractionSelection]);
+  }, [selectedSectionId, tree]);
+
+  // ---- Nested element selection producer (Phase P25, decision D3) ----
+  // The canvas had no writer of nested element ids (F1), so P24-C's inspector
+  // routing was unreachable at runtime. This listens for pointerdowns inside
+  // the preview content and focuses the element node that was hit:
+  //   - a node carrying `data-element-id` / `data-block-id` that resolves to a
+  //     NESTED node of its owning section's tree → `setSelection([elementId])`
+  //     (and selects the owning section if it was not already active);
+  //   - the section ROOT node, or section/canvas background → the section-root
+  //     selection (`[selectedSectionId]`).
+  // Pure transient write: no durable state, no history, no editor-store key.
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+
+      // The manipulation overlay's own chrome (move / resize / rotate handles,
+      // quick actions) must never rewrite the selection it operates on.
+      if (target.closest('[data-testid="canvas-selection-box"]')) return;
+
+      const editor = useEditorStore.getState();
+      const interaction = useCanvasInteractionStore.getState();
+
+      const node = target.closest("[data-element-id], [data-block-id]");
+      if (node) {
+        const elementId =
+          node.getAttribute("data-element-id") ?? node.getAttribute("data-block-id");
+        const ownerSectionId =
+          node.closest("[data-section-id]")?.getAttribute("data-section-id") ?? null;
+        if (elementId && ownerSectionId) {
+          const owner = findSection(editor.project, ownerSectionId);
+          const ownerTree = owner ? sectionToElementTree(owner) : null;
+          if (
+            ownerTree &&
+            ownerTree.nodes[elementId] &&
+            !ownerTree.rootIds.includes(elementId)
+          ) {
+            if (editor.selectedSectionId !== ownerSectionId) {
+              editor.selectSection(ownerSectionId);
+            }
+            interaction.setSelection([elementId], { multi: false, anchorId: elementId });
+            return;
+          }
+          // The section's ROOT node (or an unknown node) is section-level.
+          interaction.setSelection([ownerSectionId], { multi: false, anchorId: ownerSectionId });
+          return;
+        }
+      }
+
+      // Background click → the selected section's root (never an element).
+      if (editor.selectedSectionId) {
+        interaction.setSelection([editor.selectedSectionId], {
+          multi: false,
+          anchorId: editor.selectedSectionId,
+        });
+      } else {
+        interaction.clearSelection();
+      }
+    };
+
+    el.addEventListener("pointerdown", onPointerDown);
+    return () => el.removeEventListener("pointerdown", onPointerDown);
+  }, [contentRef]);
 
   // ---- Measure the selected section's rect (re-measure on changes) ----
   const [measuredRect, setMeasuredRect] = useState<ElementRect | null>(null);
@@ -206,7 +312,7 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
           elementId={section.id}
           rect={displayedRect}
           rotation={previewRotation}
-          manipulable={isCustomBlock && selectionIds.includes(section.id)}
+          manipulable={isCustomBlock || sectionHasDurableTree(section)}
           onMoveStart={api.handleMoveStart}
           onRotateStart={api.handleRotateStart}
           onHandleStart={api.handleResizeStart}
