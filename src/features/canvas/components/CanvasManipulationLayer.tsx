@@ -25,19 +25,24 @@
 // never fight (D3). Selection remains UI state only — never persisted, never
 // history, never synchronized.
 //
-// Handles are rendered for every section whose geometry is durable —
-// `custom-block` (persisted `props.tree`) and any section carrying a durable
-// element tree (P24-B) — per D6. The membership clause is deliberately gone:
-// an active nested element focus legitimately replaces `section.id` in the
-// selection, and keeping the clause would silently remove handles from
-// `custom-block` (the regression R3 warns about). Marquee selection is
-// engine/store-ready; per-element overlays remain a later concern (OQ-4).
+// Phase P25 (Slice 3, decisions D6/S3): the overlay and the transform handles
+// TARGET the selection. When a single nested element is focused, the bounding
+// box, dims chip and 8 resize/rotate handles are measured from that element's
+// own DOM node (`[data-block-id]` / `[data-element-id]`), and a gesture commits
+// geometry for that element id on the owning section's durable tree. With no
+// element focused (section-root selection) the box frames the section container
+// `[data-section-id]` exactly as before. Handles render only for sections the
+// canvas actually renders through `BlockRenderer` — `custom-block`, or a
+// durable tree whose custom code the export emits (D8) — so D6's clamp stays
+// export-aligned instead of widening to props-rendered sections. Marquee
+// selection is engine/store-ready; multi-element overlays remain out of scope
+// (OQ-4).
 // ---------------------------------------------------------------------------
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import {
-  sectionHasDurableTree,
+  durableTreeEnablesCustomCode,
   sectionToElementTree,
 } from "@/features/elements/adapters/section-element-adapter";
 import { isCustomBlockSection } from "@/features/blocks/adapters/section-block-adapter";
@@ -85,6 +90,8 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
   const deleteSection = useEditorStore((s) => s.deleteSection);
 
   // ---- Transient interaction store ----
+  const selectionIds = useCanvasInteractionStore((s) => s.selection.ids);
+  const anchorId = useCanvasInteractionStore((s) => s.anchorId);
   const previewRects = useCanvasInteractionStore((s) => s.previewRects);
   const previewRotation = useCanvasInteractionStore((s) => s.previewRotation);
   const setClipboard = useCanvasInteractionStore((s) => s.setClipboard);
@@ -96,6 +103,21 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
 
   // Materialized element tree for the selected section (the manipulation target).
   const tree = useMemo(() => (section ? sectionToElementTree(section) : null), [section]);
+
+  // ---- Overlay target: the focused nested element, else the section root ----
+  // The producer (D3) writes both `selection.ids` and `anchorId`; resolving
+  // through BOTH means a single nested focus frames the element, while an
+  // empty/ambiguous/stale selection falls back to the section container. Only
+  // ids that are genuinely NESTED in this section's tree resolve, so a stale
+  // id from another section can never frame the wrong DOM node.
+  const nestedSelectionId = useMemo(() => {
+    if (!tree) return null;
+    return (
+      singleNestedSelectionId(tree, selectionIds) ??
+      singleNestedSelectionId(tree, anchorId ? [anchorId] : [])
+    );
+  }, [tree, selectionIds, anchorId]);
+  const targetId = nestedSelectionId ?? selectedSectionId;
 
   // ---- Coordinate frame (zoom/scroll aware) ----
   const frame = useCallback((): CanvasFrame | null => {
@@ -113,28 +135,43 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
     };
   }, [contentRef, zoom]);
 
-  // ---- Measure every section in logical canvas coordinates ----
+  // ---- Measure rects in logical canvas coordinates ----
+  // Every section container is measured (snap targets / section-root overlay),
+  // and — when a nested element is focused — that element's OWN DOM node is
+  // measured too, keyed by the element id, so the overlay and the transform
+  // gestures target the element rather than its section (P25 D6/S3).
   const measureRects = useCallback((): Record<string, ElementRect> => {
     const el = contentRef.current;
     if (!el) return {};
     const f = frame();
     if (!f) return {};
-    const out: Record<string, ElementRect> = {};
     const scale = zoom / 100;
+    const measure = (node: HTMLElement): ElementRect => {
+      const r = node.getBoundingClientRect();
+      const origin = clientToCanvas(r.left, r.top, f);
+      return { x: origin.x, y: origin.y, width: r.width / scale, height: r.height / scale };
+    };
+
+    const out: Record<string, ElementRect> = {};
+    const sectionEl = section
+      ? el.querySelector(`[data-section-id="${CSS.escape(section.id)}"]`)
+      : null;
     for (const s of activePage?.sections ?? []) {
       const node = el.querySelector(`[data-section-id="${CSS.escape(s.id)}"]`);
       if (!(node instanceof HTMLElement)) continue;
-      const r = node.getBoundingClientRect();
-      const origin = clientToCanvas(r.left, r.top, f);
-      out[s.id] = {
-        x: origin.x,
-        y: origin.y,
-        width: r.width / scale,
-        height: r.height / scale,
-      };
+      out[s.id] = measure(node);
+    }
+
+    if (sectionEl instanceof HTMLElement && nestedSelectionId) {
+      const target = sectionEl.querySelector(
+        `[data-block-id="${CSS.escape(nestedSelectionId)}"], [data-element-id="${CSS.escape(nestedSelectionId)}"]`,
+      );
+      if (target instanceof HTMLElement) {
+        out[nestedSelectionId] = measure(target);
+      }
     }
     return out;
-  }, [contentRef, frame, zoom, activePage]);
+  }, [contentRef, frame, zoom, activePage, section, nestedSelectionId]);
 
   // ---- Selection sync: editor section selection → transient selection ----
   // Mirrored asynchronously (microtask) so the transient store write never
@@ -239,12 +276,12 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
     // initial measure and via event listeners afterwards (never synchronously
     // inside the effect body).
     const update = () => {
-      if (!selectedSectionId) {
+      if (!targetId) {
         setMeasuredRect(null);
         return;
       }
       const rects = measureRects();
-      setMeasuredRect(rects[selectedSectionId] ?? null);
+      setMeasuredRect(rects[targetId] ?? null);
     };
     queueMicrotask(update);
     const el = contentRef.current;
@@ -254,14 +291,20 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
       el?.removeEventListener("scroll", update);
       window.removeEventListener("resize", update);
     };
-  }, [selectedSectionId, measureRects, contentRef, project, zoom]);
+  }, [targetId, measureRects, contentRef, project, zoom]);
 
+  // Preview rects are keyed by the gesture's element id, so the live drag
+  // preview follows the same target (nested element or section root).
   const displayedRect =
-    selectedSectionId && previewRects && previewRects[selectedSectionId]
-      ? previewRects[selectedSectionId]
+    targetId && previewRects && previewRects[targetId]
+      ? previewRects[targetId]
       : measuredRect;
 
   // ---- Durable commit path (ONE history entry per gesture) ----
+  // The gesture engine builds `update-geometry` ops for the selected ids (a
+  // nested element id included) and `applyElementOpBatch` applies them through
+  // the element engine's `updateElementGeometry`, so a nested transform writes
+  // `node.geometry` on the owning section's durable tree in exactly ONE entry.
   const commit = useCallback(
     (nextTree: ReturnType<typeof sectionToElementTree>) => {
       if (!activePage || !section) return;
@@ -309,10 +352,10 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
     <>
       {displayedRect && (
         <SelectionOverlay
-          elementId={section.id}
+          elementId={targetId ?? section.id}
           rect={displayedRect}
           rotation={previewRotation}
-          manipulable={isCustomBlock || sectionHasDurableTree(section)}
+          manipulable={isCustomBlock || durableTreeEnablesCustomCode(section)}
           onMoveStart={api.handleMoveStart}
           onRotateStart={api.handleRotateStart}
           onHandleStart={api.handleResizeStart}
