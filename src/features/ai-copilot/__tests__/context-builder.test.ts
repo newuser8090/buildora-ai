@@ -5,14 +5,17 @@
 //   - secret / internal-field exclusion (privacy)
 // ---------------------------------------------------------------------------
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import {
   buildCopilotContext,
   contextByteLength,
 } from "../context/context-builder";
 import { COPILOT_LIMITS } from "../constants";
 import { MOCK_PROJECT } from "./helpers";
+import { sectionToElementTree } from "@/features/elements/adapters/section-element-adapter";
+import { registerDefaultBlocks, isDefaultBlocksRegistered } from "@/features/blocks/registry/block-registry";
 import type { Project } from "@/types/project";
+import type { ElementTree } from "@/features/elements/types";
 
 function cloneProject(): Project {
   return JSON.parse(JSON.stringify(MOCK_PROJECT)) as Project;
@@ -261,5 +264,91 @@ describe("style notes (Phase P11)", () => {
     // Style notes are the last to be dropped; if the byte bound held with
     // notes still present, they remain — otherwise they are removed cleanly.
     expect(Array.isArray(ctx.styleNotes) ? ctx.styleNotes.length : 0).toBeLessThanOrEqual(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase P26 Slice 1 — element digest for DURABLE section trees
+//
+// The digest used to read `section.props.tree`, which only exists on legacy
+// custom-block sections. A durable regular section stores its tree at
+// `section.tree`, so the digest silently resolved null and the model received
+// no element context. It now resolves through `sectionToElementTree`.
+// ---------------------------------------------------------------------------
+
+/** Make MOCK_PROJECT's hero a DURABLE section; return it plus a nested child id. */
+function durableHero() {
+  const project = cloneProject();
+  const hero = project.pages[0].sections.find((s) => s.type === "hero")!;
+  hero.tree = sectionToElementTree(hero);
+  const tree = hero.tree as ElementTree;
+  const rootId = tree.rootIds[0];
+  const childId = tree.nodes[rootId].children[0];
+  return { project, hero, childId };
+}
+
+describe("buildCopilotContext — durable section element digest (P26 Slice 1)", () => {
+  beforeAll(() => {
+    if (!isDefaultBlocksRegistered()) registerDefaultBlocks();
+  });
+
+  it("builds an element digest for a nested element in a durable hero section", () => {
+    const { project, hero, childId } = durableHero();
+    const ctx = buildCopilotContext({
+      project,
+      scope: { type: "element", pageId: "page-1", sectionId: hero.id, elementId: childId },
+      instruction: "Make the selected heading bold",
+    });
+    // Without the durable read this fell through to the field shape (no id).
+    expect(ctx.element?.elementId).toBe(childId);
+    expect(ctx.element?.elementType).toBeTruthy();
+    expect(ctx.element?.label).toBeTruthy();
+    expect(ctx.element?.parentType).toBeTruthy();
+  });
+
+  it("includes style tokens, animation and interaction for a durable element", () => {
+    const { project, hero, childId } = durableHero();
+    const tree = hero.tree as ElementTree;
+    const child = tree.nodes[childId];
+    child.style = { fontWeight: 700 };
+    child.animation = { trigger: "scroll", type: "fade" } as never;
+    child.interaction = { click: { target: { kind: "page", pageId: "page-1" } } } as never;
+
+    const ctx = buildCopilotContext({
+      project,
+      scope: { type: "element", pageId: "page-1", sectionId: hero.id, elementId: childId },
+      instruction: "Describe this element",
+    });
+    expect(ctx.element?.style?.some((e) => e.key === "fontWeight")).toBe(true);
+    expect(ctx.element?.animation).toContain("fade");
+    expect(ctx.element?.interaction).toContain("page");
+  });
+
+  it("stays within the context byte cap for a durable element scope", () => {
+    const { project, hero, childId } = durableHero();
+    const ctx = buildCopilotContext({
+      project,
+      scope: { type: "element", pageId: "page-1", sectionId: hero.id, elementId: childId },
+      instruction: "Tighten the spacing",
+    });
+    expect(contextByteLength(ctx)).toBeLessThanOrEqual(COPILOT_LIMITS.maxContextBytes);
+  });
+
+  it("falls back to the selected-field digest when the element does not resolve", () => {
+    const { project, hero } = durableHero();
+    const ctx = buildCopilotContext({
+      project,
+      scope: { type: "element", pageId: "page-1", sectionId: hero.id, elementId: "ghost-element" },
+      selectedField: {
+        label: "Headline",
+        currentValue: "Ship fast",
+        pageId: "page-1",
+        sectionId: hero.id,
+        fieldPath: ["headline"],
+      },
+      instruction: "Make it shorter",
+    });
+    expect(ctx.element?.label).toBe("Headline");
+    expect(ctx.element?.elementId).toBeUndefined();
   });
 });

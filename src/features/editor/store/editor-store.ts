@@ -49,17 +49,16 @@ import {
   elementTreeToSection,
   sectionToElementTree,
 } from "@/features/elements/adapters/section-element-adapter";
+import { prepareDurableSectionCommit } from "@/features/elements/adapters/section-tree-commit";
 import { applyElementOperation } from "@/features/elements/engine/element-operations";
 import {
   ElementAnimationSchema,
   ElementInteractionSchema,
 } from "@/features/elements/schemas/element-schemas";
-import { normalizeElementTree } from "@/features/elements/serialization/element-normalizer";
 import type {
   ElementAnimation,
   ElementInteraction,
   ElementTree,
-  SectionElement,
 } from "@/features/elements/types";
 import type { ResponsiveDecision } from "@/features/elements/responsive/types";
 import {
@@ -454,35 +453,9 @@ function commitLocalProject(
 // Phase P24-B — durable section-tree commit boundary
 // ---------------------------------------------------------------------------
 
-/**
- * Key-order-insensitive deep equality for plain JSON values. Used for no-op
- * detection on durable trees (JSON.stringify is key-order sensitive and would
- * produce false "changed" results after schema re-parsing).
- */
-function deepEqualJson(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (typeof a !== typeof b) return false;
-  if (Array.isArray(a) && Array.isArray(b)) {
-    if (a.length !== b.length) return false;
-    return a.every((value, index) => deepEqualJson(value, b[index]));
-  }
-  if (
-    a !== null && b !== null &&
-    typeof a === "object" && typeof b === "object" &&
-    !Array.isArray(a) && !Array.isArray(b)
-  ) {
-    const aKeys = Object.keys(a as Record<string, unknown>);
-    const bKeys = Object.keys(b as Record<string, unknown>);
-    if (aKeys.length !== bKeys.length) return false;
-    return aKeys.every((key) =>
-      deepEqualJson(
-        (a as Record<string, unknown>)[key],
-        (b as Record<string, unknown>)[key],
-      ),
-    );
-  }
-  return false;
-}
+// Key-order-insensitive deep-equality no-op detection for durable trees now
+// lives in the shared durable-commit helper (section-tree-commit.ts), so the
+// store and the AI plan simulator detect no-ops identically.
 
 type SectionTreeCommit =
   | { ok: false; error: EditorMutationError }
@@ -548,32 +521,10 @@ function prepareSectionTreeCommit(
     return { ok: true, changed: true, section: folded.value.section };
   }
 
-  // ---- Regular sections: durable tree path ----
-  const normalized = normalizeElementTree(tree);
-  if (!normalized) {
-    return invalidTree("The element tree is too corrupt to repair.");
-  }
-  const folded = elementTreeToSection(normalized, section);
-  if (!folded.ok) return invalidTree(folded.error.message);
-
-  const durable = (section as SectionElement).tree;
-  if (durable) {
-    // Already durable — no-op only when the tree is truly unchanged.
-    if (deepEqualJson(durable, normalized)) return { ok: true, changed: false };
-  } else {
-    // Legacy — no-op when the tree is exactly what the current props
-    // materialize to (nothing new would be persisted).
-    const materialized = sectionToElementTree(section);
-    if (deepEqualJson(materialized, normalized)) return { ok: true, changed: false };
-  }
-
-  const durableSection: SectionElement = {
-    ...section,
-    tree: normalized,
-    props: folded.value.section.props,
-    styles: folded.value.section.styles,
-  };
-  return { ok: true, changed: true, section: durableSection };
+  // ---- Regular sections: durable tree path (shared with the AI plan path) ----
+  const prepared = prepareDurableSectionCommit(section, tree);
+  if (!prepared.ok) return invalidTree(prepared.reason);
+  return prepared;
 }
 
 /** Map a structure-layer error into an EditorMutationResult. */

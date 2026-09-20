@@ -36,8 +36,10 @@ import {
 import { validateRoutingForExport } from "@/features/routing/routes";
 import {
   elementTreeToSection,
+  sectionHasDurableTree,
   sectionToElementTree,
 } from "@/features/elements/adapters/section-element-adapter";
+import { prepareDurableSectionCommit } from "@/features/elements/adapters/section-tree-commit";
 import { isCustomBlockSection } from "@/features/blocks/adapters/section-block-adapter";
 import {
   applyElementOperation,
@@ -479,13 +481,18 @@ function applyUpdatePageMeta(
 }
 
 // ---------------------------------------------------------------------------
-// Element operations (Phase P22-H) — custom-block element trees only
+// Element operations (Phase P22-H, widened by P26 Slice 1)
 //
 // Every element op is executed through the canonical applyElementOperation
 // engine and materializes/folds through sectionToElementTree /
-// elementTreeToSection. Targets are restricted to CUSTOM-BLOCK sections (the
-// durable element-tree surface); regular sections are rejected rather than
-// silently dropping element metadata after persistence.
+// elementTreeToSection. Targets are any section that OWNS an element surface:
+// legacy custom-block (props.tree) or a durable section.tree.
+//
+// The durable write goes through prepareDurableSectionCommit — the SAME
+// preparation the editor store uses — so a regular section persists its tree
+// instead of folding into props alone, which would leave section.tree stale and
+// silently discard geometry/viewport/animation/interaction/custom code.
+// Custom-block sections keep their existing whole-tree props.tree fold.
 // ---------------------------------------------------------------------------
 
 /** Narrow the engine's union result to the tree (duplicate returns {tree,newId}). */
@@ -515,10 +522,12 @@ function applyElementOp(
     return opError(op, `Section "${target.sectionId}" does not exist on page "${target.pageId}".`, "sectionId");
   }
   const section = found.section;
-  if (!isCustomBlockSection(section)) {
+  const isCustom = isCustomBlockSection(section);
+  // P26 Slice 1 — any section that owns an element surface is targetable.
+  if (!isCustom && !sectionHasDurableTree(section)) {
     return opError(
       op,
-      "Element editing is only supported inside custom-block sections.",
+      "Element editing is only supported inside sections with an element tree.",
       "sectionId",
     );
   }
@@ -534,23 +543,39 @@ function applyElementOp(
   if (!applied.ok) {
     return opError(op, applied.error.message, errorField);
   }
-  const folded = elementTreeToSection(applied.value, section);
-  if (!folded.ok) {
-    return opError(op, folded.error.message, "tree");
+
+  let nextSection: BaseSection | null = null;
+
+  if (isCustom) {
+    // ---- Legacy custom-block: existing whole-tree props.tree fold ----
+    const folded = elementTreeToSection(applied.value, section);
+    if (!folded.ok) {
+      return opError(op, folded.error.message, "tree");
+    }
+    const changed =
+      JSON.stringify(folded.value.section.props) !== JSON.stringify(section.props);
+    if (changed) {
+      nextSection = {
+        ...section,
+        props: folded.value.section.props,
+        styles: folded.value.section.styles,
+      };
+    }
+  } else {
+    // ---- Durable regular section: persist the tree (shared preparation) ----
+    const prepared = prepareDurableSectionCommit(section, applied.value);
+    if (!prepared.ok) return opError(op, prepared.reason, "tree");
+    if (prepared.changed) nextSection = prepared.section;
   }
-  const changed =
-    JSON.stringify(folded.value.section.props) !== JSON.stringify(section.props);
-  if (!changed) {
+
+  if (!nextSection) {
     return { ok: true, project, changed: false, detail: "Element unchanged" };
   }
+
   const updated = cloneProject(project);
   const page = findPage(updated, target.pageId)!;
   const idx = page.sections.findIndex((s) => s.id === target.sectionId);
-  page.sections[idx] = {
-    ...page.sections[idx],
-    props: folded.value.section.props,
-    styles: folded.value.section.styles,
-  };
+  page.sections[idx] = nextSection;
   return { ok: true, project: updated, changed: true, detail };
 }
 

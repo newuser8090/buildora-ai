@@ -15,8 +15,12 @@
 //   3. the selected section's ROOT element (matches the inspector's root
 //      fallback when nothing nested is selected)
 //
-// Rules (approved decisions):
-//   - ONLY custom-block sections (the durable element-tree surface) qualify
+// Rules (approved decisions — P22-H, widened by P26 Slice 1 / OQ-1):
+//   - the section must own an element surface: legacy custom-block sections
+//     (props.tree) or ANY section carrying a durable section.tree (P24-B/P25)
+//   - the tree is always read through sectionToElementTree(), which prefers
+//     the durable tree and reconciles bound text from current props, and
+//     projects custom-block through the block adapter
 //   - ONLY a single selected element is accepted
 //   - the element must be RENDERABLE/durable (registered block-derived type;
 //     element-only families have no renderer or persistence path)
@@ -30,7 +34,10 @@
 import { useMemo } from "react";
 import type { Project } from "@/types/project";
 import type { BaseSection } from "@/types/section";
-import { sectionToElementTree } from "@/features/elements/adapters/section-element-adapter";
+import {
+  sectionHasDurableTree,
+  sectionToElementTree,
+} from "@/features/elements/adapters/section-element-adapter";
 import { isCustomBlockSection } from "@/features/blocks/adapters/section-block-adapter";
 import { isRenderableElementType } from "@/features/elements/registry/element-registry";
 import type { ElementNode, ElementTree } from "@/features/elements/types";
@@ -84,9 +91,13 @@ export function resolveElementEditTarget(
     : null;
   if (!section) return null;
 
-  // Element AI targets custom-block sections only (durable element trees).
-  if (!isCustomBlockSection(section)) return null;
+  // Element AI targets a section that owns an element surface: legacy
+  // custom-block sections (props.tree) and every section carrying a durable
+  // section.tree. A section with neither has no element tree to target.
+  if (!sectionHasDurableTree(section) && !isCustomBlockSection(section)) return null;
 
+  // ONE materialization entry for both shapes: the durable tree is preferred
+  // and reconciled with the current props; custom-block projects props.tree.
   const tree = sectionToElementTree(section);
   if (tree.rootIds.length === 0) return null;
   const rootId = tree.rootIds[0];

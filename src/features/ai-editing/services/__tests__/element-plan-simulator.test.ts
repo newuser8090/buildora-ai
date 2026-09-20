@@ -3,7 +3,9 @@
 //   - every element op applies through the canonical engine and folds back
 //     into the custom-block section props.tree
 //   - invalid/missing targets fail cleanly
-//   - regular (non-custom-block) sections are rejected
+//   - sections with no element tree (legacy regular sections) are rejected
+//   - durable regular sections are valid targets and persist section.tree
+//     (P26 Slice 1)
 //   - engine constraints (nesting, visibility, registered types) still apply
 //   - no live mutation, deterministic snapshots for diffs
 // ---------------------------------------------------------------------------
@@ -14,6 +16,7 @@ import { CUSTOM_BLOCK_SECTION_TYPE } from "@/features/code-import/schemas/custom
 import { sectionToElementTree } from "@/features/elements/adapters/section-element-adapter";
 import type { AiEditOperation } from "../../plan-types";
 import type { Project } from "@/types/project";
+import type { ElementTree } from "@/features/elements/types";
 import type { BlockTree } from "@/features/blocks/types";
 import { registerDefaultBlocks, isDefaultBlocksRegistered } from "@/features/blocks/registry/block-registry";
 
@@ -433,7 +436,7 @@ describe("simulatePlan — element guards", () => {
     if (!result.ok) expect(result.failedOperationId).toBe("op-1");
   });
 
-  it("rejects element ops on regular (non-custom-block) sections", () => {
+  it("rejects element ops on sections with no element tree (legacy regular section)", () => {
     const project = JSON.parse(JSON.stringify(PROJECT)) as Project;
     project.pages[0].sections[0] = {
       id: "s-hero",
@@ -457,7 +460,49 @@ describe("simulatePlan — element guards", () => {
       project,
     );
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.message).toMatch(/custom-block/i);
+    if (!result.ok) expect(result.error.message).toMatch(/element tree/i);
+  });
+
+  // Phase P26 Slice 1 — a durable regular section is a valid element target.
+  // The write must land on section.tree: folding into props alone (the legacy
+  // block path) would leave the durable tree stale and drop element metadata.
+  it("applies element ops on a durable regular section and persists section.tree", () => {
+    const project = JSON.parse(JSON.stringify(PROJECT)) as Project;
+    const hero = {
+      id: "s-hero",
+      type: "hero",
+      order: 1,
+      visible: true,
+      props: { headline: "Hero", subheadline: "Sub", primaryCta: { text: "Go", href: "#" } },
+      styles: {},
+    } as Project["pages"][number]["sections"][number];
+    // Materialize + persist the tree exactly as P24-B does.
+    const tree = sectionToElementTree(hero);
+    const targetId = tree.nodes[tree.rootIds[0]].children[0];
+    project.pages[0].sections[0] = { ...hero, tree };
+
+    const result = run(
+      [
+        {
+          ...baseOp("op-1", "update-element-style"),
+          type: "update-element-style",
+          pageId: "page-1",
+          sectionId: "s-hero",
+          elementId: targetId,
+          style: { fontWeight: 700 },
+        },
+      ],
+      project,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const next = sectionById(result.project, "s-hero") as { tree?: ElementTree };
+    expect(next.tree?.nodes[targetId].style.fontWeight).toBe(700);
+    // The input project is never mutated.
+    expect(
+      (project.pages[0].sections[0] as { tree: ElementTree }).tree.nodes[targetId].style.fontWeight,
+    ).toBeUndefined();
   });
 
   it("rejects insert-element with an unregistered element-only type", () => {

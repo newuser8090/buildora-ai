@@ -17,6 +17,7 @@
 import type { FieldPathSegment } from "@/features/inline-editing/types";
 import type { Project, Viewport } from "@/types/project";
 import type { LaunchCheck, LaunchReadinessReport } from "@/features/launch-readiness/types";
+import { sectionToElementTree } from "@/features/elements/adapters/section-element-adapter";
 import type { CopilotMessage, CopilotScope } from "../types";
 import { COPILOT_LIMITS, COPILOT_MEMORY_LIMITS } from "../constants";
 
@@ -222,8 +223,16 @@ function compactMetadata(value: unknown): string | undefined {
 }
 
 /**
- * Build a bounded digest of a selected element inside a custom-block tree.
- * Pure + deterministic; never exposes the whole tree.
+ * Build a bounded digest of a selected element inside a section's element
+ * tree. Pure + deterministic; never exposes the whole tree.
+ *
+ * Phase P26 Slice 1 (decision D2) — the tree is resolved through
+ * `sectionToElementTree()`, the single materialization entry, so a durable
+ * regular section (tree stored at `section.tree`) resolves exactly like a
+ * legacy custom-block section (tree stored at `props.tree`). Reading
+ * `props.tree` directly silently returned null for durable sections, which
+ * made the digest fall back to the inline-field shape and sent the model no
+ * element context at all.
  */
 export function buildElementDigest(
   project: Project,
@@ -232,10 +241,8 @@ export function buildElementDigest(
   const page = project.pages.find((p) => p.id === scope.pageId);
   const section = page?.sections.find((s) => s.id === scope.sectionId);
   if (!page || !section) return null;
-  const tree = (section.props as { tree?: unknown })?.tree as
-    | { rootIds: string[]; nodes: Record<string, { props?: Record<string, unknown>; style?: Record<string, unknown>; viewport?: Record<string, unknown>; animation?: unknown; interaction?: unknown; type?: string; parentId?: string | null; children?: string[] }> }
-    | undefined;
-  const node = tree?.nodes?.[scope.elementId];
+  const tree = sectionToElementTree(section);
+  const node = tree.nodes[scope.elementId];
   if (!node) return null;
 
   const label = elementLabelFor(node.type);
@@ -264,15 +271,13 @@ export function buildElementDigest(
   }
 
   const parentId = node.parentId ?? null;
-  const parent = parentId ? tree?.nodes?.[parentId] : null;
+  const parent = parentId ? tree.nodes[parentId] : null;
   if (parent) {
-    digest.parentType = elementLabelFor(parent.type ?? "container");
-    digest.siblingCount = Array.isArray(parent.children)
-      ? (parent as { children?: string[] }).children?.length ?? 0
-      : 0;
+    digest.parentType = elementLabelFor(parent.type);
+    digest.siblingCount = parent.children.length;
   } else {
     digest.parentType = "section root";
-    digest.siblingCount = tree?.rootIds?.length ?? 0;
+    digest.siblingCount = tree.rootIds.length;
   }
 
   return digest;
