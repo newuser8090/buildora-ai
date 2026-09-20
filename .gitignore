@@ -43,3 +43,8 @@ next-env.d.ts
 matrix-results/
 playwright-report/
 test-results/
+
+# validation logs and temporary validation tsconfigs
+.p24b-logs/
+.p24c-logs/
+.p24b-tsconfig.json
