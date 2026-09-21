@@ -49,6 +49,12 @@
 // While the marquee is active a dashed rectangle is rendered (D1c). Element
 // nodes of manipulation-enabled sections are ALWAYS measured (D2), so the
 // marquee can hit-test every candidate of the active section.
+//
+// Phase P27 (Slice 3, decisions D5/D6): during an active MOVE gesture the
+// layer renders the visual snap guides (SnapGuides) — 1px alignment lines fed
+// by the transient interaction store's `snapGuides` (published by the gesture
+// drive path, one store write per frame). Guides are editor-only overlay
+// chrome: pointer-events:none, transient, cleared on gesture end/cancel.
 // ---------------------------------------------------------------------------
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -69,6 +75,7 @@ import type { Project } from "@/types/project";
 import { useCanvasManipulation } from "../hooks/useCanvasManipulation";
 import { useCanvasKeyboard } from "../hooks/useCanvasKeyboard";
 import { SelectionOverlay } from "./SelectionOverlay";
+import { SnapGuides } from "./SnapGuides";
 import { clientToCanvas, type CanvasFrame } from "../engine/coords";
 import { compositeSelectionBox, type ElementRect } from "../engine/geometry";
 import {
@@ -504,6 +511,10 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
           onMoveStart={api.handleMoveStart}
         />
       )}
+      {/* P27 Slice 3 (D5): the visual snap guide lines — rendered only while
+          a move session publishes non-empty snapGuides; cleared on end/cancel.
+          Editor-only overlay chrome, pointer-events:none. */}
+      <SnapGuides />
       {/* P27 Slice 1 (D1c): the marquee rectangle — dashed outline + translucent
           fill, pointer-events:none, transient (never persisted). */}
       {activeMarqueeRect && (

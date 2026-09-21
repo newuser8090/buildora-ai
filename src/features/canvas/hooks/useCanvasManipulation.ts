@@ -18,7 +18,8 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { ElementGeometry, ElementTree } from "@/features/elements/types";
 import { useCanvasInteractionStore } from "../store/canvas-interaction-store";
-import type { Point, ResizeHandle } from "../engine/geometry";
+import type { Point, ResizeHandle, ElementRect } from "../engine/geometry";
+import { compositeSelectionBox, translateRect } from "../engine/geometry";
 import { clientToCanvas, type CanvasFrame } from "../engine/coords";
 import {
   beginMove,
@@ -30,11 +31,15 @@ import {
 import { applyElementOpBatch } from "../engine/batch";
 import {
   canvasSnapTargets,
+  elementSnapTargetDescriptors,
   elementSnapTargets,
+  snapGuideLines,
   snapRectToTargets,
+  type SnapGuide,
+  type SnapGuideMatch,
   type SnapOptions,
+  type SnapTargetDescriptor,
 } from "../engine/snap";
-import type { ElementRect } from "../engine/geometry";
 import {
   marqueeHitTest,
   marqueeRect,
@@ -52,6 +57,40 @@ import {
 function resolveGestureIds(tree: ElementTree, ids: string[]): string[] {
   if (ids.length === 0) return [];
   return splitManipulable(tree, topLevelSelection(tree, ids)).manipulable;
+}
+
+/**
+ * P27 Slice 3 (D5): compute the renderable guide lines for a snapped move.
+ * A match against a SIBLING element's edge/center (provenance in the
+ * descriptor lists) spans the dragged box and that sibling — the Figma-style
+ * smart line; a match against a CANVAS frame edge/center spans the whole
+ * canvas viewport (Canva-style). Pure.
+ */
+function buildMoveGuides(
+  snappedBox: ElementRect,
+  matches: readonly SnapGuideMatch[],
+  draggedIds: readonly string[],
+  measured: Record<string, ElementRect>,
+  descriptors: { xTargets: SnapTargetDescriptor[]; yTargets: SnapTargetDescriptor[] },
+  canvasSize: { width: number; height: number },
+): SnapGuide[] {
+  if (matches.length === 0) return [];
+  const excluded = new Set(draggedIds);
+  const others: ElementRect[] = [];
+  for (const [id, rect] of Object.entries(measured)) {
+    if (!excluded.has(id)) others.push(rect);
+  }
+  const lines: SnapGuide[] = [];
+  for (const match of matches) {
+    const pool = match.axis === "x" ? descriptors.xTargets : descriptors.yTargets;
+    const fromSibling = pool.some((t) => Math.abs(t.value - match.value) < 0.01);
+    lines.push(
+      ...(fromSibling
+        ? snapGuideLines(snappedBox, [match], others)
+        : snapGuideLines(snappedBox, [match], [], canvasSize)),
+    );
+  }
+  return lines;
 }
 
 export interface ManipulationContext {
@@ -170,6 +209,7 @@ export function useCanvasManipulation(context: ManipulationContext): CanvasManip
 
     const update = updateTransform(session, pointer);
     let rects = update.rects;
+    let guides: SnapGuide[] = [];
 
     // Snapping (move/resize): canvas edges/center + other elements' edges.
     if (session.kind !== "rotate") {
@@ -179,21 +219,60 @@ export function useCanvasManipulation(context: ManipulationContext): CanvasManip
         if (frame) {
           const canvasSize = frameCanvasSize(frame);
           const { xTargets, yTargets } = canvasSnapTargets(canvasSize.width, canvasSize.height);
-          const elementTargets = elementSnapTargets(
-            contextRef.current.rects(),
-            session.elementIds,
-          );
-          const snappedRects: Record<string, ElementRect> = {};
-          for (const [id, rect] of Object.entries(rects)) {
-            const result = snapRectToTargets(rect, [...xTargets, ...elementTargets.xTargets], [...yTargets, ...elementTargets.yTargets], snap);
-            snappedRects[id] = result.rect;
+          const measured = contextRef.current.rects();
+          const elementTargets = elementSnapTargets(measured, session.elementIds);
+          const descriptors = elementSnapTargetDescriptors(measured, session.elementIds);
+          const combinedX = [...xTargets, ...elementTargets.xTargets];
+          const combinedY = [...yTargets, ...elementTargets.yTargets];
+
+          if (session.kind === "move") {
+            // P27 Slice 3 (D5/OQ-1c): the dragged set's COMPOSITE box is the
+            // snap candidate during a move — the winning snap delta per axis
+            // is applied to EVERY element identically (per-element matches
+            // during multi-drag are explicitly out of scope). A
+            // single-element session's composite box IS the element rect, so
+            // single-drag snapping is unchanged.
+            const startIds = session.elementIds.filter((id) => session.startRects[id]);
+            if (startIds.length > 0) {
+              const startBox = compositeSelectionBox(
+                startIds.map((id) => session.startRects[id]),
+              );
+              const dx = pointer.x - session.pointerStart.x;
+              const dy = pointer.y - session.pointerStart.y;
+              const rawBox = translateRect(startBox, dx, dy);
+              const snappedBox = snapRectToTargets(rawBox, combinedX, combinedY, snap);
+              if (snappedBox.snapped) {
+                const snapDx = snappedBox.rect.x - rawBox.x;
+                const snapDy = snappedBox.rect.y - rawBox.y;
+                rects = {};
+                for (const id of startIds) {
+                  rects[id] = translateRect(session.startRects[id], dx + snapDx, dy + snapDy);
+                }
+              }
+              guides = buildMoveGuides(
+                snappedBox.rect,
+                snappedBox.guides,
+                session.elementIds,
+                measured,
+                descriptors,
+                canvasSize,
+              );
+            }
+          } else {
+            // Resize: per-rect snapping (unchanged P22-B behaviour). REQ-4
+            // limits guide RENDERING to move sessions — none published here.
+            const snappedRects: Record<string, ElementRect> = {};
+            for (const [id, rect] of Object.entries(rects)) {
+              snappedRects[id] = snapRectToTargets(rect, combinedX, combinedY, snap).rect;
+            }
+            rects = snappedRects;
           }
-          rects = snappedRects;
         }
       }
     }
 
-    store.updateSession(rects, update.rotation);
+    // ONE store write per frame: previews + guides together (D6).
+    store.updateSession(rects, update.rotation, guides);
   }, [toCanvas]);
 
   const endSession = useCallback((_screenPoint: Point) => {
