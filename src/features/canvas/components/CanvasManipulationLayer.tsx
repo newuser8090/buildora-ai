@@ -36,9 +36,19 @@
 // durable tree whose custom code the export emits (D8) — so D6's clamp stays
 // export-aligned instead of widening to props-rendered sections. Nested focus
 // is produced for the durable tree path only; legacy `custom-block` keeps its
-// frozen canvas selection contract (see the producer below, D3). Marquee
-// selection is engine/store-ready; multi-element overlays remain out of scope
-// (OQ-4).
+// frozen canvas selection contract (see the producer below, D3).
+//
+// Phase P27 (Slice 1, decisions D1/D1b/D1c/D2): the layer also hosts the
+// element MARQUEE. A pointer drag on the section/canvas background (never on
+// an element node, overlay handle or control) starts the marquee gesture; the
+// hook drives it on window pointermove/pointerup and resolves the intersecting
+// element ids of the active section into the transient selection (OQ-1
+// intersection model, topLevelResolution). A background CLICK (no drag) keeps
+// the frozen P25 section-root contract: the producer writes the section root
+// immediately on pointerdown, and an empty marquee re-applies it on release.
+// While the marquee is active a dashed rectangle is rendered (D1c). Element
+// nodes of manipulation-enabled sections are ALWAYS measured (D2), so the
+// marquee can hit-test every candidate of the active section.
 // ---------------------------------------------------------------------------
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -49,7 +59,7 @@ import {
 } from "@/features/elements/adapters/section-element-adapter";
 import { isCustomBlockSection } from "@/features/blocks/adapters/section-block-adapter";
 import { useCanvasInteractionStore } from "../store/canvas-interaction-store";
-import { singleNestedSelectionId } from "../engine/selection";
+import { marqueeRect, singleNestedSelectionId } from "../engine/selection";
 import type { BaseSection } from "@/types/section";
 import type { Project } from "@/types/project";
 import { useCanvasManipulation } from "../hooks/useCanvasManipulation";
@@ -102,6 +112,10 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
   const activePage = project.pages.find((p) => p.id === selectedPageId) ?? project.pages[0];
   const section = activePage?.sections.find((s) => s.id === selectedSectionId) ?? null;
   const isCustomBlock = !!section && isCustomBlockSection(section);
+  // P27 D2 — the measurement/marquee gate is the SAME export-aligned predicate
+  // the P25 handle gate uses (never a private re-implementation).
+  const isManipulableSection =
+    !!section && (isCustomBlock || durableTreeEnablesCustomCode(section));
 
   // Materialized element tree for the selected section (the manipulation target).
   const tree = useMemo(() => (section ? sectionToElementTree(section) : null), [section]);
@@ -164,7 +178,22 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
       out[s.id] = measure(node);
     }
 
-    if (sectionEl instanceof HTMLElement && nestedSelectionId) {
+    if (sectionEl instanceof HTMLElement && isManipulableSection) {
+      // P27 Slice 1 (D2): element nodes of a manipulation-enabled section are
+      // ALWAYS measured — not only when one is focused — so the marquee can
+      // hit-test every candidate of the active section. Bounded by the tree
+      // normalizer's node cap; `data-element-id` wins over `data-block-id`.
+      const nodes = sectionEl.querySelectorAll("[data-element-id], [data-block-id]");
+      for (const node of nodes) {
+        if (!(node instanceof HTMLElement)) continue;
+        const id =
+          node.getAttribute("data-element-id") ?? node.getAttribute("data-block-id");
+        if (!id || out[id] !== undefined) continue;
+        out[id] = measure(node);
+      }
+    } else if (sectionEl instanceof HTMLElement && nestedSelectionId) {
+      // Legacy sections without durable geometry keep the P25 behaviour: only
+      // the focused element's own node is measured.
       const target = sectionEl.querySelector(
         `[data-block-id="${CSS.escape(nestedSelectionId)}"], [data-element-id="${CSS.escape(nestedSelectionId)}"]`,
       );
@@ -173,7 +202,46 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
       }
     }
     return out;
-  }, [contentRef, frame, zoom, activePage, section, nestedSelectionId]);
+  }, [contentRef, frame, zoom, activePage, section, nestedSelectionId, isManipulableSection]);
+
+  // ---- Durable commit path (ONE history entry per gesture) ----
+  // The gesture engine builds `update-geometry` ops for the selected ids (a
+  // nested element id included) and `applyElementOpBatch` applies them through
+  // the element engine's `updateElementGeometry`, so a nested transform writes
+  // `node.geometry` on the owning section's durable tree in exactly ONE entry.
+  // (Declared before the pointerdown listeners so the marquee trigger can
+  // reach `api` — P27 Slice 1.)
+  const commit = useCallback(
+    (nextTree: ReturnType<typeof sectionToElementTree>) => {
+      if (!activePage || !section) return;
+      commitElementTree(activePage.id, section.id, nextTree);
+    },
+    [activePage, section, commitElementTree],
+  );
+
+  const snap = useCallback(
+    () => ({ ...DEFAULT_SNAP_OPTIONS, enabled: useCanvasInteractionStore.getState().snapEnabled }),
+    [],
+  );
+
+  const api = useCanvasManipulation({
+    frame,
+    tree: () => tree,
+    rects: measureRects,
+    commit,
+    snap,
+    onMarqueeEmpty: () => {
+      // OQ-1: an empty marquee behaves like a background click — the frozen
+      // P25 section-root contract.
+      const editor = useEditorStore.getState();
+      if (editor.selectedSectionId) {
+        useCanvasInteractionStore.getState().setSelection([editor.selectedSectionId], {
+          multi: false,
+          anchorId: editor.selectedSectionId,
+        });
+      }
+    },
+  });
 
   // ---- Selection sync: editor section selection → transient selection ----
   // Mirrored asynchronously (microtask) so the transient store write never
@@ -203,6 +271,10 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
       interaction.setSelection([sectionId], { multi: false, anchorId: sectionId });
     });
   }, [selectedSectionId, tree]);
+
+  // Stable marquee-start callback (destructured so the producer effect below
+  // can depend on the function itself, not the per-render `api` object).
+  const { handleMarqueeStart: marqueeStart } = api;
 
   // ---- Nested element selection producer (Phase P25, decision D3) ----
   // The canvas had no writer of nested element ids (F1), so P24-C's inspector
@@ -268,6 +340,20 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
       }
 
       // Background click → the selected section's root (never an element).
+      // P27 Slice 1 (D1b): a background drag starts the element MARQUEE instead
+      // — the hook drives it on window pointermove/pointerup and resolves the
+      // intersecting element ids on release. The section-root write still
+      // happens (below) so a plain CLICK keeps the frozen P25 contract; an
+      // empty marquee re-applies it via onMarqueeEmpty. Only the manipulation
+      // gate passes — the frozen custom-block click contract is unchanged.
+      if (
+        editor.selectedSectionId &&
+        isManipulableSection &&
+        marqueeStart({ x: event.clientX, y: event.clientY })
+      ) {
+        // Marquee started; the section-root write below still runs so the
+        // background-click contract holds for a plain click.
+      }
       if (editor.selectedSectionId) {
         interaction.setSelection([editor.selectedSectionId], {
           multi: false,
@@ -280,7 +366,10 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
 
     el.addEventListener("pointerdown", onPointerDown);
     return () => el.removeEventListener("pointerdown", onPointerDown);
-  }, [contentRef]);
+    // P27 D1b: `isManipulableSection` gates the marquee trigger;
+    // `marqueeStart` is a stable hook callback, so the listener does not churn
+    // per render.
+  }, [contentRef, isManipulableSection, marqueeStart]);
 
   // ---- Measure the selected section's rect (re-measure on changes) ----
   const [measuredRect, setMeasuredRect] = useState<ElementRect | null>(null);
@@ -306,38 +395,17 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
     };
   }, [targetId, measureRects, contentRef, project, zoom]);
 
+  // The live marquee object (not a boolean) so the layer re-renders while the
+  // marquee grows — the same per-move subscription pattern `previewRects` uses
+  // during transform sessions. Layer-local render only; never a page re-render.
+  const marqueeState = useCanvasInteractionStore((s) => s.marquee);
+
   // Preview rects are keyed by the gesture's element id, so the live drag
   // preview follows the same target (nested element or section root).
   const displayedRect =
     targetId && previewRects && previewRects[targetId]
       ? previewRects[targetId]
       : measuredRect;
-
-  // ---- Durable commit path (ONE history entry per gesture) ----
-  // The gesture engine builds `update-geometry` ops for the selected ids (a
-  // nested element id included) and `applyElementOpBatch` applies them through
-  // the element engine's `updateElementGeometry`, so a nested transform writes
-  // `node.geometry` on the owning section's durable tree in exactly ONE entry.
-  const commit = useCallback(
-    (nextTree: ReturnType<typeof sectionToElementTree>) => {
-      if (!activePage || !section) return;
-      commitElementTree(activePage.id, section.id, nextTree);
-    },
-    [activePage, section, commitElementTree],
-  );
-
-  const snap = useCallback(
-    () => ({ ...DEFAULT_SNAP_OPTIONS, enabled: useCanvasInteractionStore.getState().snapEnabled }),
-    [],
-  );
-
-  const api = useCanvasManipulation({
-    frame,
-    tree: () => tree,
-    rects: measureRects,
-    commit,
-    snap,
-  });
 
   // ---- Keyboard (avoids collisions with existing section shortcuts) ----
   useCanvasKeyboard({
@@ -361,8 +429,26 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
 
   if (!section) return null;
 
+  const activeMarqueeRect = marqueeState
+    ? marqueeRect(marqueeState.start, marqueeState.current)
+    : null;
+
   return (
     <>
+      {/* P27 Slice 1 (D1c): the marquee rectangle — dashed outline + translucent
+          fill, pointer-events:none, transient (never persisted). */}
+      {activeMarqueeRect && (
+        <div
+          data-testid="canvas-marquee-rect"
+          className="pointer-events-none absolute z-40 rounded-[2px] border border-dashed border-[#7c5cfc] bg-[#7c5cfc]/10"
+          style={{
+            left: activeMarqueeRect.x,
+            top: activeMarqueeRect.y,
+            width: activeMarqueeRect.width,
+            height: activeMarqueeRect.height,
+          }}
+        />
+      )}
       {displayedRect && (
         <SelectionOverlay
           elementId={targetId ?? section.id}

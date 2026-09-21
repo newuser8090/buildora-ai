@@ -35,6 +35,11 @@ import {
   type SnapOptions,
 } from "../engine/snap";
 import type { ElementRect } from "../engine/geometry";
+import {
+  marqueeHitTest,
+  marqueeRect,
+  topLevelSelection,
+} from "../engine/selection";
 
 export interface ManipulationContext {
   /** The scroll container / canvas frame for coordinate conversion. */
@@ -47,16 +52,25 @@ export interface ManipulationContext {
   commit: (tree: ElementTree) => void;
   /** Snap options (threshold / enabled / angle step). */
   snap: () => SnapOptions;
+  /**
+   * P27 Slice 1 (OQ-1): called when a marquee ends with ZERO hits — the layer
+   * falls back to its background-click behaviour (section-root selection).
+   * Omitting it keeps the current selection untouched.
+   */
+  onMarqueeEmpty?: () => void;
 }
 
 export interface CanvasManipulationApi {
   handleMoveStart: (screenPoint: Point) => void;
   handleRotateStart: (screenPoint: Point) => void;
   handleResizeStart: (handle: ResizeHandle, screenPoint: Point) => void;
-  /** Pointer-down on empty canvas → marquee. Returns true when started. */
+  /**
+   * Pointer-down on the section/canvas background → marquee (P27 Slice 1).
+   * `true` when the marquee started. The marquee DRIVES on window
+   * pointermove/pointerup internally, so the caller only starts it; the live
+   * rect is readable from the interaction store's `marquee` state.
+   */
   handleMarqueeStart: (screenPoint: Point) => boolean;
-  handleMarqueeMove: (screenPoint: Point) => void;
-  handleMarqueeEnd: (screenPoint: Point) => void;
   /** Nudge the current selection by (dx, dy) logical units. */
   nudge: (dx: number, dy: number) => void;
 }
@@ -208,7 +222,14 @@ export function useCanvasManipulation(context: ManipulationContext): CanvasManip
     };
   }, [driveSession, endSession]);
 
-  // ---- Marquee (selection rectangle) ----
+  // ---- Marquee (P27 Slice 1) — background drag → rect-intersection select ----
+  //
+  // The gesture is STARTED by the layer (background pointerdown, D1b) and then
+  // DRIVES on window pointermove/pointerup, like the transform sessions. The
+  // hit set is validated against the active section's tree (marqueeHitTest,
+  // OQ-1 intersection model) and resolved to the top level of the set
+  // (topLevelSelection), so no section root, foreign id or redundant nested
+  // child can enter the selection.
 
   const handleMarqueeStart = useCallback((screenPoint: Point) => {
     const pointer = toCanvas(screenPoint);
@@ -217,32 +238,56 @@ export function useCanvasManipulation(context: ManipulationContext): CanvasManip
     return true;
   }, [toCanvas]);
 
-  const handleMarqueeMove = useCallback((screenPoint: Point) => {
+  const driveMarquee = useCallback((screenPoint: Point) => {
     const pointer = toCanvas(screenPoint);
     if (!pointer) return;
     useCanvasInteractionStore.getState().updateMarquee(pointer);
   }, [toCanvas]);
 
-  const handleMarqueeEnd = useCallback((_screenPoint: Point) => {
+  const endMarquee = useCallback(() => {
     const store = useCanvasInteractionStore.getState();
     const marquee = store.marquee;
     if (!marquee) return;
     store.endMarquee();
-    const minX = Math.min(marquee.start.x, marquee.current.x);
-    const maxX = Math.max(marquee.start.x, marquee.current.x);
-    const minY = Math.min(marquee.start.y, marquee.current.y);
-    const maxY = Math.max(marquee.start.y, marquee.current.y);
-    const rects = contextRef.current.rects();
-    const hit: string[] = [];
-    for (const [id, rect] of Object.entries(rects)) {
-      if (rect.x < maxX && rect.x + rect.width > minX && rect.y < maxY && rect.y + rect.height > minY) {
-        hit.push(id);
-      }
+
+    const tree = contextRef.current.tree();
+    if (!tree) return;
+    const hits = marqueeHitTest(
+      tree,
+      marqueeRect(marquee.start, marquee.current),
+      contextRef.current.rects(),
+    );
+    if (hits.length === 0) {
+      // OQ-1: an empty marquee defers to the layer's background behaviour
+      // (section-root selection), never a stray element focus.
+      contextRef.current.onMarqueeEmpty?.();
+      return;
     }
-    if (hit.length > 0) {
-      store.setSelection(hit, { multi: true });
-    }
+    store.setSelection(topLevelSelection(tree, hits), {
+      multi: false,
+      anchorId: null,
+    });
   }, []);
+
+  // ---- Marquee drive (pointermove/pointerup on window while active) ----
+  //
+  // Like the transform sessions, the marquee is started by a pointerdown and
+  // then driven by WINDOW-level events, so the pointer can leave the section
+  // content mid-drag without ending the gesture.
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      if (useCanvasInteractionStore.getState().marquee) {
+        driveMarquee({ x: e.clientX, y: e.clientY });
+      }
+    };
+    const onUp = () => endMarquee();
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, [driveMarquee, endMarquee]);
 
   // ---- Nudge (arrow keys) ----
 
@@ -275,8 +320,6 @@ export function useCanvasManipulation(context: ManipulationContext): CanvasManip
     handleRotateStart,
     handleResizeStart,
     handleMarqueeStart,
-    handleMarqueeMove,
-    handleMarqueeEnd,
     nudge,
   };
 }

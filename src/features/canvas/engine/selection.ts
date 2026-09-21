@@ -183,6 +183,87 @@ export function splitManipulable(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Marquee (Phase P27 Slice 1) — rect-intersection hit-testing
+// ---------------------------------------------------------------------------
+
+/**
+ * True when any part of rect `a` overlaps rect `b` (OQ-1 resolution: the
+ * INTERSECTION model — an element intersecting the marquee at all is
+ * selected). Edge semantics are strict: rects that merely touch on an edge
+ * do not intersect, so a marquee ending exactly on an element's boundary
+ * does not select it.
+ */
+export function rectIntersects(a: ElementRect, b: ElementRect): boolean {
+  return (
+    a.x < b.x + b.width &&
+    a.x + a.width > b.x &&
+    a.y < b.y + b.height &&
+    a.y + a.height > b.y
+  );
+}
+
+/**
+ * Normalize a marquee gesture (pointer origin + current corner) into a rect.
+ * A drag in any direction yields a positive-width/height rect.
+ */
+export function marqueeRect(start: Point, current: Point): ElementRect {
+  const x = Math.min(start.x, current.x);
+  const y = Math.min(start.y, current.y);
+  return {
+    x,
+    y,
+    width: Math.abs(current.x - start.x),
+    height: Math.abs(current.y - start.y),
+  };
+}
+
+/**
+ * Marquee hit-test (Phase P27 Slice 1, decision D1 with OQ-1 resolved to the
+ * intersection model): every selectable element whose rect overlaps the
+ * marquee rect is selected.
+ *
+ * Rules:
+ *   - a ZERO-AREA marquee (a click without drag) selects nothing — a plain
+ *     click is not a marquee, which is what keeps the frozen background-click
+ *     contract (the layer's section-root write stands) intact;
+ *   - candidates are NESTED nodes of `tree` only — root ids are section-level
+ *     and can never enter the result, which is what bounds a marquee to the
+ *     active section (no cross-section leaks, REQ-1);
+ *   - an id must exist in `tree.nodes`, so rects keyed by a foreign section's
+ *     ids are ignored by construction;
+ *   - hidden/invisible elements are skipped (isPointerSelectable); locked
+ *     elements ARE selected (selectable per P22-B) — manipulation-time
+ *     resolution excludes them from the gesture;
+ *   - hits are returned in deterministic tree order.
+ *
+ * The result is the RAW hit set. Callers filter it through
+ * `topLevelSelection` before writing a selection, so a nested child is never
+ * redundantly selected alongside its container.
+ *
+ * Pure and deterministic — no stores, no DOM.
+ */
+export function marqueeHitTest(
+  tree: ElementTree,
+  marquee: ElementRect,
+  rects: Record<string, ElementRect>,
+): string[] {
+  if (marquee.width <= 0 || marquee.height <= 0) return [];
+  const hits: string[] = [];
+  const roots = new Set(tree.rootIds);
+  const walk = (id: string): void => {
+    const node = tree.nodes[id];
+    if (!node) return;
+    if (!roots.has(id) && isPointerSelectable(node)) {
+      const rect = rects[id];
+      if (rect && rectIntersects(rect, marquee)) hits.push(id);
+    }
+    for (const childId of node.children) walk(childId);
+  };
+  for (const rootId of tree.rootIds) walk(rootId);
+  return hits;
+}
+
 /** Rect lookup map built from element geometry (fallback for measurement gaps). */
 export function rectsFromGeometry(
   tree: ElementTree,
