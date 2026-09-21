@@ -8,8 +8,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { registerDefaultBlocks } from "@/features/blocks/registry/block-registry";
 import { registerDefaultElements } from "@/features/elements/registry/register-default-elements";
-import { createElement } from "@/features/elements/engine/element-operations";
-import { updateElementGeometry } from "@/features/elements/engine/element-operations";
+import {
+  createElement,
+  insertElement,
+  updateElementGeometry,
+} from "@/features/elements/engine/element-operations";
 import type { ElementNode, ElementTree } from "@/features/elements/types";
 import {
   beginMove,
@@ -124,6 +127,88 @@ describe("rotate sessions", () => {
     const session = beginRotate(["a"], { a: RECT }, { x: 200, y: 50 }, 45);
     const update = updateTransform(session, { x: 250, y: 170 });
     expect(Math.abs(update.rotation) % 45).toBeCloseTo(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Batch move (Phase P27 Slice 2, D3/D3b/D4/OQ-6) — shared delta, no
+// double-translation, mode-aware commit patches
+// ---------------------------------------------------------------------------
+
+describe("batch move (P27 Slice 2)", () => {
+  it("moves all top-level selected elements by the SAME delta, spacing unchanged", () => {
+    const session = beginMove(
+      ["a", "b", "c"],
+      {
+        a: { x: 0, y: 0, width: 100, height: 50 },
+        b: { x: 150, y: 25, width: 80, height: 40 },
+        c: { x: 300, y: 75, width: 60, height: 30 },
+      },
+      { x: 0, y: 0 },
+    );
+    const update = updateTransform(session, { x: 25, y: -10 });
+    expect(update.rects.a).toEqual({ x: 25, y: -10, width: 100, height: 50 });
+    expect(update.rects.b).toEqual({ x: 175, y: 15, width: 80, height: 40 });
+    expect(update.rects.c).toEqual({ x: 325, y: 65, width: 60, height: 30 });
+    // Every element got the identical (+25, -10) delta.
+    for (const id of ["a", "b", "c"]) {
+      expect(update.geometry[id]).toMatchObject({ x: update.rects[id].x, y: update.rects[id].y });
+    }
+  });
+
+  it("flow-mode elements commit ONLY an x/y offset — never a mode flip (OQ-6)", () => {
+    const session = beginMove(
+      ["f", "a"],
+      { f: { x: 10, y: 10, width: 50, height: 20 }, a: { x: 100, y: 100, width: 40, height: 40 } },
+      { x: 0, y: 0 },
+      { f: "flow", a: "absolute" },
+      // OQ-6: the flow element's DURABLE offset at gesture start.
+      { f: { mode: "flow", x: 10, y: 10 }, a: null },
+    );
+    const update = updateTransform(session, { x: 15, y: 20 });
+    // Flow: durable offset (10,10) + delta (15,20) — never the canvas rect,
+    // no `mode`, no width/height.
+    expect(update.geometry.f).toEqual({ x: 25, y: 30 });
+    // Absolute: full patch including the mode (P22-B behaviour).
+    expect(update.geometry.a).toMatchObject({ mode: "absolute", x: 115, y: 120 });
+  });
+
+  it("modeless elements keep the P22-B materialize-absolute behaviour", () => {
+    const session = beginMove(
+      ["m"],
+      { m: { x: 0, y: 0, width: 30, height: 30 } },
+      { x: 0, y: 0 },
+      // No startModes entry → modeless.
+    );
+    const update = updateTransform(session, { x: 5, y: 5 });
+    expect(update.geometry.m).toMatchObject({ mode: "absolute", x: 5, y: 5 });
+  });
+
+  it("a batch commit preserves each element's own geometry fields (no cross-contamination)", () => {
+    const root = createElement("container", { id: "root" });
+    const childA = createElement("container", { id: "a" });
+    const childB = createElement("container", { id: "b" });
+    let tree = treeWith(root);
+    const insA = insertElement(tree, "root", childA);
+    if (insA.ok) tree = insA.value;
+    const insB = insertElement(tree, "root", childB);
+    if (insB.ok) tree = insB.value;
+    const geomA = updateElementGeometry(tree, "a", { zIndex: 3 });
+    if (geomA.ok) tree = geomA.value;
+    const geomB = updateElementGeometry(tree, "b", { rotation: 15 });
+    if (geomB.ok) tree = geomB.value;
+
+    const ops = buildGeometryOps(tree, {
+      a: { mode: "absolute", x: 10, y: 10, width: 100, height: 50 },
+      b: { mode: "absolute", x: 200, y: 10, width: 100, height: 50 },
+    });
+    const result = applyElementOpBatch(tree, ops);
+    expect(result.ok).toBe(true);
+    if (!result.ok || !result.tree) return;
+    // a keeps its zIndex, b keeps its rotation — each element's untouched
+    // fields survive the batch (merge-over-existing per element).
+    expect(result.tree.nodes.a.geometry).toMatchObject({ zIndex: 3, x: 10 });
+    expect(result.tree.nodes.b.geometry).toMatchObject({ rotation: 15, x: 200 });
   });
 });
 

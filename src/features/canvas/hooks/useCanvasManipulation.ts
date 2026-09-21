@@ -16,7 +16,7 @@
 // ---------------------------------------------------------------------------
 
 import { useCallback, useEffect, useRef } from "react";
-import type { ElementTree } from "@/features/elements/types";
+import type { ElementGeometry, ElementTree } from "@/features/elements/types";
 import { useCanvasInteractionStore } from "../store/canvas-interaction-store";
 import type { Point, ResizeHandle } from "../engine/geometry";
 import { clientToCanvas, type CanvasFrame } from "../engine/coords";
@@ -38,8 +38,21 @@ import type { ElementRect } from "../engine/geometry";
 import {
   marqueeHitTest,
   marqueeRect,
+  splitManipulable,
   topLevelSelection,
 } from "../engine/selection";
+
+/**
+ * P27 Slice 2 (D3): resolve the raw selection into the ids a GESTURE may
+ * manipulate — top-level of the set (a selected container absorbs its selected
+ * descendants, so a child is never double-translated) minus locked elements
+ * (the geometry engine rejects them; the gesture fails closed instead).
+ * Pure.
+ */
+function resolveGestureIds(tree: ElementTree, ids: string[]): string[] {
+  if (ids.length === 0) return [];
+  return splitManipulable(tree, topLevelSelection(tree, ids)).manipulable;
+}
 
 export interface ManipulationContext {
   /** The scroll container / canvas frame for coordinate conversion. */
@@ -91,18 +104,30 @@ export function useCanvasManipulation(context: ManipulationContext): CanvasManip
 
   const handleMoveStart = useCallback((screenPoint: Point) => {
     const store = useCanvasInteractionStore.getState();
-    const ids = store.selection.ids;
+    const tree = contextRef.current.tree();
+    if (!tree) return;
+    // P27 Slice 2 (D3): top-level + unlocked only, so a batch drag moves each
+    // branch exactly once and never attempts a locked element.
+    const ids = resolveGestureIds(tree, store.selection.ids);
     if (ids.length === 0) return;
     const pointer = toCanvas(screenPoint);
     if (!pointer) return;
     const rects = contextRef.current.rects();
     const startRects: Record<string, ElementRect> = {};
+    const startModes: Record<string, "flow" | "absolute" | undefined> = {};
+    const startGeometry: Record<string, ElementGeometry | null> = {};
     for (const id of ids) {
       const rect = rects[id];
       if (rect) startRects[id] = rect;
+      // D4/OQ-6: remember the geometry (mode + durable offset) at gesture
+      // start so the commit patch respects it (flow elements offset their
+      // durable x/y — never the measured rect, never a mode flip).
+      const nodeGeometry = tree.nodes[id]?.geometry ?? null;
+      startModes[id] = nodeGeometry?.mode;
+      startGeometry[id] = nodeGeometry;
     }
     if (Object.keys(startRects).length === 0) return;
-    store.beginSession(beginMove(ids, startRects, pointer));
+    store.beginSession(beginMove(ids, startRects, pointer, startModes, startGeometry));
   }, [toCanvas]);
 
   const handleResizeStart = useCallback((handle: ResizeHandle, screenPoint: Point) => {
@@ -179,6 +204,27 @@ export function useCanvasManipulation(context: ManipulationContext): CanvasManip
     store.endSession();
     if (!preview) return;
 
+    // A gesture that never moved anything (click without drag, or a snap that
+    // settled back to the start) commits NOTHING — no geometry patch, no
+    // materialization of modeless nodes, no history entry. P27 Slice 2.
+    if (session.kind === "rotate") {
+      if (store.previewRotation === 0) return;
+    } else {
+      const unchanged = session.elementIds.every((id) => {
+        const rect = preview[id];
+        const start = session.startRects[id];
+        return (
+          rect !== undefined &&
+          start !== undefined &&
+          Math.abs(rect.x - start.x) < 0.01 &&
+          Math.abs(rect.y - start.y) < 0.01 &&
+          Math.abs(rect.width - start.width) < 0.01 &&
+          Math.abs(rect.height - start.height) < 0.01
+        );
+      });
+      if (unchanged) return;
+    }
+
     // Rebuild the geometry patch from the final preview rects so snapping is
     // honored exactly (the engine's last update was published as preview).
     const geometry: Record<string, Partial<import("@/features/elements/types").ElementGeometry>> = {};
@@ -191,7 +237,24 @@ export function useCanvasManipulation(context: ManipulationContext): CanvasManip
       for (const id of session.elementIds) {
         const rect = preview[id];
         if (!rect) continue;
-        geometry[id] = { mode: "absolute", x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+        if (session.startModes?.[id] === "flow") {
+          // P27 Slice 2 (D4/OQ-6): flow elements commit their DURABLE x/y
+          // offset moved by the same delta the preview showed (snapping
+          // included) — never the measured canvas rect, never a mode flip.
+          const start = session.startGeometry?.[id];
+          if (start) {
+            geometry[id] = {
+              x: (start.x ?? 0) + (rect.x - session.startRects[id].x),
+              y: (start.y ?? 0) + (rect.y - session.startRects[id].y),
+            };
+          } else {
+            geometry[id] = { x: rect.x, y: rect.y };
+          }
+        } else {
+          // Position-only: a MOVE never rewrites size (P22-B materializes
+          // absolute mode on the first real drag, unchanged).
+          geometry[id] = { mode: "absolute", x: rect.x, y: rect.y };
+        }
       }
     } else {
       const id = session.elementIds[0];
@@ -293,20 +356,33 @@ export function useCanvasManipulation(context: ManipulationContext): CanvasManip
 
   const nudge = useCallback((dx: number, dy: number) => {
     const store = useCanvasInteractionStore.getState();
-    const ids = store.selection.ids;
-    if (ids.length === 0) return;
     const tree = contextRef.current.tree();
-    const rects = contextRef.current.rects();
     if (!tree) return;
+    // P27 Slice 2 (D3): the same gesture resolution as pointer drags —
+    // top-level + unlocked (a locked member would fail the whole batch).
+    const ids = resolveGestureIds(tree, store.selection.ids);
+    if (ids.length === 0) return;
+    const rects = contextRef.current.rects();
     const geometry: Record<string, Partial<import("@/features/elements/types").ElementGeometry>> = {};
     for (const id of ids) {
       const rect = rects[id];
       if (!rect) continue;
-      geometry[id] = {
-        mode: "absolute",
-        x: Math.round((rect.x + dx) * 10) / 10,
-        y: Math.round((rect.y + dy) * 10) / 10,
-      };
+      // D4/OQ-6: mode-aware — flow elements offset their DURABLE x/y (never
+      // the measured rect, never a mode flip); absolute/modeless materialize
+      // absolute (unchanged).
+      if (tree.nodes[id]?.geometry?.mode === "flow") {
+        const start = tree.nodes[id].geometry;
+        geometry[id] = {
+          x: Math.round(((start.x ?? 0) + dx) * 10) / 10,
+          y: Math.round(((start.y ?? 0) + dy) * 10) / 10,
+        };
+      } else {
+        geometry[id] = {
+          mode: "absolute",
+          x: Math.round((rect.x + dx) * 10) / 10,
+          y: Math.round((rect.y + dy) * 10) / 10,
+        };
+      }
     }
     const ops = buildGeometryOps(tree, geometry);
     const result = applyElementOpBatch(tree, ops);

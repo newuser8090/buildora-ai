@@ -40,6 +40,22 @@ export interface TransformSession {
   startRects: Record<string, ElementRect>;
   /** Pointer position (logical units) at pointerdown. */
   pointerStart: Point;
+  /**
+   * P27 Slice 2 (D4/OQ-6): each moved element's geometry mode at gesture
+   * start. Absolute elements commit x/y; FLOW elements get a SAFE RELATIVE
+   * OFFSET (x/y are legal on flow geometry — the schema treats them as
+   * optional, mode-independent) without flipping `mode` — the responsive
+   * layout contract is never broken. Absent = modeless (P22-B behaviour:
+   * materializes absolute on first drag).
+   */
+  startModes?: Record<string, "flow" | "absolute" | undefined>;
+  /**
+   * P27 Slice 2 (OQ-6): each moved element's DURABLE geometry at gesture
+   * start (null when the node carries none). Flow elements offset their
+   * durable x/y by the pointer delta — NEVER the measured canvas rect (the
+   * rect is the laid-out position; the durable x/y is the responsive offset).
+   */
+  startGeometry?: Record<string, ElementGeometry | null>;
   /** Resize-only: the active handle. */
   handle?: ResizeHandle;
   /** Resize-only: preserve aspect ratio (Shift). */
@@ -55,7 +71,8 @@ export interface TransformUpdate {
   rects: Record<string, ElementRect>;
   /** Rotated angle in degrees for the selection box (rotate only). */
   rotation: number;
-  /** Per-element geometry patch to commit on pointerup. */
+  /** Per-element geometry patch to commit on pointerup (only fields the
+   *  gesture actually changed — merged over existing geometry at commit). */
   geometry: Record<string, Partial<ElementGeometry>>;
 }
 
@@ -67,8 +84,10 @@ export function beginMove(
   elementIds: string[],
   startRects: Record<string, ElementRect>,
   pointer: Point,
+  startModes?: Record<string, "flow" | "absolute" | undefined>,
+  startGeometry?: Record<string, ElementGeometry | null>,
 ): TransformSession {
-  return { kind: "move", elementIds, startRects, pointerStart: pointer };
+  return { kind: "move", elementIds, startRects, pointerStart: pointer, startModes, startGeometry };
 }
 
 export function beginResize(
@@ -121,13 +140,29 @@ export function updateTransform(
     for (const id of session.elementIds) {
       const rect = translateRect(session.startRects[id], dx, dy);
       rects[id] = rect;
-      geometry[id] = {
-        mode: "absolute",
-        x: rect.x,
-        y: rect.y,
-        width: rect.width,
-        height: rect.height,
-      };
+      const mode = session.startModes?.[id];
+      if (mode === "flow") {
+        // P27 Slice 2 (D4/OQ-6): flow-mode elements take a SAFE RELATIVE
+        // OFFSET — x/y are legal on flow geometry (schema-optional), so the
+        // offset lands without converting the element to absolute and without
+        // touching the responsive layout invariants. width/height and `mode`
+        // are left untouched. The offset DELTA applies to the element's
+        // DURABLE x/y (startGeometry), never to the measured rect — the rect
+        // is the laid-out position, the durable x/y is the offset.
+        const start = session.startGeometry?.[id];
+        geometry[id] = start
+          ? { x: (start.x ?? 0) + dx, y: (start.y ?? 0) + dy }
+          : { x: rect.x, y: rect.y };
+      } else {
+        // Absolute (or modeless → materializes absolute on the first REAL
+        // drag, the unchanged P22-B behaviour). Position-only: a move never
+        // rewrites size, so a click-drag cannot corrupt layout dimensions.
+        geometry[id] = {
+          mode: "absolute",
+          x: rect.x,
+          y: rect.y,
+        };
+      }
     }
     return { rects, rotation: 0, geometry };
   }

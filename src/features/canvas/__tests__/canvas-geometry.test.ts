@@ -9,6 +9,7 @@ import { describe, it, expect } from "vitest";
 import {
   boundingBox,
   clampRect,
+  compositeSelectionBox,
   MIN_ELEMENT_SIZE,
   normalizeAngle,
   rectCenter,
@@ -97,6 +98,54 @@ describe("rotation math", () => {
     expect(snapAngle(47, 45)).toBe(45);
     expect(snapAngle(88, 45)).toBe(90);
     expect(snapAngle(3, 0)).toBe(3); // free rotation
+  });
+});
+
+// ---------------------------------------------------------------------------
+// compositeSelectionBox (Phase P27 Slice 2, D7) — the multi-selection union
+// ---------------------------------------------------------------------------
+
+describe("compositeSelectionBox (P27 Slice 2 union math)", () => {
+  it("computes the exact union of multiple rects", () => {
+    const box = compositeSelectionBox([
+      { x: 10, y: 20, width: 100, height: 50 },
+      { x: 200, y: 120, width: 80, height: 60 },
+    ]);
+    expect(box).toEqual({ x: 10, y: 20, width: 270, height: 160 });
+  });
+
+  it("handles three or more rects and negative coordinates", () => {
+    const box = compositeSelectionBox([
+      { x: -50, y: -25, width: 60, height: 40 },
+      { x: 100, y: 0, width: 40, height: 400 },
+      { x: 30, y: 70, width: 200, height: 30 },
+    ]);
+    expect(box).toEqual({ x: -50, y: -25, width: 280, height: 425 });
+  });
+
+  it("matches boundingBox exactly for the same input (sibling parity)", () => {
+    const rects = [
+      { x: 5, y: 7, width: 11, height: 13 },
+      { x: 50, y: 60, width: 20, height: 25 },
+    ];
+    expect(compositeSelectionBox(rects)).toEqual(boundingBox(rects));
+  });
+
+  it("degenerate inputs: empty set and a single rect", () => {
+    expect(compositeSelectionBox([])).toEqual({ x: 0, y: 0, width: 0, height: 0 });
+    const single = [{ x: 12, y: 34, width: 56, height: 78 }];
+    expect(compositeSelectionBox(single)).toEqual(single[0]);
+  });
+
+  it("is stable against float noise (roundRect to 2 decimals)", () => {
+    const box = compositeSelectionBox([
+      { x: 0.1 + 0.2, y: 0, width: 10, height: 10 }, // right edge ≈ 10.3
+      { x: 5, y: 5, width: 1 / 3, height: 7 }, // right edge ≈ 5.333…
+    ]);
+    // Raw union: x = 0.30000000000000004, width = 9.999999999999998 —
+    // roundRect normalizes both to clean 2-decimal values.
+    expect(box.x).toBe(0.3);
+    expect(box.width).toBe(10);
   });
 });
 

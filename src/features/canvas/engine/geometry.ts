@@ -144,6 +144,17 @@ export function boundingBox(rects: ElementRect[]): ElementRect {
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
+/**
+ * Composite selection bounding box (Phase P27 Slice 2, decision D7) — the
+ * union rect enclosing ALL rects in a multi-selection: `x = min(x)`,
+ * `y = min(y)`, `width = max(x+w) − min(x)`, `height = max(y+h) − min(y)`.
+ * Named entry point over `boundingBox` + `roundRect` so tests pin the
+ * semantic and the overlay has one stable calculation to consume.
+ */
+export function compositeSelectionBox(rects: ElementRect[]): ElementRect {
+  return roundRect(boundingBox(rects));
+}
+
 export function rectCenter(rect: ElementRect): Point {
   return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
 }

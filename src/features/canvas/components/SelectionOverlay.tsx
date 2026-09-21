@@ -42,6 +42,13 @@ export interface SelectionOverlayProps {
   manipulable: boolean;
   /** Data id placed on the box for tests. */
   elementId: string;
+  /**
+   * P27 Slice 2 (D7): count of selected elements. 1 (default) renders the
+   * byte-identical single-element box with handles; ≥2 renders the COMPOSITE
+   * box — union rect, count chip, move affordance, NO resize/rotate handles
+   * (multi-resize is out of scope).
+   */
+  selectionCount?: number;
   onMoveStart?: (point: Point) => void;
   onRotateStart?: (point: Point) => void;
   onHandleStart?: (handle: ResizeHandle, point: Point) => void;
@@ -54,6 +61,7 @@ export const SelectionOverlay = memo(function SelectionOverlay({
   rotation = 0,
   manipulable,
   elementId,
+  selectionCount = 1,
   onMoveStart,
   onRotateStart,
   onHandleStart,
@@ -61,11 +69,13 @@ export const SelectionOverlay = memo(function SelectionOverlay({
   onDelete,
 }: SelectionOverlayProps) {
   const dims = `${Math.round(rect.width)} × ${Math.round(rect.height)}`;
+  const composite = selectionCount > 1;
 
   return (
     <div
       data-testid="canvas-selection-box"
       data-element-id={elementId}
+      data-selection-count={composite ? selectionCount : undefined}
       className="pointer-events-none absolute z-30"
       style={{
         left: rect.x,
@@ -83,6 +93,17 @@ export const SelectionOverlay = memo(function SelectionOverlay({
         aria-hidden="true"
       />
 
+      {/* Composite count chip (P27 D7) — union dims + selected count. */}
+      {composite && (
+        <div
+          data-testid="canvas-selection-count"
+          className="absolute -bottom-7 left-0 rounded-md bg-[#1a2235] px-2 py-0.5 font-mono text-[11px] font-medium text-white shadow-sm"
+          style={{ pointerEvents: "none" }}
+        >
+          {`${selectionCount} selected · ${dims}`}
+        </div>
+      )}
+
       {/* Move affordance: a thin grab strip along the top edge */}
       <div
         data-testid="canvas-move-handle"
@@ -97,8 +118,8 @@ export const SelectionOverlay = memo(function SelectionOverlay({
         aria-hidden={!manipulable}
       />
 
-      {/* Resize handles */}
-      {manipulable &&
+      {/* Resize handles — suppressed on the composite box (no multi-resize). */}
+      {manipulable && !composite &&
         RESIZE_HANDLES.map((handle) => (
           <div
             key={handle}
@@ -118,8 +139,8 @@ export const SelectionOverlay = memo(function SelectionOverlay({
           />
         ))}
 
-      {/* Rotation handle */}
-      {manipulable && (
+      {/* Rotation handle — suppressed on the composite box. */}
+      {manipulable && !composite && (
         <div
           data-testid="canvas-rotate-handle"
           className="absolute -top-9 left-1/2 cursor-grab rounded-full border border-white/80 bg-[#7c5cfc]"

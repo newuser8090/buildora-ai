@@ -59,14 +59,18 @@ import {
 } from "@/features/elements/adapters/section-element-adapter";
 import { isCustomBlockSection } from "@/features/blocks/adapters/section-block-adapter";
 import { useCanvasInteractionStore } from "../store/canvas-interaction-store";
-import { marqueeRect, singleNestedSelectionId } from "../engine/selection";
+import {
+  marqueeRect,
+  purgeSelection,
+  singleNestedSelectionId,
+} from "../engine/selection";
 import type { BaseSection } from "@/types/section";
 import type { Project } from "@/types/project";
 import { useCanvasManipulation } from "../hooks/useCanvasManipulation";
 import { useCanvasKeyboard } from "../hooks/useCanvasKeyboard";
 import { SelectionOverlay } from "./SelectionOverlay";
 import { clientToCanvas, type CanvasFrame } from "../engine/coords";
-import type { ElementRect } from "../engine/geometry";
+import { compositeSelectionBox, type ElementRect } from "../engine/geometry";
 import {
   applyPasteOps,
   buildPasteOps,
@@ -120,20 +124,39 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
   // Materialized element tree for the selected section (the manipulation target).
   const tree = useMemo(() => (section ? sectionToElementTree(section) : null), [section]);
 
-  // ---- Overlay target: the focused nested element, else the section root ----
+  // ---- Overlay target: focused element → composite multi-selection → root ----
   // The producer (D3) writes both `selection.ids` and `anchorId`; resolving
   // through BOTH means a single nested focus frames the element, while an
   // empty/ambiguous/stale selection falls back to the section container. Only
   // ids that are genuinely NESTED in this section's tree resolve, so a stale
   // id from another section can never frame the wrong DOM node.
+  //
+  // P27 Slice 2 (D7/D7b): a MULTI-selection of this tree's nested elements
+  // renders the COMPOSITE box around the union of the elements' measured
+  // rects — the frozen single-element and section-root contracts are
+  // unchanged. `batchIds` keeps selection order, tree-validated + purged
+  // (stale/foreign ids can never join), and is the same list the gesture
+  // layer resolves through topLevelSelection + locked exclusion.
   const nestedSelectionId = useMemo(() => {
     if (!tree) return null;
+    // P27 Slice 2 (D7): a MULTI-selection renders the COMPOSITE box — the
+    // single-element box must not leak through the anchor fallback.
+    if (selectionIds.length > 1) return null;
     return (
       singleNestedSelectionId(tree, selectionIds) ??
       singleNestedSelectionId(tree, anchorId ? [anchorId] : [])
     );
   }, [tree, selectionIds, anchorId]);
-  const targetId = nestedSelectionId ?? selectedSectionId;
+
+  const batchIds = useMemo(() => {
+    if (!tree || selectionIds.length <= 1) return [];
+    return purgeSelection(tree, selectionIds).filter(
+      (id) => !tree.rootIds.includes(id),
+    );
+  }, [tree, selectionIds]);
+  const isComposite = batchIds.length > 1;
+
+  const targetId = nestedSelectionId ?? (isComposite ? "__composite__" : null) ?? selectedSectionId;
 
   // ---- Coordinate frame (zoom/scroll aware) ----
   const frame = useCallback((): CanvasFrame | null => {
@@ -181,8 +204,10 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
     if (sectionEl instanceof HTMLElement && isManipulableSection) {
       // P27 Slice 1 (D2): element nodes of a manipulation-enabled section are
       // ALWAYS measured — not only when one is focused — so the marquee can
-      // hit-test every candidate of the active section. Bounded by the tree
-      // normalizer's node cap; `data-element-id` wins over `data-block-id`.
+      // hit-test every candidate of the active section, and Slice 2's
+      // composite box can union the selected elements' rects. Bounded by the
+      // tree normalizer's node cap; `data-element-id` wins over
+      // `data-block-id`.
       const nodes = sectionEl.querySelectorAll("[data-element-id], [data-block-id]");
       for (const node of nodes) {
         if (!(node instanceof HTMLElement)) continue;
@@ -268,6 +293,20 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
       const owner = findSection(editor.project, sectionId);
       const freshTree = owner ? sectionToElementTree(owner) : null;
       if (freshTree && singleNestedSelectionId(freshTree, interaction.selection.ids)) return;
+      // P27 Slice 2 (D5): a valid MULTI-selection of this section's nested
+      // nodes also survives sync — a durable-tree commit re-materializes the
+      // section (new `tree` reference → this effect re-fires) and must never
+      // collapse the batch selection to the section root mid-workflow.
+      if (
+        freshTree &&
+        interaction.selection.ids.length > 1 &&
+        interaction.selection.ids.every(
+          (id) =>
+            freshTree.nodes[id] !== undefined && !freshTree.rootIds.includes(id),
+        )
+      ) {
+        return;
+      }
       interaction.setSelection([sectionId], { multi: false, anchorId: sectionId });
     });
   }, [selectedSectionId, tree]);
@@ -373,17 +412,17 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
 
   // ---- Measure the selected section's rect (re-measure on changes) ----
   const [measuredRect, setMeasuredRect] = useState<ElementRect | null>(null);
+  // P27 Slice 2 (D7): the full measured map is kept so the composite union can
+  // be computed at rest (the gesture's preview rects take over during a drag).
+  const [measuredMap, setMeasuredMap] = useState<Record<string, ElementRect> | null>(null);
   useEffect(() => {
     // State writes happen inside `update` only — via a microtask for the
     // initial measure and via event listeners afterwards (never synchronously
     // inside the effect body).
     const update = () => {
-      if (!targetId) {
-        setMeasuredRect(null);
-        return;
-      }
       const rects = measureRects();
-      setMeasuredRect(rects[targetId] ?? null);
+      setMeasuredMap(rects);
+      setMeasuredRect(targetId ? (rects[targetId] ?? null) : null);
     };
     queueMicrotask(update);
     const el = contentRef.current;
@@ -402,10 +441,26 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
 
   // Preview rects are keyed by the gesture's element id, so the live drag
   // preview follows the same target (nested element or section root).
+  // P27 Slice 2 (REQ-5): during a COMPOSITE drag the preview rects are per
+  // element, so the union box is recomputed PER FRAME from the live previews —
+  // never a snapshot captured at gesture start; at rest it unions the measured
+  // rects.
+  const compositeRect: ElementRect | null = useMemo(() => {
+    if (!isComposite || batchIds.length === 0) return null;
+    const source =
+      previewRects && batchIds.every((id) => previewRects[id]) ? previewRects : measuredMap;
+    const rects = batchIds.map((id) => source?.[id]).filter(Boolean) as ElementRect[];
+    if (rects.length < batchIds.length) return null;
+    return compositeSelectionBox(rects);
+  }, [isComposite, batchIds, previewRects, measuredMap]);
+
   const displayedRect =
     targetId && previewRects && previewRects[targetId]
       ? previewRects[targetId]
       : measuredRect;
+
+  // The composite box IS the multi-selection overlay (the per-element single
+  // box is not rendered for a multi-set).
 
   // ---- Keyboard (avoids collisions with existing section shortcuts) ----
   useCanvasKeyboard({
@@ -435,6 +490,20 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
 
   return (
     <>
+      {/* P27 Slice 2 (D7): the COMPOSITE box for a multi-selection — union
+          rect, count chip, move affordance; no resize/rotate handles. A
+          pointerdown on it starts a batch move (it never rewrites the
+          selection it operates on — REQ-12). */}
+      {isComposite && compositeRect && (
+        <SelectionOverlay
+          elementId="__composite__"
+          selectionCount={batchIds.length}
+          rect={compositeRect}
+          rotation={previewRotation}
+          manipulable={isCustomBlock || durableTreeEnablesCustomCode(section)}
+          onMoveStart={api.handleMoveStart}
+        />
+      )}
       {/* P27 Slice 1 (D1c): the marquee rectangle — dashed outline + translucent
           fill, pointer-events:none, transient (never persisted). */}
       {activeMarqueeRect && (
