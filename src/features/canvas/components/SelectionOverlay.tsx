@@ -77,6 +77,10 @@ export interface FloatingToolbarApi {
   commitField: (field: InspectorFieldDef, value: unknown) => boolean;
   /** Reset a field (delete the base key / clear the override) — one entry. */
   resetField: (field: InspectorFieldDef) => boolean;
+  /** Stage 4 — toggle the mobile-hidden viewport override (one entry). */
+  setHiddenOnMobile: (hidden: boolean) => boolean;
+  /** True when the target element is hidden on mobile. */
+  isHiddenOnMobile: boolean;
   /** Pages for link targets in the interaction editor. */
   pages: Page[];
   /** The section's element tree (context for the interaction editor). */
@@ -189,6 +193,36 @@ const LAYER_ACTIONS: Array<{
  * testid — inside the contextual toolbar when one is present, standalone
  * above the box otherwise — so callers resolve ONE stable surface.
  */
+/**
+ * Stage 4 — Hide-on-Mobile toggle. Present in BOTH toolbar variants; writes
+ * / clears the `viewport.mobile.display: none` override through the same
+ * validated inspector commit path (one history entry). The active state is
+ * driven by the node's durable override, so it renders identically from
+ * either viewport tab.
+ */
+function HideOnMobileButton({ api }: { api: FloatingToolbarApi }) {
+  return (
+    <button
+      type="button"
+      data-testid="canvas-toolbar-hide-mobile"
+      aria-pressed={api.isHiddenOnMobile}
+      aria-label="Hide on Mobile"
+      title={api.isHiddenOnMobile ? "Shown on mobile — click to hide" : "Hide on mobile"}
+      className={`${TOOLBAR_ICON} ${api.isHiddenOnMobile ? TOOLBAR_ICON_ACTIVE : ""}`}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation();
+        api.setHiddenOnMobile(!api.isHiddenOnMobile);
+      }}
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <rect x="7" y="2" width="10" height="20" rx="2" />
+        <line x1="4" y1="4" x2="20" y2="20" />
+      </svg>
+    </button>
+  );
+}
+
 function LayerButtons({
   onLayerAction,
   layerBoundaries,
@@ -613,6 +647,7 @@ export const SelectionOverlay = memo(function SelectionOverlay({
           ) : (
             <WidgetToolbarControls api={toolbar} />
           )}
+          <HideOnMobileButton api={toolbar} />
           {TOOLBAR_DIVIDER}
           {onLayerAction && (
             <LayerButtons onLayerAction={onLayerAction} layerBoundaries={layerBoundaries} />

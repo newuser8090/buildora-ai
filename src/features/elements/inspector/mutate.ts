@@ -315,6 +315,33 @@ export function clearViewportOverride(
   return { ok: true, value: { rootIds: [...tree.rootIds], nodes } };
 }
 
+/**
+ * Stage 4 — "Hide on Mobile" toggle.
+ *
+ * Writes/clears the `display: none` mobile viewport override WITHOUT touching
+ * the element's base (desktop) style. `hidden = false` clears the override so
+ * the element inherits the desktop visibility again (never writes
+ * `display: flex` etc. — inheritance, not duplication).
+ */
+export function setElementHiddenOnMobile(
+  tree: ElementTree,
+  elementId: string,
+  hidden: boolean,
+): ElementResult<ElementTree> {
+  if (hidden) {
+    return updateElementViewport(tree, elementId, "mobile", { display: "none" });
+  }
+  return clearViewportOverride(tree, elementId, "mobile", ["display"]);
+}
+
+/**
+ * True when the element carries the mobile-hidden override (drives the
+ * toolbar toggle state and the structure panel's ghost indicator).
+ */
+export function isElementHiddenOnMobile(node: ElementNode): boolean {
+  return node.viewport?.mobile?.display === "none";
+}
+
 // ---------------------------------------------------------------------------
 // The adapter
 // ---------------------------------------------------------------------------

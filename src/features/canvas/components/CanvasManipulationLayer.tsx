@@ -231,6 +231,8 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
       isText: toolbarIsText(inspectorApi.node.type),
       commitField: inspectorApi.commitField,
       resetField: inspectorApi.resetField,
+      setHiddenOnMobile: inspectorApi.setHiddenOnMobile,
+      isHiddenOnMobile: inspectorApi.isHiddenOnMobile,
       pages: activePage && project.pages ? project.pages : [],
       tree: tree,
       sectionId: section.id,

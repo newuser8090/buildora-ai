@@ -27,7 +27,9 @@ import { useCanvasInteractionStore } from "@/features/canvas/store/canvas-intera
 import {
   applyInspectorFieldChange,
   applySpacingSideChange,
+  isElementHiddenOnMobile,
   resetInspectorField,
+  setElementHiddenOnMobile,
   validateInspectorFieldValue,
 } from "@/features/elements/inspector/mutate";
 import { resolveInspectorModel } from "@/features/elements/inspector/resolver";
@@ -69,6 +71,10 @@ export interface ElementInspectorApi {
   ) => boolean;
   /** Reset a field (delete base value or the current override). */
   resetField: (field: InspectorFieldDef) => boolean;
+  /** Stage 4 — toggle the `viewport.mobile.display: none` override. */
+  setHiddenOnMobile: (hidden: boolean) => boolean;
+  /** True when the target element is hidden on mobile. */
+  isHiddenOnMobile: boolean;
   /** Jump the inspector back to the section root. */
   selectRoot: () => void;
 }
@@ -165,6 +171,15 @@ export function useElementInspector(
     [applyToFreshest, breakpoint],
   );
 
+  // Stage 4 — Hide-on-Mobile toggle. Breakpoint-INDEPENDENT commit: the
+  // override lives in `viewport.mobile` regardless of the active editor
+  // viewport, so the toggle is meaningful (and safe) from either tab.
+  const setHiddenOnMobile = useCallback(
+    (hidden: boolean): boolean =>
+      applyToFreshest((tree, nodeId) => setElementHiddenOnMobile(tree, nodeId, hidden)),
+    [applyToFreshest],
+  );
+
   const selectRoot = useCallback(() => {
     useBlockEditorStore.getState().selectBlock(null);
     // A nested canvas selection would otherwise outrank the root fallback, so
@@ -188,6 +203,8 @@ export function useElementInspector(
     commitField,
     commitSpacingSide,
     resetField,
+    setHiddenOnMobile,
+    isHiddenOnMobile: isElementHiddenOnMobile(node),
     selectRoot,
   };
 }

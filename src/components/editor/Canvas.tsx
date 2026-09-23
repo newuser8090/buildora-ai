@@ -290,6 +290,7 @@ export function Canvas() {
   }, [selectedSectionId, selectionSource]);
 
   const viewportWidth = VIEWPORT_WIDTHS[viewport] ?? "1440px";
+  const isMobileViewport = viewport === "mobile";
   const zoomPercent = zoom / 100;
 
   return (
@@ -304,6 +305,7 @@ export function Canvas() {
       {/* ---- Artboard (open, crisp white page) ---- */}
       <div
         data-testid="preview-frame"
+        data-viewport={viewport}
         className="relative flex min-h-0 flex-col overflow-hidden rounded-lg transition-all duration-300"
         style={{
           width: viewportWidth,
@@ -312,7 +314,13 @@ export function Canvas() {
           transformOrigin: "top center",
           height: zoomPercent !== 1 ? `calc(100% / ${zoomPercent})` : "100%",
           background: "#FFFFFF",
-          boxShadow: "0 4px 20px rgba(0,0,0,0.08)",
+          // Stage 4 — the mobile artboard renders as a realistic phone frame:
+          // subtle outline + centered shadow; desktop keeps the flat page.
+          borderRadius: isMobileViewport ? "24px" : "0.5rem",
+          border: isMobileViewport ? "6px solid #0d0f14" : "none",
+          boxShadow: isMobileViewport
+            ? "0 12px 36px rgba(0,0,0,0.18)"
+            : "0 4px 20px rgba(0,0,0,0.08)",
         }}
       >
         {/* ---- Website content ---- */}

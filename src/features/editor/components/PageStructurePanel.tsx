@@ -329,6 +329,19 @@ function StructureRow({
   const label = getSectionLabel(section);
   const singletonBlocked = section.type === "header" || section.type === "footer";
 
+  // Stage 4 — ghost indicator when ANY element of this section is hidden on
+  // mobile (viewport.mobile.display === "none"). Pure read over the durable
+  // tree — no store subscription, no mutation path.
+  const mobileHiddenCount = useMemo(() => {
+    const nodes = (section as { tree?: { nodes?: Record<string, { viewport?: { mobile?: { display?: string } } }> } }).tree?.nodes;
+    if (!nodes) return 0;
+    let count = 0;
+    for (const node of Object.values(nodes)) {
+      if (node?.viewport?.mobile?.display === "none") count += 1;
+    }
+    return count;
+  }, [section]);
+
   // Alt+ArrowUp / Alt+ArrowDown keyboard reorder when the row is focused
   const handleRowKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -396,6 +409,15 @@ function StructureRow({
             data-testid={`hidden-badge-${section.id}`}
           >
             Hidden
+          </span>
+        )}
+        {mobileHiddenCount > 0 && (
+          <span
+            className="ml-1.5 rounded bg-[#F0E7FD] px-1 py-px text-[10px] font-medium text-[#7D2AE8]"
+            data-testid={`mobile-hidden-badge-${section.id}`}
+            title={`${mobileHiddenCount} element${mobileHiddenCount !== 1 ? "s" : ""} hidden on mobile`}
+          >
+            {mobileHiddenCount} hidden on mobile
           </span>
         )}
       </span>
