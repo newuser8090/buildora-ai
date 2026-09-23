@@ -13,6 +13,8 @@ import { portfolioTemplate } from "../templates/portfolio-template";
 import { agencyTemplate } from "../templates/agency-template";
 import { restaurantTemplate } from "../templates/restaurant-template";
 import { ecommerceTemplate } from "../templates/ecommerce-template";
+import { groceryStoreTemplate } from "../templates/grocery-store-template";
+import { modernBakeryTemplate } from "../templates/modern-bakery-template";
 import { startupTemplate } from "../templates/startup-template";
 import { eventTemplate } from "../templates/event-template";
 import { personalProfileTemplate } from "../templates/personal-profile-template";
@@ -26,6 +28,8 @@ const DEFAULT_TEMPLATES: BuildoraTemplate[] = [
   agencyTemplate,
   restaurantTemplate,
   ecommerceTemplate,
+  groceryStoreTemplate,
+  modernBakeryTemplate,
   eventTemplate,
   personalProfileTemplate,
 ];

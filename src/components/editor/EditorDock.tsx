@@ -7,8 +7,10 @@
 // dock. Clicking an icon opens ONE animated 320px white drawer (exactly one
 // open at a time — Canva model); clicking the active icon closes it again.
 //
-//   - Templates drawer: the section library (registry-driven categories),
-//     inserted through the SectionFactory + editor store (one history entry).
+//   - Templates drawer: project-level starter templates (Stage 2 — 1-click
+//     create + navigate through the persistence controller) followed by the
+//     section library (registry-driven categories), inserted through the
+//     SectionFactory + editor store (one history entry).
 //   - Elements / Text / Store / Media drawers: the existing P22-D library
 //     catalog, inserted through the canonical insertLibraryElement service
 //     (one history entry, toasts + scroll-into-view preserved).
@@ -21,6 +23,7 @@
 // ---------------------------------------------------------------------------
 
 import { useCallback, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ChevronDown,
@@ -56,6 +59,11 @@ import { useAiEdit } from "@/features/ai-editing/hooks/useAiEdit";
 import { useInlineEdit } from "@/features/inline-editing/hooks/useInlineEdit";
 import { useChatStore } from "@/features/chat/store/chat-store";
 import { sectionLabel } from "@/features/ai-editing/rules/rule-based-editor";
+import { ensureProjectController } from "@/features/persistence/hooks/useProjectController";
+import { templateRegistry } from "@/features/templates/registry/template-registry";
+import { registerDefaultTemplates } from "@/features/templates/registry/register-default-templates";
+import { TEMPLATE_CATEGORY_LABELS } from "@/features/templates/types";
+import type { BuildoraTemplate } from "@/features/templates/types";
 import { cn } from "@/utils/cn";
 
 // ---------------------------------------------------------------------------
@@ -283,7 +291,156 @@ function useInsertElement() {
 }
 
 // ---------------------------------------------------------------------------
-// Templates drawer — the section library, grouped by its own categories
+// Project templates (Stage 2) — 1-click create + switch via the controller
+// ---------------------------------------------------------------------------
+
+/** Curated project-level starters surfaced in the dock. */
+const DOCK_TEMPLATE_IDS = [
+  "template-grocery",
+  "template-bakery",
+  "template-ecommerce",
+] as const;
+
+/** Display labels for curated dock templates (may differ from template.name). */
+const DOCK_TEMPLATE_LABELS: Record<string, string> = {
+  "template-grocery": "Local Grocery Store",
+  "template-bakery": "Modern Bakery",
+  "template-ecommerce": "Ecommerce Store",
+};
+
+/** Small deterministic preview chip (pure CSS, same model as TemplateCard). */
+function MiniTemplateChip({ template }: { template: BuildoraTemplate }) {
+  const accent = template.preview.accent ?? "#7c5cfc";
+  const background = template.preview.background ?? "#ffffff";
+  const kinds = template.preview.sections.slice(0, 4);
+  return (
+    <div
+      aria-hidden="true"
+      className="flex h-16 flex-col justify-end gap-1 overflow-hidden rounded-lg border border-black/5 p-2"
+      style={{ background }}
+    >
+      {kinds.map((section, i) => (
+        <span
+          key={`${section.kind}-${i}`}
+          className={cn("block rounded-[3px]", section.kind === "hero" ? "h-4" : "h-1.5")}
+          style={{
+            background: accent,
+            opacity: section.kind === "hero" ? 0.85 : 0.35,
+            width: section.kind === "hero" ? "75%" : `${85 - i * 12}%`,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ProjectTemplatesSection() {
+  const router = useRouter();
+  const showToast = useDockToasts();
+  const setDockPanel = useEditorUiStore((s) => s.setDockPanel);
+  const [creatingId, setCreatingId] = useState<string | null>(null);
+
+  // Idempotent + Strict-Mode safe: guarantees the curated set exists for the
+  // registry lookups below on a fresh editor mount.
+  registerDefaultTemplates();
+
+  const templates = useMemo(
+    () =>
+      DOCK_TEMPLATE_IDS.map(
+        (id): { id: string; template: BuildoraTemplate; label: string } | null => {
+          const template = templateRegistry.get(id);
+          return template ? { id, template, label: DOCK_TEMPLATE_LABELS[id] ?? id } : null;
+        },
+      ).filter(
+        (entry): entry is { id: string; template: BuildoraTemplate; label: string } =>
+          entry !== null,
+      ),
+    [],
+  );
+
+  /** Create through the canonical controller flow, then navigate. The
+   *  controller flushes the current project, persists the new one, hydrates
+   *  the store, and returns the new projectId — navigation on success only. */
+  const createFromTemplate = useCallback(
+    async (templateId: string, projectName: string) => {
+      setCreatingId(templateId);
+      try {
+        let controller;
+        try {
+          controller = ensureProjectController();
+        } catch {
+          showToast("Editor isn't ready yet. Try again.");
+          return;
+        }
+        const result = await controller.createProjectFromTemplate({
+          templateId,
+          projectName,
+        });
+        if (!result.success) {
+          showToast(result.error?.message ?? "Couldn't create the project.");
+          return;
+        }
+        if (!result.data) {
+          showToast("Couldn't create the project.");
+          return;
+        }
+        setDockPanel(null);
+        router.push(`/editor/${result.data.projectId}`);
+      } finally {
+        setCreatingId(null);
+      }
+    },
+    [router, showToast, setDockPanel],
+  );
+
+  return (
+    <div>
+      <CategoryHeading>Project templates</CategoryHeading>
+      <HintNote>
+        Starting fresh replaces your canvas with a brand-new project — your
+        current one is saved first.
+      </HintNote>
+      <InsertRow
+        testId="dock-template-blank"
+        label="Blank Canvas"
+        description="Start from scratch with one clean section"
+        disabled={creatingId !== null}
+        onClick={() => void createFromTemplate("template-blank", "Untitled Project")}
+      />
+      <div className="mt-2 flex flex-col gap-2">
+        {templates.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            data-testid={`dock-template-card-${entry.id}`}
+            onClick={() =>
+              void createFromTemplate(entry.template.id, entry.template.defaultName)
+            }
+            disabled={creatingId !== null}
+            className="group flex w-full flex-col gap-2 rounded-xl border border-black/5 bg-white p-2.5 text-left transition-all duration-150 hover:-translate-y-0.5 hover:border-[#7D2AE8]/40 hover:shadow-[0_6px_16px_rgba(0,0,0,0.08)] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <MiniTemplateChip template={entry.template} />
+            <span className="flex items-center gap-1.5">
+              <span className="min-w-0 flex-1 truncate text-sm font-medium text-[#0d0f14]">
+                {entry.label}
+              </span>
+              {creatingId === entry.id && (
+                <Loader2 className="h-3.5 w-3.5 flex-shrink-0 animate-spin text-[#7D2AE8]" />
+              )}
+            </span>
+            <span className="block truncate text-xs text-[#8a8f9c]">
+              {TEMPLATE_CATEGORY_LABELS[entry.template.category]} ·{" "}
+              {entry.template.defaultName}
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Templates drawer — project starters + the section library
 // ---------------------------------------------------------------------------
 
 function TemplatesDrawerContent() {
@@ -301,6 +458,8 @@ function TemplatesDrawerContent() {
 
   return (
     <div>
+      <ProjectTemplatesSection />
+      <CategoryHeading>Add sections</CategoryHeading>
       {groups.map(([category, definitions]) => (
         <section key={category}>
           <CategoryHeading>{category}</CategoryHeading>
@@ -652,7 +811,7 @@ function AiDrawerContent({ onClose }: { onClose: () => void }) {
 // ---------------------------------------------------------------------------
 
 const DRAWER_TITLES: Record<Exclude<DockPanel, null>, { title: string; subtitle?: string }> = {
-  templates: { title: "Templates", subtitle: "Start from a ready-made section" },
+  templates: { title: "Templates", subtitle: "Start a project or add a section" },
   elements: { title: "Elements", subtitle: "Build your page block by block" },
   text: { title: "Text", subtitle: "Headings and body copy" },
   store: { title: "Store", subtitle: "Commerce building blocks" },

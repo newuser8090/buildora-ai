@@ -23,6 +23,7 @@ import { useProjectsDashboard } from "@/features/projects/hooks/useProjectsDashb
 import { ProjectCard } from "@/features/projects/components/ProjectCard";
 import { ImportProjectDialog } from "@/features/projects/components/ImportProjectDialog";
 import { NewProjectDialog } from "@/features/templates/components/NewProjectDialog";
+import { StarterChooserDialog } from "@/features/templates/components/StarterChooserDialog";
 import { useProjectController } from "@/features/persistence/hooks/useProjectController";
 import { downloadProjectFile } from "@/features/projects/utils/download-project-file";
 import { ConfirmDialog } from "@/features/projects/components/ConfirmDialog";
@@ -136,6 +137,42 @@ export default function DashboardPage() {
   }, []);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
+
+  // ---- Stage 2: starter chooser ("Build Your Website" onboarding flow) ----
+  const [starterChooserOpen, setStarterChooserOpen] = useState(false);
+  const [starterBusy, setStarterBusy] = useState(false);
+
+  /** Create a project through the canonical template flow and navigate into
+   *  the editor. Shared by the chooser's blank-canvas and template paths. */
+  const createFromChooser = useCallback(
+    async (templateId: string, projectName: string): Promise<boolean> => {
+      const result = await createProjectFromTemplate(templateId, projectName);
+      return result.ok;
+    },
+    [createProjectFromTemplate],
+  );
+
+  const handleStarterCreateBlank = useCallback(async () => {
+    setStarterBusy(true);
+    const ok = await createFromChooser("template-blank", "Untitled Project");
+    setStarterBusy(false);
+    if (ok) setStarterChooserOpen(false);
+  }, [createFromChooser]);
+
+  const handleStarterCreateTemplate = useCallback(
+    async (templateId: string, projectName: string) => {
+      setStarterBusy(true);
+      const ok = await createFromChooser(templateId, projectName);
+      setStarterBusy(false);
+      if (ok) setStarterChooserOpen(false);
+    },
+    [createFromChooser],
+  );
+
+  const handleStarterBrowseTemplates = useCallback(() => {
+    setStarterChooserOpen(false);
+    setNewProjectOpen(true);
+  }, []);
 
   // ---- Phase P9: personal templates ----
   const [personalTemplatesOpen, setPersonalTemplatesOpen] = useState(false);
@@ -819,12 +856,20 @@ export default function DashboardPage() {
                   </p>
                   <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
                     <button
-                      onClick={handleStartGuidedSetup}
-                      data-testid="start-guided-setup"
+                      onClick={() => setStarterChooserOpen(true)}
+                      data-testid="build-your-website"
                       className="flex h-10 items-center gap-2 rounded-xl bg-accent px-5 text-sm font-medium text-white transition-all duration-200 hover:bg-accent-hover active:scale-95"
                       type="button"
                     >
                       <Sparkles className="h-4 w-4" />
+                      Build Your Website
+                    </button>
+                    <button
+                      onClick={handleStartGuidedSetup}
+                      data-testid="start-guided-setup"
+                      className="flex h-10 items-center gap-2 rounded-xl border border-border px-5 text-sm font-medium text-text-muted transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
+                      type="button"
+                    >
                       Start guided setup
                     </button>
                     <button
@@ -961,6 +1006,18 @@ export default function DashboardPage() {
         onParse={parseImport}
         onCommit={commitImport}
         existingNames={projects.map((p) => p.name)}
+      />
+
+      {/* ---- Starter Chooser (Stage 2 onboarding) ---- */}
+      <StarterChooserDialog
+        open={starterChooserOpen}
+        onClose={() => setStarterChooserOpen(false)}
+        onCreateBlank={() => void handleStarterCreateBlank()}
+        onBrowseTemplates={handleStarterBrowseTemplates}
+        onCreateTemplate={(templateId, projectName) =>
+          void handleStarterCreateTemplate(templateId, projectName)
+        }
+        isBusy={starterBusy}
       />
 
       {/* ---- New Project Dialog ---- */}
