@@ -5,11 +5,13 @@
 //
 // Reads the transient cart store; renders NOTHING while closed (so non-commerce
 // projects are byte-for-byte unchanged). Footer exposes the zero-code
-// WhatsApp checkout (wa.me deep link with the formatted order) and a secondary
-// Proceed-to-Checkout CTA (structure for a future flow; disabled placeholder).
+// WhatsApp checkout (wa.me deep link with the formatted order) and the
+// Stage 5 "Proceed to Checkout" CTA opening CheckoutModal. The modal renders
+// INDEPENDENTLY of the drawer's open state, so the order confirmation
+// survives the cart being cleared + drawer closing on order placement.
 // ---------------------------------------------------------------------------
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { X, Minus, Plus, Trash2, ShoppingBag } from "lucide-react";
 import {
   useCartStore,
@@ -18,6 +20,7 @@ import {
   formatCartPrice,
   buildWhatsAppOrderUri,
 } from "../cart-store";
+import { CheckoutModal } from "./CheckoutModal";
 
 // ---------------------------------------------------------------------------
 
@@ -29,6 +32,7 @@ export function CartDrawer() {
   const removeItem = useCartStore((s) => s.removeItem);
   const updateQuantity = useCartStore((s) => s.updateQuantity);
   const clearCart = useCartStore((s) => s.clearCart);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
 
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
@@ -46,8 +50,6 @@ export function CartDrawer() {
     return undefined;
   }, [isOpen, closeCart]);
 
-  if (!isOpen) return null;
-
   const total = cartTotalPrice(items);
   const count = cartItemCount(items);
   const whatsappUri = buildWhatsAppOrderUri({
@@ -56,15 +58,36 @@ export function CartDrawer() {
     total,
   });
 
+  // The modal is the STABLE first child of the returned fragment — it must
+  // never change tree position, or React remounts it on drawer close and the
+  // order confirmation (local modal state) is wiped mid-order. The drawer
+  // chrome renders conditionally as the fragment's second child; the modal
+  // stays mounted whenever the drawer is open OR the checkout flow is
+  // active, so the confirmation survives cart clearing + drawer closing.
+  // `key={checkoutOpen ? "on" : "off"}` gives a fresh instance per flow, so
+  // the modal resets its local state on open without setState-in-effect.
+  const checkoutModal = (
+    <CheckoutModal
+      key={checkoutOpen ? "checkout-on" : "checkout-off"}
+      open={checkoutOpen}
+      onClose={() => setCheckoutOpen(false)}
+    />
+  );
+
+  if (!isOpen && !checkoutOpen) return null;
+
   return (
-    <div className="fixed inset-0 z-[60]" data-testid="cart-drawer-root">
-      {/* Backdrop */}
-      <div
-        data-testid="cart-drawer-backdrop"
-        aria-hidden="true"
-        onClick={closeCart}
-        className="absolute inset-0 bg-black/40 backdrop-blur-[2px] transition-opacity"
-      />
+    <>
+      {checkoutModal}
+      {isOpen && (
+        <>
+          {/* Backdrop */}
+          <div
+            data-testid="cart-drawer-backdrop"
+            aria-hidden="true"
+            onClick={closeCart}
+            className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-[2px] transition-opacity"
+          />
 
       {/* Drawer panel */}
       <aside
@@ -72,7 +95,7 @@ export function CartDrawer() {
         aria-modal="true"
         aria-label="Shopping basket"
         data-testid="cart-drawer"
-        className="absolute right-0 top-0 flex h-full w-[360px] max-w-[92vw] translate-x-0 flex-col bg-white shadow-[-8px_0_32px_rgba(0,0,0,0.15)] animate-[cart-slide-in_220ms_ease-out]"
+        className="fixed right-0 top-0 z-[61] flex h-full w-[360px] max-w-[92vw] translate-x-0 flex-col bg-white shadow-[-8px_0_32px_rgba(0,0,0,0.15)] animate-[cart-slide-in_220ms_ease-out]"
       >
         <style>{`@keyframes cart-slide-in { from { transform: translateX(100%); } to { transform: translateX(0); } }`}</style>
 
@@ -219,9 +242,8 @@ export function CartDrawer() {
             <button
               type="button"
               data-testid="cart-proceed-checkout"
-              disabled
-              title="Checkout flow coming soon"
-              className="mt-2 flex h-10 w-full items-center justify-center rounded-xl border border-black/10 text-sm font-medium text-[#5b5e69] opacity-60"
+              onClick={() => setCheckoutOpen(true)}
+              className="mt-2 flex h-10 w-full items-center justify-center rounded-xl border border-black/10 text-sm font-medium text-[#5b5e69] transition-colors hover:bg-[#F2F3F5]"
             >
               Proceed to Checkout
             </button>
@@ -236,6 +258,8 @@ export function CartDrawer() {
           </div>
         )}
       </aside>
-    </div>
+        </>
+      )}
+    </>
   );
 }

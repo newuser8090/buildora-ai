@@ -43,7 +43,6 @@ import { useWorkspaceHistoryUiStore } from "@/features/workspaces/store/workspac
 import { PresenceIndicator } from "@/features/workspaces/components/PresenceIndicator";
 import { CollabStatusIndicator } from "@/features/collaboration/components/CollabStatusIndicator";
 import { usePreviewStore } from "@/features/preview/store/preview-store";
-import { useLaunchCenterStore } from "@/features/launch-readiness/store/launch-center-store";
 import { useSiteSettingsUiStore } from "@/features/site-settings/store/site-settings-ui-store";
 import { usePublishing } from "@/features/publishing/hooks/usePublishing";
 import { usePublishingStore } from "@/features/publishing/store/publishing-store";
@@ -51,6 +50,7 @@ import { usePersonalTemplatesUiStore } from "@/features/personal-templates/store
 import { useHelpUiStore } from "@/features/help/store/help-ui-store";
 import { useRecoveryUiStore } from "@/features/recovery/store/recovery-ui-store";
 import { notifyActionFeedback } from "@/features/feedback/action-feedback";
+import { PublishSuccessModal } from "@/features/publishing/components/PublishSuccessModal";
 
 const iconButton =
   "flex h-8 w-8 items-center justify-center rounded-lg text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95";
@@ -63,6 +63,9 @@ export function TopNav() {
   const [exportingSite, setExportingSite] = useState(false);
   const [exportSiteError, setExportSiteError] = useState<string | null>(null);
   const [assetManagerOpen, setAssetManagerOpen] = useState(false);
+  // Stage 5 — one-click publish: the CTA opens the celebration modal with the
+  // live preview URL, copy link, QR, and open-site actions.
+  const [publishModalOpen, setPublishModalOpen] = useState(false);
   const copyNotice = usePublishingStore((s) => s.copyNotice);
 
   // Phase P9 — save this project as a personal template (from the editor).
@@ -427,7 +430,7 @@ export function TopNav() {
         {/* Stage 1 — the Canva-purple Publish CTA (prominent, gradient). */}
         <button
           data-testid="topnav-publish-button"
-          onClick={() => useLaunchCenterStore.getState().openLaunchCenter()}
+          onClick={() => setPublishModalOpen(true)}
           disabled={isWsReadOnly}
           className="ml-1 flex h-8 items-center gap-1.5 rounded-lg bg-gradient-to-r from-[#8B3DFF] to-[#7D2AE8] px-3.5 text-sm font-semibold text-white shadow-[0_2px_10px_rgba(125,42,232,0.35)] transition-all duration-200 hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
           title={isWsReadOnly ? "Read-only sessions can't publish" : "Check and publish your website"}
@@ -479,6 +482,16 @@ export function TopNav() {
       {/* ---- Asset Manager modal ---- */}
       {assetManagerOpen && (
         <AssetManager onClose={() => setAssetManagerOpen(false)} />
+      )}
+
+      {/* ---- Stage 5: one-click publish success modal (keyed per open for
+           a fresh instance + instant state reset) ---- */}
+      {publishModalOpen && (
+        <PublishSuccessModal
+          key="publish-modal-open"
+          open
+          onClose={() => setPublishModalOpen(false)}
+        />
       )}
 
       {/* ---- Phase P8: transient "Link copied." announcement ---- */}

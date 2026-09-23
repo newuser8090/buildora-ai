@@ -59,6 +59,12 @@ import { useAiEdit } from "@/features/ai-editing/hooks/useAiEdit";
 import { useInlineEdit } from "@/features/inline-editing/hooks/useInlineEdit";
 import { useChatStore } from "@/features/chat/store/chat-store";
 import { sectionLabel } from "@/features/ai-editing/rules/rule-based-editor";
+import {
+  contextualChips,
+  getContextualTarget,
+  isContextualPrompt,
+  runContextualAction,
+} from "@/features/ai-editing/contextual-actions";
 import { ensureProjectController } from "@/features/persistence/hooks/useProjectController";
 import { templateRegistry } from "@/features/templates/registry/template-registry";
 import { registerDefaultTemplates } from "@/features/templates/registry/register-default-templates";
@@ -648,9 +654,32 @@ function AiDrawerContent({ onClose }: { onClose: () => void }) {
   const isBusy = isLoading || isEditing || inlineBusy;
   const hasMessages = messages.length > 0;
 
+  // Stage 5 — contextual quick chips for the current canvas target (element
+  // or section). Resolved from live stores so chips stay fresh per render.
+  const chips = contextualChips(getContextualTarget());
+
+  const runChip = (chip: string) => {
+    const result = runContextualAction(chip);
+    if (result.ok) {
+      useChatStore.getState().addMessage({
+        role: "assistant",
+        content: `✅ ${result.summary} (one undo step)`,
+      });
+    } else {
+      useChatStore.getState().addMessage({ role: "assistant", content: result.error });
+    }
+  };
+
   const handleSubmit = async () => {
     const prompt = input.trim();
     if (!prompt || isBusy) return;
+    // Stage 5: deterministic contextual requests answer instantly through the
+    // local engine (one history entry) instead of the async AI pipeline.
+    if (!selectedField && isContextualPrompt(prompt)) {
+      setInput("");
+      runChip(prompt);
+      return;
+    }
     setInput("");
     // Phase M inline priority: an inline field selection routes to the quick
     // suggestion flow (same precedence the LeftSidebar composer used).
@@ -715,6 +744,21 @@ function AiDrawerContent({ onClose }: { onClose: () => void }) {
       </div>
 
       <div className="mt-3 flex flex-col gap-2">
+        {chips.length > 0 && !selectedField && (
+          <div className="flex flex-wrap gap-1.5" data-testid="ai-quick-chips">
+            {chips.map((chip) => (
+              <button
+                key={chip}
+                type="button"
+                data-testid="ai-quick-chip"
+                onClick={() => runChip(chip)}
+                className="rounded-full border border-[#7D2AE8]/25 bg-[#FAF7FE] px-2.5 py-1 text-xs text-[#7D2AE8] transition-colors hover:bg-[#F0E7FD]"
+              >
+                {chip}
+              </button>
+            ))}
+          </div>
+        )}
         {selectedSection && editTarget && !selectedField && (
           <div className="flex items-center gap-2 rounded-xl bg-[#F0E7FD] px-3 py-2 text-xs text-[#3a1d5c]">
             <Sparkles className="h-3.5 w-3.5 shrink-0 text-[#7D2AE8]" />
