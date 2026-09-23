@@ -40,12 +40,14 @@ describe("EditorUiStore — panel defaults", () => {
     expect(state.leftPanelWidth).toBe(320);
     expect(state.rightPanelWidth).toBe(300);
     expect(state.leftPanelCollapsed).toBe(false);
-    expect(state.rightPanelCollapsed).toBe(false);
+    // Stage 1: the properties drawer starts collapsed (canvas-first shell).
+    expect(state.rightPanelCollapsed).toBe(true);
   });
 });
 
 describe("EditorUiStore — collapse setters", () => {
   it("sets left and right collapse independently", () => {
+    useEditorUiStore.getState().setRightPanelCollapsed(false);
     useEditorUiStore.getState().setLeftPanelCollapsed(true);
     expect(useEditorUiStore.getState().leftPanelCollapsed).toBe(true);
     expect(useEditorUiStore.getState().rightPanelCollapsed).toBe(false);
@@ -111,6 +113,7 @@ describe("EditorUiStore — hydration", () => {
     clearEditorUIPrefs();
     useEditorUiStore.getState().hydratePanelPrefs();
     expect(useEditorUiStore.getState().leftPanelWidth).toBe(320);
-    expect(useEditorUiStore.getState().rightPanelCollapsed).toBe(false);
+    // Stage 1: the expanded drawer is still the persisted no-prefs default.
+    expect(useEditorUiStore.getState().rightPanelCollapsed).toBe(true);
   });
 });

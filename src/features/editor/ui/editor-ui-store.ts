@@ -22,6 +22,12 @@ import {
 
 export type RightSidebarTab = "structure" | "elements" | "data" | "design" | "blocks";
 
+/**
+ * Stage 1 (light shell) — which left dock drawer is open. Exactly one drawer
+ * is open at a time (Canva model); `null` = fully closed. Transient UI state.
+ */
+export type DockPanel = "templates" | "elements" | "text" | "store" | "media" | "ai" | null;
+
 export interface AddSectionDialogState {
   open: boolean;
   /** Optional preset — when set, the dialog preselects this section type. */
@@ -45,6 +51,13 @@ interface EditorUiState {
   setRightPanelWidth: (width: number) => void;
   /** Re-read persisted panel prefs into state (safe no-op on first mount). */
   hydratePanelPrefs: () => void;
+
+  // ---- Left dock (Stage 1 light shell) — 72px rail + 320px drawers ----
+  dockPanel: DockPanel;
+  setDockPanel: (panel: DockPanel) => void;
+  /** Canva toggle: clicking the active rail icon closes the drawer. */
+  toggleDockPanel: (panel: Exclude<DockPanel, null>) => void;
+
   addSectionDialog: AddSectionDialogState;
   openAddSectionDialog: (options?: {
     initialType?: string;
@@ -89,6 +102,12 @@ export const useEditorUiStore = create<EditorUiState>()((set, get) => ({
   hydratePanelPrefs: () => {
     set(panelPrefsToState(loadEditorUIPrefs()));
   },
+
+  // ---- Left dock (Stage 1 light shell) ----
+  dockPanel: null,
+  setDockPanel: (panel) => set({ dockPanel: panel }),
+  toggleDockPanel: (panel) =>
+    set((state) => ({ dockPanel: state.dockPanel === panel ? null : panel })),
 
   addSectionDialog: { open: false, initialType: undefined, initialPosition: undefined },
   openAddSectionDialog: (options) =>

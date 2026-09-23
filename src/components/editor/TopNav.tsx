@@ -12,7 +12,6 @@ import {
   BookMarked,
   Loader2,
   ImageIcon,
-  ArrowLeft,
   Eye,
   Rocket,
   Settings2,
@@ -20,10 +19,11 @@ import {
   Keyboard,
   History,
   Clock,
-  Bot,
   Share2,
+  ChevronDown,
+  Monitor,
+  Smartphone,
 } from "lucide-react";
-import { openCopilotPanel } from "@/features/ai-copilot/store/copilot-store";
 import { openShareDialog } from "@/features/sharing/store/share-ui-store";
 import { useEditorStore } from "@/features/editor/store/editor-store";
 import { useMyBlocksUiStore } from "@/features/my-blocks/store/my-blocks-ui-store";
@@ -35,7 +35,6 @@ import { exportProject as exportSiteZip } from "@/features/export/pipeline/expor
 import { useDataIntegrationStore } from "@/features/integrations/store/data-integration-store";
 import { mapProjectTransferErrorToMessage } from "@/features/projects/types/project-transfer";
 import { cn } from "@/utils/cn";
-import { ExperienceModeSwitcher } from "@/features/guided-builder/components/ExperienceModeSwitcher";
 import { EXPORT_SITE_EVENT } from "@/features/guided-builder/constants";
 import { CloudSyncStatusControl } from "@/features/cloud-sync/components/CloudSyncStatusControl";
 import { AccountMenu } from "@/features/auth/components/AccountMenu";
@@ -60,7 +59,6 @@ const iconButtonDisabled =
   "flex h-8 w-8 items-center justify-center rounded-lg text-text-dim/30 cursor-not-allowed";
 
 export function TopNav() {
-  const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportingSite, setExportingSite] = useState(false);
   const [exportSiteError, setExportSiteError] = useState<string | null>(null);
@@ -98,7 +96,6 @@ export function TopNav() {
   const { publishStatus } = usePublishing();
 
   const saveStatus = useEditorStore((s) => s.saveStatus);
-  const isHydrated = useEditorStore((s) => s.isHydrated);
   const isDirty = useEditorStore((s) => s.isDirty);
 
   const router = useRouter();
@@ -225,7 +222,6 @@ export function TopNav() {
     }
 
     setExportError(null);
-    setExporting(true);
 
     // Yield so a second synchronous click in the same tick is blocked by the
     // exportingRef guard (and an unmount before completion skips feedback).
@@ -253,90 +249,49 @@ export function TopNav() {
       }
     } finally {
       exportingRef.current = false;
-      if (mountedRef.current) {
-        setExporting(false);
-      }
     }
   }, [project]);
 
   return (
-    <header className="flex h-12 items-center gap-3 border-b border-border bg-secondary px-4">
-      {/* ---- Left: Brand + Project ---- */}
-      <div className="flex items-center gap-3">
-        {/* Back to dashboard */}
+    <header className="flex h-12 flex-shrink-0 items-center gap-2 border-b border-black/5 bg-white px-3">
+      {/* ---- Left: Brand, File menu, Undo/Redo ---- */}
+      <div className="flex items-center gap-1">
+        {/* Brand logo — back to dashboard (preserves the back-nav guard). */}
         <button
           onClick={handleBackToDashboard}
           disabled={backNavBusy}
-          className="flex h-7 w-7 items-center justify-center rounded-lg text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex h-8 items-center gap-1.5 rounded-lg px-1.5 transition-all duration-200 hover:bg-[#F2F3F5] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
           title="Back to Dashboard"
           aria-label="Back to Dashboard"
           type="button"
         >
           {backNavBusy ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <Loader2 className="h-4 w-4 animate-spin text-[#7D2AE8]" />
           ) : (
-            <ArrowLeft className="h-4 w-4" />
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-[#8B3DFF] to-[#7D2AE8]">
+              <Sparkles className="h-3.5 w-3.5 text-white" />
+            </span>
           )}
         </button>
 
-        <div className="h-4 w-px bg-border" />
+        {/* File menu — the project-level surface (save / export / settings). */}
+        <FileMenu
+          onSave={handleSave}
+          onExportProject={handleExport}
+          onOpenAssets={() => setAssetManagerOpen(true)}
+          onOpenBackups={openBackups}
+          onOpenShortcuts={openShortcuts}
+          onOpenSaveTemplate={openSaveTemplate}
+          onOpenSiteSettings={() => useSiteSettingsUiStore.getState().openDialog("basics")}
+          showVersionHistory={!!wsName}
+          onOpenVersionHistory={openVersionHistory}
+          exporting={exportingSite}
+          onExportSite={handleExportSite}
+          saveBusy={saveStatus === "saving"}
+        />
 
-        <div className="flex items-center gap-2">
-          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent">
-            <Sparkles className="h-3.5 w-3.5 text-white" />
-          </div>
-          <span className="text-sm font-semibold tracking-tight text-text-primary">
-            Buildora
-          </span>
-        </div>
+        <div className="mx-1 h-4 w-px bg-black/10" />
 
-        <div className="h-4 w-px bg-border" />
-
-        <div className="flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors duration-200 hover:bg-card">
-          <span className="text-sm text-text-muted transition-colors duration-200">
-            {project.name || "Untitled Project"}
-          </span>
-        </div>
-
-        {/* Phase P14 — workspace + editing state indicator */}
-        {wsName && (
-          <div
-            className="flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-text-dim"
-            data-testid="workspace-editor-context"
-          >
-            <span className="text-text-muted">{wsName}</span>
-            <span aria-hidden="true" className="text-text-dim/40">·</span>
-            {isWsReadOnly ? (
-              <span className="text-yellow-600 dark:text-yellow-400" data-testid="workspace-editing-indicator">
-                {wsAccess.reason === "being-edited" && wsLeaseHolder
-                  ? `Being edited by ${wsLeaseHolder}`
-                  : wsAccess.reason === "offline"
-                    ? "Offline — read only"
-                    : "Read only"}
-              </span>
-            ) : (
-              <span className="text-emerald-600 dark:text-emerald-400" data-testid="workspace-editing-indicator">
-                Editing
-              </span>
-            )}
-          </div>
-        )}
-
-        {/* Phase P15 — live presence (only while a workspace project is open) */}
-        {wsName && <PresenceIndicator />}
-
-        {/* Phase P16 — collaboration sync status + remote-change hint */}
-        {wsName && <CollabStatusIndicator />}
-      </div>
-
-      {/* ---- Spacer ---- */}
-      <div className="flex-1" />
-
-      {/* ---- Actions ---- */}
-      <div className="flex items-center gap-1">
-        <div className="mr-1.5">
-          <ExperienceModeSwitcher />
-        </div>
         <button
           data-testid="undo-button"
           className={cn(canUndo ? iconButton : iconButtonDisabled)}
@@ -371,53 +326,78 @@ export function TopNav() {
         >
           <Redo2 className="h-4 w-4" />
         </button>
+      </div>
 
-        <div className="mx-1.5 h-4 w-px bg-border" />
+      {/* ---- Center-Left: Viewport switcher (Canva-style tabs) ---- */}
+      <ViewportSwitcher />
 
-        <button
-          onClick={() => setAssetManagerOpen(true)}
-          className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-sm text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
-          title="Manage assets"
-          type="button"
-        >
-          <ImageIcon className="h-4 w-4" />
-          <span className="hidden sm:inline text-xs">Assets</span>
-        </button>
+      {/* ---- Center: inline-editable document title ---- */}
+      <div className="mx-2 flex min-w-0 flex-1 justify-center">
+        <DocumentTitle />
+      </div>
+
+      {/* ---- Right: Preview / Export ZIP / Publish ---- */}
+      <div className="flex items-center gap-1">
+
+        {/* Phase P14 — workspace + editing state indicator */}
+        {wsName && (
+          <div
+            className="flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-text-dim"
+            data-testid="workspace-editor-context"
+          >
+            <span className="text-text-muted">{wsName}</span>
+            <span aria-hidden="true" className="text-text-dim/40">·</span>
+            {isWsReadOnly ? (
+              <span className="text-yellow-600 dark:text-yellow-400" data-testid="workspace-editing-indicator">
+                {wsAccess.reason === "being-edited" && wsLeaseHolder
+                  ? `Being edited by ${wsLeaseHolder}`
+                  : wsAccess.reason === "offline"
+                    ? "Offline — read only"
+                    : "Read only"}
+              </span>
+            ) : (
+              <span className="text-emerald-600 dark:text-emerald-400" data-testid="workspace-editing-indicator">
+                Editing
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Phase P15 — live presence (only while a workspace project is open) */}
+        {wsName && <PresenceIndicator />}
+
+        {/* Phase P16 — collaboration sync status + remote-change hint */}
+        {wsName && <CollabStatusIndicator />}
+
+        <div className="mx-1 h-4 w-px bg-black/10" />
 
         <button
           data-testid="topnav-my-blocks-button"
           onClick={() => useMyBlocksUiStore.getState().openLibrary()}
-          className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-sm text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
+          className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-sm text-[#5b5e69] transition-all duration-200 hover:bg-[#F2F3F5] hover:text-[#0d0f14] active:scale-95"
           title="My saved blocks"
           type="button"
         >
           <BookMarked className="h-4 w-4" />
-          <span className="hidden sm:inline text-xs">My Blocks</span>
+          <span className="hidden lg:inline text-xs">My Blocks</span>
         </button>
 
         <button
-          data-testid="topnav-save-button"
-          onClick={handleSave}
-          disabled={saveStatus === "saving" || saveStatus === "hydrating" || !isHydrated}
-          className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-sm text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
-          title={saveStatus === "saving" ? "Saving..." : saveStatus === "saved" ? "Saved" : "Save (Ctrl+S)"}
+          data-testid="topnav-preview-button"
+          onClick={() => usePreviewStore.getState().openPreview("/")}
+          className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-sm text-[#5b5e69] transition-all duration-200 hover:bg-[#F2F3F5] hover:text-[#0d0f14] active:scale-95"
+          title="Preview your website"
           type="button"
         >
-          {saveStatus === "saving" ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Save className="h-4 w-4" />
-          )}
-          <span className="hidden sm:inline text-xs">
-            {saveStatus === "saving" ? "Saving..." : saveStatus === "saved" ? "Saved" : "Save"}
-          </span>
+          <Eye className="h-4 w-4" />
+          <span className="hidden md:inline text-xs">Preview</span>
         </button>
 
         <button
           data-testid="export-site-button"
           onClick={handleExportSite}
           disabled={exportingSite}
-          className="flex h-8 items-center gap-2 rounded-lg bg-primary/10 px-2.5 text-sm text-primary transition-all duration-200 hover:bg-primary/20 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-sm text-[#5b5e69] transition-all duration-200 hover:bg-[#F2F3F5] hover:text-[#0d0f14] active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
           title={exportingSite ? "Exporting site..." : "Export website as ZIP"}
           type="button"
         >
@@ -426,46 +406,30 @@ export function TopNav() {
           ) : (
             <Package className="h-4 w-4" />
           )}
-          <span className="hidden sm:inline text-xs">
-            {exportingSite ? "Exporting..." : "Export Site"}
+          <span className="hidden md:inline text-xs">
+            {exportingSite ? "Exporting..." : "Export ZIP"}
           </span>
         </button>
 
+        {/* Phase P12: Share — opens the canonical share surface */}
         <button
-          data-testid="export-button"
-          onClick={handleExport}
-          disabled={exporting}
-          className="flex h-8 items-center gap-2 rounded-lg bg-primary/10 px-2.5 text-sm text-primary transition-all duration-200 hover:bg-primary/20 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-          title={exporting ? "Exporting..." : "Export project as .buildora.json"}
+          data-testid="topnav-share-button"
+          onClick={() => openShareDialog("create")}
+          disabled={isWsReadOnly}
+          className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-sm text-[#5b5e69] transition-all duration-200 hover:bg-[#F2F3F5] hover:text-[#0d0f14] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+          title={isWsReadOnly ? "Review links are managed by workspace editors" : "Share a read-only review link"}
           type="button"
         >
-          {exporting ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Download className="h-4 w-4" />
-          )}
-          <span className="hidden sm:inline text-xs">
-            {exporting ? "Exporting..." : "Export"}
-          </span>
+          <Share2 className="h-4 w-4" />
+          <span className="hidden xl:inline text-xs">Share</span>
         </button>
 
-        {/* Phase P7: Preview + Publish — the primary finishing actions */}
-        <button
-          data-testid="topnav-preview-button"
-          onClick={() => usePreviewStore.getState().openPreview("/")}
-          className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-sm text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
-          title="Preview your website"
-          type="button"
-        >
-          <Eye className="h-4 w-4" />
-          <span className="hidden sm:inline text-xs">Preview</span>
-        </button>
-
+        {/* Stage 1 — the Canva-purple Publish CTA (prominent, gradient). */}
         <button
           data-testid="topnav-publish-button"
           onClick={() => useLaunchCenterStore.getState().openLaunchCenter()}
           disabled={isWsReadOnly}
-          className="flex h-8 items-center gap-2 rounded-lg bg-accent px-3 text-sm font-medium text-white transition-all duration-200 hover:bg-accent-hover active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+          className="ml-1 flex h-8 items-center gap-1.5 rounded-lg bg-gradient-to-r from-[#8B3DFF] to-[#7D2AE8] px-3.5 text-sm font-semibold text-white shadow-[0_2px_10px_rgba(125,42,232,0.35)] transition-all duration-200 hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
           title={isWsReadOnly ? "Read-only sessions can't publish" : "Check and publish your website"}
           type="button"
         >
@@ -475,89 +439,7 @@ export function TopNav() {
           </span>
         </button>
 
-        {/* Phase P12: Share — opens the canonical share surface */}
-        <button
-          data-testid="topnav-share-button"
-          onClick={() => openShareDialog("create")}
-          disabled={isWsReadOnly}
-          className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-sm text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
-          title={isWsReadOnly ? "Review links are managed by workspace editors" : "Share a read-only review link"}
-          type="button"
-        >
-          <Share2 className="h-4 w-4" />
-          <span className="hidden sm:inline text-xs">Share</span>
-        </button>
-
-        {/* Phase P10: AI Copilot — opens the canonical Copilot panel */}
-        <button
-          data-testid="topnav-copilot-button"
-          onClick={openCopilotPanel}
-          className="flex h-8 items-center gap-2 rounded-lg bg-accent/10 px-2.5 text-sm text-accent transition-all duration-200 hover:bg-accent/20 active:scale-95"
-          title="Open the AI Copilot (Ctrl/⌘+Shift+A)"
-          type="button"
-        >
-          <Bot className="h-4 w-4" />
-          <span className="hidden sm:inline text-xs">Copilot</span>
-        </button>
-
-        {/* Phase P9: save-as-template + help + backups */}
-        <button
-          data-testid="topnav-save-template-button"
-          onClick={openSaveTemplate}
-          className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-sm text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
-          title="Save this project as a template"
-          type="button"
-        >
-          <LayoutTemplate className="h-4 w-4" />
-          <span className="hidden sm:inline text-xs">Template</span>
-        </button>
-        <button
-          data-testid="topnav-help-button"
-          onClick={openShortcuts}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
-          title="Keyboard shortcuts and help (Ctrl/⌘+K for commands)"
-          aria-label="Keyboard shortcuts and help"
-          type="button"
-        >
-          <Keyboard className="h-4 w-4" />
-        </button>
-        <button
-          data-testid="topnav-recovery-button"
-          onClick={openBackups}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
-          title="Backups and recovery"
-          aria-label="Backups and recovery"
-          type="button"
-        >
-          <History className="h-4 w-4" />
-        </button>
-
-        {/* Phase P15 — version history (workspace projects only) */}
-        {wsName && (
-          <button
-            data-testid="topnav-history-button"
-            onClick={openVersionHistory}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
-            title="Version history"
-            aria-label="Version history"
-            type="button"
-          >
-            <Clock className="h-4 w-4" />
-          </button>
-        )}
-
-        <button
-          data-testid="topnav-site-settings-button"
-          onClick={() => useSiteSettingsUiStore.getState().openDialog("basics")}
-          className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-sm text-text-dim transition-all duration-200 hover:bg-card hover:text-text-primary active:scale-95"
-          title="Site settings"
-          type="button"
-        >
-          <Settings2 className="h-4 w-4" />
-          <span className="hidden xl:inline text-xs">Settings</span>
-        </button>
-
-        <div className="mx-1.5 h-4 w-px bg-border" />
+        <div className="mx-1 h-4 w-px bg-black/10" />
 
         {/* Phase P6: cloud sync status + account menu */}
         <CloudSyncStatusControl />
@@ -676,5 +558,244 @@ export function TopNav() {
       )}
 
     </header>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// FileMenu — the project-level surface (Stage 1 left cluster)
+//
+// Consolidates the actions the previous chrome spread across the bar:
+// save, .buildora.json export, backups, shortcuts, template, site settings.
+// Every item calls the exact handler the old surface used — no new mutation
+// paths.
+// ---------------------------------------------------------------------------
+
+function FileMenu({
+  onSave,
+  onExportProject,
+  onOpenAssets,
+  onOpenBackups,
+  onOpenShortcuts,
+  onOpenSaveTemplate,
+  onOpenSiteSettings,
+  showVersionHistory,
+  onOpenVersionHistory,
+  exporting,
+  onExportSite,
+  saveBusy,
+}: {
+  onSave: () => void | Promise<void>;
+  onExportProject: () => void | Promise<void>;
+  onOpenAssets: () => void;
+  onOpenBackups: () => void;
+  onOpenShortcuts: () => void;
+  onOpenSaveTemplate: () => void;
+  onOpenSiteSettings: () => void;
+  showVersionHistory: boolean;
+  onOpenVersionHistory: () => void;
+  exporting: boolean;
+  onExportSite: () => void;
+  saveBusy: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [open]);
+
+  const item =
+    "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] text-[#3a3d46] transition-colors hover:bg-[#F2F3F5]";
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        data-testid="topnav-file-menu"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="flex h-8 items-center gap-1 rounded-lg px-2.5 text-[13px] font-medium text-[#3a3d46] transition-all duration-200 hover:bg-[#F2F3F5] active:scale-95"
+        title="File"
+      >
+        File
+        <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          data-testid="topnav-file-menu-panel"
+          className="absolute left-0 top-full z-50 mt-1 w-60 rounded-xl border border-black/10 bg-white p-1.5 shadow-[0_10px_32px_rgba(0,0,0,0.12)]"
+        >
+          <button role="menuitem" type="button" className={item} onClick={() => void onSave()} disabled={saveBusy}>
+            <Save className="h-4 w-4 text-[#5b5e69]" />
+            {saveBusy ? "Saving…" : "Save"}
+            <span className="ml-auto text-[11px] text-[#8a8f9c]">Ctrl+S</span>
+          </button>
+          <button
+            role="menuitem"
+            type="button"
+            data-testid="export-button"
+            className={item}
+            onClick={() => void onExportProject()}
+          >
+            <Download className="h-4 w-4 text-[#5b5e69]" />
+            Export project (.json)
+          </button>
+          <button role="menuitem" type="button" className={item} onClick={onExportSite} disabled={exporting}>
+            <Package className="h-4 w-4 text-[#5b5e69]" />
+            {exporting ? "Exporting…" : "Export site ZIP"}
+          </button>
+          <div className="my-1 h-px bg-black/5" />
+          <button role="menuitem" type="button" className={item} onClick={onOpenAssets}>
+            <ImageIcon className="h-4 w-4 text-[#5b5e69]" />
+            Assets
+          </button>
+          <button role="menuitem" type="button" className={item} onClick={onOpenSaveTemplate}>
+            <LayoutTemplate className="h-4 w-4 text-[#5b5e69]" />
+            Save as template
+          </button>
+          <button role="menuitem" type="button" className={item} onClick={onOpenSiteSettings}>
+            <Settings2 className="h-4 w-4 text-[#5b5e69]" />
+            Site settings
+          </button>
+          <button role="menuitem" type="button" className={item} onClick={onOpenBackups}>
+            <History className="h-4 w-4 text-[#5b5e69]" />
+            Backups & recovery
+          </button>
+          {showVersionHistory && (
+            <button role="menuitem" type="button" className={item} onClick={onOpenVersionHistory}>
+              <Clock className="h-4 w-4 text-[#5b5e69]" />
+              Version history
+            </button>
+          )}
+          <div className="my-1 h-px bg-black/5" />
+          <button role="menuitem" type="button" className={item} onClick={onOpenShortcuts}>
+            <Keyboard className="h-4 w-4 text-[#5b5e69]" />
+            Keyboard shortcuts
+            <span className="ml-auto text-[11px] text-[#8a8f9c]">Ctrl+K</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ViewportSwitcher — Canva-style responsive tabs (moved from the StatusBar so
+// the switcher lives where designers expect it). Same editor-store state and
+// the same `viewport-*` testids the e2e specs depend on — only the chrome
+// moved.
+// ---------------------------------------------------------------------------
+
+function ViewportSwitcher() {
+  const viewport = useEditorStore((s) => s.viewport);
+  const setViewport = useEditorStore((s) => s.setViewport);
+
+  const OPTIONS = [
+    { id: "desktop" as const, label: "Desktop", icon: Monitor, testId: "viewport-desktop" },
+    { id: "mobile" as const, label: "Mobile", icon: Smartphone, testId: "viewport-mobile" },
+  ];
+
+  return (
+    <div
+      role="tablist"
+      aria-label="Viewport"
+      className="ml-2 flex items-center gap-0.5 rounded-lg bg-[#F2F3F5] p-0.5"
+    >
+      {OPTIONS.map(({ id, label, icon: Icon, testId }) => {
+        const active = viewport === id;
+        return (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            data-testid={testId}
+            onClick={() => setViewport(id)}
+            title={`${label} (${id === "desktop" ? "1440px" : "390px"})`}
+            className={cn(
+              "flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-all duration-150",
+              active
+                ? "bg-white text-[#0d0f14] shadow-sm"
+                : "text-[#5b5e69] hover:text-[#0d0f14]",
+            )}
+          >
+            <Icon className="h-3.5 w-3.5" />
+            <span className="hidden md:inline">{label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DocumentTitle — inline-editable project title with a clean hover state.
+// Commits through the site-settings surface (siteName + project name stay in
+// sync via the existing updateSiteSettings path — one history entry, no new
+// mutation path).
+// ---------------------------------------------------------------------------
+
+function DocumentTitle() {
+  const project = useEditorStore((s) => s.project);
+  const updateSiteSettings = useEditorStore((s) => s.updateSiteSettings);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<string | null>(null);
+
+  const commit = () => {
+    if (draft !== null) {
+      const trimmed = draft.trim();
+      if (trimmed && trimmed !== project.name) {
+        updateSiteSettings({ siteName: trimmed });
+      }
+    }
+    setDraft(null);
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <input
+        data-testid="document-title-input"
+        autoFocus
+        value={draft ?? ""}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit();
+          }
+          if (e.key === "Escape") {
+            e.preventDefault();
+            setDraft(null);
+            setEditing(false);
+          }
+        }}
+        aria-label="Document title"
+        className="h-8 w-56 rounded-lg border border-[#7D2AE8]/40 bg-white px-2.5 text-center text-sm font-medium text-[#0d0f14] focus:outline-none focus:ring-2 focus:ring-[#7D2AE8]/15"
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      data-testid="document-title"
+      onClick={() => {
+        setDraft(project.name || "");
+        setEditing(true);
+      }}
+      className="max-w-[280px] truncate rounded-lg px-3 py-1.5 text-sm font-medium text-[#0d0f14] transition-colors duration-150 hover:bg-[#F2F3F5]"
+      title="Rename document"
+    >
+      {project.name || "Untitled Project"}
+    </button>
   );
 }

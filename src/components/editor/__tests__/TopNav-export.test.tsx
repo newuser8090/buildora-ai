@@ -102,6 +102,19 @@ function resetStore(project = makeProject()) {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Stage 1: the `.buildora.json` export lives inside the File menu. Open the
+ * menu first, then click the (still stable) `export-button` testid.
+ */
+function clickExportButton() {
+  fireEvent.click(screen.getByTestId("topnav-file-menu"));
+  fireEvent.click(screen.getByTestId("export-button"));
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -116,7 +129,7 @@ describe("TopNav — Phase E.2 editor export", () => {
     resetStore(makeProject({ name: "New Unsaved" }));
 
     render(<TopNav />);
-    fireEvent.click(screen.getByTestId("export-button"));
+    clickExportButton();
 
     await waitFor(() => expect(downloadProjectFile).toHaveBeenCalled());
 
@@ -133,7 +146,7 @@ describe("TopNav — Phase E.2 editor export", () => {
 
   it("uses only the in-memory project (single export call, no persistence path)", async () => {
     render(<TopNav />);
-    fireEvent.click(screen.getByTestId("export-button"));
+    clickExportButton();
 
     await waitFor(() => expect(downloadProjectFile).toHaveBeenCalled());
 
@@ -149,7 +162,7 @@ describe("TopNav — Phase E.2 editor export", () => {
 
   it("leaves dirty, revision, saveStatus and autosave schedule untouched", async () => {
     render(<TopNav />);
-    fireEvent.click(screen.getByTestId("export-button"));
+    clickExportButton();
 
     await waitFor(() => expect(downloadProjectFile).toHaveBeenCalled());
 
@@ -163,7 +176,7 @@ describe("TopNav — Phase E.2 editor export", () => {
   it("no-project state maps to a structured transfer error", async () => {
     resetStore(makeProject({ id: "" }));
     render(<TopNav />);
-    fireEvent.click(screen.getByTestId("export-button"));
+    clickExportButton();
 
     await waitFor(() =>
       expect(screen.getByText("No active project to export.")).toBeTruthy(),
@@ -185,7 +198,7 @@ describe("TopNav — Phase E.2 editor export", () => {
     }));
 
     render(<TopNav />);
-    fireEvent.click(screen.getByTestId("export-button"));
+    clickExportButton();
 
     await waitFor(() => expect(screen.getByText(/boom/i)).toBeTruthy());
 
@@ -198,6 +211,7 @@ describe("TopNav — Phase E.2 editor export", () => {
 
   it("repeated export is blocked (one commit per click burst)", async () => {
     render(<TopNav />);
+    fireEvent.click(screen.getByTestId("topnav-file-menu"));
     const button = screen.getByTestId("export-button");
     fireEvent.click(button);
     fireEvent.click(button);
@@ -218,7 +232,7 @@ describe("TopNav — Phase E.2 editor export", () => {
     // so that microtask continuation observes mountedRef === false and skips
     // the download entirely.
     const { unmount } = render(<TopNav />);
-    fireEvent.click(screen.getByTestId("export-button"));
+    clickExportButton();
 
     // Unmount before the microtask continuation runs.
     unmount();

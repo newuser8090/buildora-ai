@@ -3,9 +3,6 @@
 import { useEffect, useState } from "react";
 import { cn } from "@/utils/cn";
 import {
-  Monitor,
-  Tablet,
-  Smartphone,
   Circle,
   Sparkles,
   Loader2,
@@ -14,16 +11,6 @@ import {
   CloudOff,
 } from "lucide-react";
 import { useEditorStore } from "@/features/editor/store/editor-store";
-
-// ---------------------------------------------------------------------------
-// Segmented control style
-// ---------------------------------------------------------------------------
-
-const segment =
-  "flex h-6 items-center gap-1.5 px-2.5 text-xs text-text-dim transition-all duration-200 hover:text-text-muted active:scale-95 first:rounded-l-md last:rounded-r-md";
-
-const segmentActive =
-  "bg-card text-text-primary hover:text-text-primary";
 
 // ---------------------------------------------------------------------------
 // Zoom options
@@ -36,8 +23,6 @@ const ZOOM_OPTIONS = [50, 75, 90, 100, 125] as const;
 // ---------------------------------------------------------------------------
 
 export function StatusBar() {
-  const viewport = useEditorStore((s) => s.viewport);
-  const setViewport = useEditorStore((s) => s.setViewport);
   const zoom = useEditorStore((s) => s.zoom);
   const setZoom = useEditorStore((s) => s.setZoom);
   const project = useEditorStore((s) => s.project);
@@ -83,45 +68,9 @@ export function StatusBar() {
   const SaveIcon = saveIndicator.icon;
 
   return (
-    <footer className="flex h-9 items-center justify-between border-t border-border bg-secondary px-4">
-      {/* ---- Left: Device segmented control ---- */}
-      <div className="flex items-center rounded-md border border-border/60 p-0.5">
-        <button
-          data-testid="viewport-desktop"
-          className={cn(segment, viewport === "desktop" && segmentActive)}
-          onClick={() => setViewport("desktop")}
-          title="Desktop (1440px)"
-          aria-label="Desktop view"
-          type="button"
-        >
-          <Monitor className="h-3 w-3" />
-          <span className="hidden sm:inline">Desktop</span>
-        </button>
-        <button
-          data-testid="viewport-tablet"
-          className={cn(segment, viewport === "tablet" && segmentActive)}
-          onClick={() => setViewport("tablet")}
-          title="Tablet (768px)"
-          aria-label="Tablet view"
-          type="button"
-        >
-          <Tablet className="h-3 w-3" />
-          <span className="hidden sm:inline">Tablet</span>
-        </button>
-        <button
-          data-testid="viewport-mobile"
-          className={cn(segment, viewport === "mobile" && segmentActive)}
-          onClick={() => setViewport("mobile")}
-          title="Mobile (390px)"
-          aria-label="Mobile view"
-          type="button"
-        >
-          <Smartphone className="h-3 w-3" />
-          <span className="hidden sm:inline">Mobile</span>
-        </button>
-      </div>
-
-      {/* ---- Center: Status + save status ---- */}
+    <footer className="flex h-9 items-center justify-between border-t border-black/5 bg-white px-4">
+      {/* ---- Left: save + selection status (the viewport switcher moved to
+          the TopNav — Stage 1 Canva-style tabs). ---- */}
       <div className="flex items-center gap-3 text-xs text-text-dim">
         {isHydrated && (
           <div className="flex items-center gap-1.5">
@@ -161,14 +110,14 @@ export function StatusBar() {
           </div>
         )}
 
-        <div className="h-3 w-px bg-border/60" />
+        <div className="h-3 w-px bg-black/10" />
 
         {/* Zoom selector */}
         <select
           data-testid="zoom-control"
           value={zoom}
           onChange={(e) => setZoom(Number(e.target.value))}
-          className="h-6 rounded-md border border-border/60 bg-base px-2 text-xs text-text-dim transition-all duration-200 hover:bg-card focus:border-accent/40 focus:outline-none"
+          className="h-6 rounded-md border border-black/10 bg-white px-2 text-xs text-[#5b5e69] transition-all duration-200 hover:bg-[#F2F3F5] focus:border-[#7D2AE8]/40 focus:outline-none"
           aria-label="Zoom level"
         >
           {ZOOM_OPTIONS.map((z) => (

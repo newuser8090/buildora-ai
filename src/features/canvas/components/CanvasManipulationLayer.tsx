@@ -64,6 +64,11 @@ import {
   sectionToElementTree,
 } from "@/features/elements/adapters/section-element-adapter";
 import { isCustomBlockSection } from "@/features/blocks/adapters/section-block-adapter";
+import { deleteElement } from "@/features/elements/engine/element-operations";
+import {
+  useElementInspector,
+} from "@/features/inspector/hooks/useElementInspector";
+import { TYPOGRAPHY_CAPABLE_TYPES } from "@/features/elements/inspector/capabilities";
 import { useCanvasInteractionStore } from "../store/canvas-interaction-store";
 import {
   marqueeRect,
@@ -75,6 +80,7 @@ import type { Project } from "@/types/project";
 import { useCanvasManipulation } from "../hooks/useCanvasManipulation";
 import { useCanvasKeyboard } from "../hooks/useCanvasKeyboard";
 import { SelectionOverlay } from "./SelectionOverlay";
+import type { FloatingToolbarApi } from "./SelectionOverlay";
 import { SnapGuides } from "./SnapGuides";
 import { clientToCanvas, type CanvasFrame } from "../engine/coords";
 import { compositeSelectionBox, type ElementRect } from "../engine/geometry";
@@ -100,6 +106,16 @@ function findSection(project: Project, sectionId: string): BaseSection | null {
     if (found) return found;
   }
   return null;
+}
+
+/**
+ * Stage 1 — toolbar variant gate. Text-capable element types get the
+ * typography cluster; everything else (widgets/containers) gets the
+ * appearance + Action/Behavior cluster. Mirrors the inspector's capability
+ * split (TYPOGRAPHY_CAPABLE_TYPES) without importing React-only surface.
+ */
+function toolbarIsText(type: string): boolean {
+  return TYPOGRAPHY_CAPABLE_TYPES.has(type);
 }
 
 export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerProps) {
@@ -200,6 +216,27 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
     }
     return { atFront, atBack };
   }, [tree, layerTargetIds]);
+
+  // ---- Stage 1: floating contextual toolbar context ----
+  // The inspector hook resolves the element target (single nested focus only —
+  // composite sets keep the widget chrome without style edits) and exposes the
+  // SAME validated commit path the right-hand inspector uses, so every toolbar
+  // change is one atomic history entry through commitElementTree.
+  const inspectorApi = useElementInspector(activePage?.id ?? "", section);
+  const toolbarApi: FloatingToolbarApi | undefined = useMemo(() => {
+    if (!tree || !inspectorApi || !section || !activePage) return undefined;
+    if (isComposite) return undefined; // composite sets: no single style target
+    return {
+      values: inspectorApi.model.values,
+      isText: toolbarIsText(inspectorApi.node.type),
+      commitField: inspectorApi.commitField,
+      resetField: inspectorApi.resetField,
+      pages: activePage && project.pages ? project.pages : [],
+      tree: tree,
+      sectionId: section.id,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tree, inspectorApi, isComposite, section?.id]);
 
   // ---- Coordinate frame (zoom/scroll aware) ----
   const frame = useCallback((): CanvasFrame | null => {
@@ -321,6 +358,29 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
     },
     [api, isManipulableSection],
   );
+
+  // ---- Stage 1: element-level delete (floating toolbar) ----
+  // When a nested element (or a batch of them) is focused, the toolbar's
+  // delete removes THOSE nodes from the section's durable tree — not the whole
+  // section — and commits once through commitElementTree (ONE history entry).
+  // Each removal re-derives the freshest tree so sequential deletions of a
+  // multi-set can never land on a stale node id. With no element focus the
+  // frozen P25 contract applies and the SECTION is deleted instead.
+  const handleDelete = useCallback(() => {
+    if (!activePage || !section) return;
+    const ids = layerTargetIds;
+    if (ids.length === 0) {
+      deleteSection(section.id);
+      return;
+    }
+    let current = sectionToElementTree(section);
+    for (const id of ids) {
+      const result = deleteElement(current, id);
+      if (!result.ok) return; // fail closed — never commit a partial batch
+      current = result.value;
+    }
+    commitElementTree(activePage.id, section.id, current);
+  }, [activePage, section, layerTargetIds, deleteSection, commitElementTree]);
 
   // ---- Selection sync: editor section selection → transient selection ----
   // Mirrored asynchronously (microtask) so the transient store write never
@@ -590,11 +650,14 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
           onRotateStart={api.handleRotateStart}
           onHandleStart={api.handleResizeStart}
           onDuplicate={() => duplicateSection(section.id)}
-          onDelete={() => deleteSection(section.id)}
+          onDelete={handleDelete}
           // P28 Slice 1 (D1): layer controls ride the element/composite box —
           // absent for the section-root box (root ordering is page-level).
           onLayerAction={hasLayerSelection ? handleLayerAction : undefined}
           layerBoundaries={layerBoundaries}
+          // Stage 1: the floating contextual toolbar targets the SINGLE nested
+          // element focus only (the section-root box keeps its frozen chrome).
+          toolbar={nestedSelectionId && isManipulableSection ? toolbarApi : undefined}
         />
       )}
     </>

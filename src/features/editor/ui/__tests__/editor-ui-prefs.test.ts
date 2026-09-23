@@ -45,7 +45,7 @@ describe("EditorUIPrefs — defaults", () => {
       leftPanelWidth: 320,
       rightPanelWidth: 300,
       leftPanelCollapsed: false,
-      rightPanelCollapsed: false,
+      rightPanelCollapsed: true,
     });
   });
 });

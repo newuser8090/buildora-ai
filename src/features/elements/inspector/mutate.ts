@@ -146,6 +146,9 @@ export function validateInspectorFieldValue(
     }
     case "radius":
     case "shadow": {
+      // undefined/null is the documented reset sentinel ("value === undefined
+      // deletes the key") — resetInspectorField relies on it.
+      if (raw === undefined || raw === null) return { ok: true, value: undefined };
       if (typeof raw !== "string") {
         if (typeof raw === "number") return { ok: true, value: raw };
         return { ok: false, error: "Enter a value." };

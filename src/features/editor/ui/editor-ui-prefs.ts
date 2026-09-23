@@ -33,7 +33,9 @@ export const DEFAULT_EDITOR_UI_PREFS: EditorUIPrefs = {
   leftPanelWidth: DEFAULT_LEFT_PANEL_WIDTH,
   rightPanelWidth: DEFAULT_RIGHT_PANEL_WIDTH,
   leftPanelCollapsed: false,
-  rightPanelCollapsed: false,
+  // Stage 1 (light shell): the properties surface collapses into a minimal
+  // toggleable drawer by default so the canvas gets full focus.
+  rightPanelCollapsed: true,
 };
 
 /** Clamp a numeric width into the panel bounds (240–480px). */

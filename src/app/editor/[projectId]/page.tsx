@@ -14,7 +14,9 @@ import { useParams, useRouter } from "next/navigation";
 import type { TemplateCategory } from "@/features/templates/types";
 import { TopNav } from "@/components/editor/TopNav";
 import { PageTabs } from "@/components/editor/PageTabs";
-import { LeftSidebar } from "@/components/editor/LeftSidebar";
+// Stage 1 (light shell): the 72px icon dock replaces the persistent wide AI
+// sidebar; the AI composer lives inside the AI Magic drawer.
+import { EditorDock } from "@/components/editor/EditorDock";
 import { Canvas } from "@/components/editor/Canvas";
 import { RightSidebar } from "@/components/editor/RightSidebar";
 import { StatusBar } from "@/components/editor/StatusBar";
@@ -434,7 +436,7 @@ function EditorShell() {
       <TopNav />
       <PageTabs />
       <div className="flex flex-1 min-h-0 overflow-hidden">
-        <LeftSidebar />
+        <EditorDock />
         <Canvas />
         <RightSidebar />
       </div>

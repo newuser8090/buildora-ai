@@ -154,6 +154,34 @@ function GenerationOverlay() {
 }
 
 // ---------------------------------------------------------------------------
+// Floating AI button (Stage 1) — opens the dock's AI Magic drawer
+// ---------------------------------------------------------------------------
+
+function FloatingAiButton() {
+  const dockOpen = useEditorUiStore((s) => s.dockPanel === "ai");
+  const setDockPanel = useEditorUiStore((s) => s.setDockPanel);
+  return (
+    <motion.button
+      type="button"
+      data-testid="canvas-ai-button"
+      aria-label="Open AI Magic"
+      title="AI Magic (Ctrl/⌘+Shift+A opens the Copilot panel)"
+      onClick={(e) => {
+        e.stopPropagation();
+        setDockPanel(dockOpen ? null : "ai");
+      }}
+      initial={{ opacity: 0, scale: 0.8 }}
+      animate={{ opacity: 1, scale: 1 }}
+      whileHover={{ scale: 1.05 }}
+      whileTap={{ scale: 0.95 }}
+      className="absolute bottom-6 right-6 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-[#8B3DFF] to-[#7D2AE8] text-white shadow-[0_8px_24px_rgba(125,42,232,0.35)]"
+    >
+      <Sparkles className="h-5 w-5" />
+    </motion.button>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -267,39 +295,25 @@ export function Canvas() {
     <main
       ref={canvasRef}
       data-testid="editor-root"
-      className="relative flex flex-1 min-w-0 min-h-0 flex-col items-center justify-center bg-secondary p-6"
+      // Stage 1 (light shell): clean neutral workspace — the canvas is an open
+      // artboard, no browser-frame mock.
+      className="relative flex flex-1 min-w-0 min-h-0 flex-col items-center justify-start bg-[#F2F3F5] p-6"
       onClick={handleBgClick}
     >
-      {/* ---- Browser frame ---- */}
+      {/* ---- Artboard (open, crisp white page) ---- */}
       <div
         data-testid="preview-frame"
-        className="relative flex min-h-0 flex-col overflow-hidden rounded-2xl border border-border/60 shadow-card transition-all duration-300"
+        className="relative flex min-h-0 flex-col overflow-hidden rounded-lg transition-all duration-300"
         style={{
           width: viewportWidth,
           maxWidth: "100%",
           transform: `scale(${zoomPercent})`,
           transformOrigin: "top center",
           height: zoomPercent !== 1 ? `calc(100% / ${zoomPercent})` : "100%",
+          background: "#FFFFFF",
+          boxShadow: "0 4px 20px rgba(0,0,0,0.08)",
         }}
       >
-        {/* ---- Browser bar ---- */}
-        <div className="flex items-center gap-3 border-b border-border/40 bg-secondary/80 px-4 py-3 flex-shrink-0">
-          {/* Traffic lights */}
-          <div className="flex items-center gap-1.5">
-            <span className="h-3 w-3 rounded-full bg-red-500/80" />
-            <span className="h-3 w-3 rounded-full bg-yellow-500/80" />
-            <span className="h-3 w-3 rounded-full bg-green-500/80" />
-          </div>
-
-          <div className="flex-1 text-center">
-            <span className="text-xs font-medium tracking-wide text-text-dim/60">
-              PREVIEW
-            </span>
-          </div>
-
-          <div className="w-[54px]" />
-        </div>
-
         {/* ---- Website content ---- */}
         <div
           id="preview-content"
@@ -397,6 +411,10 @@ export function Canvas() {
 
       {/* Inline editing layer (Phase M) — floats above the preview frame */}
       <InlineEditLayer />
+
+      {/* Stage 1 (light shell): the floating AI button — a second entry point
+          to the dock's AI Magic drawer (one canonical store state). */}
+      <FloatingAiButton />
     </main>
   );
 }
