@@ -10,6 +10,13 @@
 // section ordering already exists (moveSection/reorderSection in the editor
 // store). Elements with no parent are skipped.
 //
+// Phase P28 Slice 1: this engine gains its first UI callers — the
+// manipulation hook's `layerAction` (bringToFront/sendToBack/moveForward/
+// moveBackward) applies `buildLayerOps` verbatim through
+// `applyElementOpBatch` and commits ONCE through the existing store boundary
+// (one history entry). The emission order below is load-bearing for
+// sequential `move` op application — the call site must never re-derive it.
+//
 // Pure, deterministic, framework-independent.
 // ---------------------------------------------------------------------------
 

@@ -29,6 +29,7 @@ import {
   buildGeometryOps,
 } from "../engine/transform";
 import { applyElementOpBatch } from "../engine/batch";
+import { buildLayerOps, type LayerAction } from "../engine/layering";
 import {
   canvasSnapTargets,
   elementSnapTargetDescriptors,
@@ -125,6 +126,12 @@ export interface CanvasManipulationApi {
   handleMarqueeStart: (screenPoint: Point) => boolean;
   /** Nudge the current selection by (dx, dy) logical units. */
   nudge: (dx: number, dy: number) => void;
+  /**
+   * P28 Slice 1 (D1): reorder the selection among its own siblings —
+   * "front" / "back" / "forward" / "backward". One commit, at most ONE
+   * history entry.
+   */
+  layerAction: (action: LayerAction) => void;
 }
 
 export function useCanvasManipulation(context: ManipulationContext): CanvasManipulationApi {
@@ -470,12 +477,43 @@ export function useCanvasManipulation(context: ManipulationContext): CanvasManip
     }
   }, []);
 
+  // ---- Layer ordering (P28 Slice 1, D1) ----
+
+  /**
+   * P28 Slice 1 (D1): reorder the selected elements among their own siblings
+   * via the existing P22-B engine (`buildLayerOps`). The call site never
+   * re-derives order — the engine's emission order is load-bearing for
+   * sequential `move` op application. Root ids are skipped by the engine
+   * itself (page-level section ordering owns the root surface); locked
+   * elements are excluded (a locked member fails the batch — excluded up
+   * front so a locked selection is a structured no-op); unknown/foreign ids
+   * are dropped by `topLevelSelection`. The reordered tree is applied as ONE
+   * batch and committed ONCE — exactly one history entry (no-op detection is
+   * the commit boundary's own deep-equality contract).
+   */
+  const layerAction = useCallback((action: LayerAction) => {
+    const store = useCanvasInteractionStore.getState();
+    const tree = contextRef.current.tree();
+    if (!tree) return;
+    // Same gesture resolution as drags/nudge: top-level of the set + unlocked
+    // (a locked member would fail the whole batch — fail closed instead).
+    const ids = resolveGestureIds(tree, store.selection.ids);
+    if (ids.length === 0) return;
+    const ops = buildLayerOps(tree, ids, action);
+    if (ops.length === 0) return;
+    const result = applyElementOpBatch(tree, ops);
+    if (result.ok && result.tree) {
+      contextRef.current.commit(result.tree);
+    }
+  }, []);
+
   return {
     handleMoveStart,
     handleRotateStart,
     handleResizeStart,
     handleMarqueeStart,
     nudge,
+    layerAction,
   };
 }
 

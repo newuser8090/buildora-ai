@@ -86,6 +86,7 @@ import {
   serializeClipboard,
 } from "../engine/clipboard";
 import { DEFAULT_SNAP_OPTIONS } from "../engine/snap";
+import type { LayerAction } from "../engine/layering";
 
 export interface CanvasManipulationLayerProps {
   /** The scrollable preview content element (data-preview-root). */
@@ -164,6 +165,41 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
   const isComposite = batchIds.length > 1;
 
   const targetId = nestedSelectionId ?? (isComposite ? "__composite__" : null) ?? selectedSectionId;
+
+  // ---- P28 Slice 1 (D1): layer-order context ----
+  // The ids a layer action targets: the composite batch set, else the single
+  // nested focus; EMPTY for the section-root selection (root-level ordering
+  // is page-level section ordering, NOT layer ordering — the engine skips
+  // roots by contract).
+  const layerTargetIds = useMemo(() => {
+    if (!tree) return [];
+    if (isComposite) return batchIds;
+    if (nestedSelectionId) return [nestedSelectionId];
+    return [];
+  }, [tree, isComposite, batchIds, nestedSelectionId]);
+
+  // Gate (spec §1.3 item 8): layer actions are available exactly where the
+  // P25 D6 predicate says the canvas renders/manipulates the tree — ordering
+  // a props-rendered legacy section would not be WYSIWYG (the template, not
+  // the tree, drives that DOM order).
+  const hasLayerSelection = layerTargetIds.length > 0 && isManipulableSection;
+
+  // Per-action boundary flags (REQ-1): an action that cannot move the set is
+  // a guaranteed no-op — the chrome disables its button. Every target's OWN
+  // parent edge counts (multi-parent sets inherit the union's reach).
+  const layerBoundaries = useMemo(() => {
+    if (!tree || layerTargetIds.length === 0) return { atFront: false, atBack: false };
+    let atFront = true;
+    let atBack = true;
+    for (const id of layerTargetIds) {
+      const parentId = tree.nodes[id]?.parentId;
+      if (!parentId) continue;
+      const siblings = tree.nodes[parentId]?.children ?? [];
+      if (siblings[siblings.length - 1] !== id) atFront = false;
+      if (siblings[0] !== id) atBack = false;
+    }
+    return { atFront, atBack };
+  }, [tree, layerTargetIds]);
 
   // ---- Coordinate frame (zoom/scroll aware) ----
   const frame = useCallback((): CanvasFrame | null => {
@@ -274,6 +310,17 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
       }
     },
   });
+
+  // P28 Slice 1 (D1/D7): ONE layer-action handler shared by the overlay
+  // chrome and the keyboard chords — one code path, N affordances. Gated by
+  // the same P25 D6 predicate as the chrome itself.
+  const handleLayerAction = useCallback(
+    (action: LayerAction) => {
+      if (!isManipulableSection) return;
+      api.layerAction(action);
+    },
+    [api, isManipulableSection],
+  );
 
   // ---- Selection sync: editor section selection → transient selection ----
   // Mirrored asynchronously (microtask) so the transient store write never
@@ -487,8 +534,10 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
       if (result.ok && result.tree) commit(result.tree);
     },
     onNudge: (dx, dy) => api.nudge(dx, dy),
+    // P28 Slice 1 (D7): Cmd/Ctrl+]/[ (+Shift) dispatch the SAME handler the
+    // overlay chrome uses — one code path, N affordances.
+    onLayerAction: handleLayerAction,
   });
-
   if (!section) return null;
 
   const activeMarqueeRect = marqueeState
@@ -509,6 +558,8 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
           rotation={previewRotation}
           manipulable={isCustomBlock || durableTreeEnablesCustomCode(section)}
           onMoveStart={api.handleMoveStart}
+          onLayerAction={hasLayerSelection ? handleLayerAction : undefined}
+          layerBoundaries={layerBoundaries}
         />
       )}
       {/* P27 Slice 3 (D5): the visual snap guide lines — rendered only while
@@ -540,6 +591,10 @@ export function CanvasManipulationLayer({ contentRef }: CanvasManipulationLayerP
           onHandleStart={api.handleResizeStart}
           onDuplicate={() => duplicateSection(section.id)}
           onDelete={() => deleteSection(section.id)}
+          // P28 Slice 1 (D1): layer controls ride the element/composite box —
+          // absent for the section-root box (root ordering is page-level).
+          onLayerAction={hasLayerSelection ? handleLayerAction : undefined}
+          layerBoundaries={layerBoundaries}
         />
       )}
     </>

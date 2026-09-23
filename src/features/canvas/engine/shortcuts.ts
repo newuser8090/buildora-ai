@@ -17,7 +17,13 @@ export type CanvasShortcut =
   | "deselect"
   | "nudge"
   | "nudge-large"
-  | "select-all";
+  | "select-all"
+  // P28 Slice 1 (D7): layer ordering chords — additive variants dispatched by
+  // the same pure matcher; the typing guard below covers them by construction.
+  | "layer-forward"
+  | "layer-backward"
+  | "layer-front"
+  | "layer-back";
 
 export const TYPING_SELECTORS =
   "input, textarea, select, [contenteditable], [role=textbox]";
@@ -50,6 +56,10 @@ export function isTypingTarget(target: EventTarget | null): boolean {
  *   Escape                  → deselect
  *   Arrow keys              → nudge (Shift + Arrow → nudge-large)
  *   Cmd/Ctrl + A            → select-all
+ *   Cmd/Ctrl + ]            → layer-forward
+ *   Cmd/Ctrl + [            → layer-backward
+ *   Cmd/Ctrl + Shift + ]    → layer-front
+ *   Cmd/Ctrl + Shift + [    → layer-back
  *
  * Returns null when the key does not map, when the modifier combination is
  * not handled, or when the target is a typing surface.
@@ -79,6 +89,16 @@ export function matchCanvasShortcut(event: KeyboardEvent): CanvasShortcut | null
         // Select-all is only meaningful for the canvas layer when explicitly
         // enabled; the editor uses Cmd+A for the layers panel. Callers decide.
         return "select-all";
+      case "]":
+        // P28 Slice 1 (D7): standard design-tool layer chords. The Shift
+        // variant reaches the stack END (front/back); the plain variant steps
+        // one sibling. The typing guard above already returned for text
+        // surfaces, so these can never hijack text input.
+        event.preventDefault();
+        return event.shiftKey ? "layer-front" : "layer-forward";
+      case "[":
+        event.preventDefault();
+        return event.shiftKey ? "layer-back" : "layer-backward";
       default:
         return null;
     }

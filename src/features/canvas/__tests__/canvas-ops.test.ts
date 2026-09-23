@@ -321,6 +321,31 @@ describe("keyboard shortcuts", () => {
     expect(matchCanvasShortcut(keyEvent("ArrowDown", { target: input }))).toBeNull();
   });
 
+  // P28 Slice 1: layer ordering chords — Cmd/Ctrl+]/[ step one sibling,
+  // +Shift reaches the stack ends.
+  it("maps Cmd/Ctrl+]/[ to layer-forward/backward (P28)", () => {
+    expect(matchCanvasShortcut(keyEvent("]", { ctrl: true }))).toBe("layer-forward");
+    expect(matchCanvasShortcut(keyEvent("]", { meta: true }))).toBe("layer-forward");
+    expect(matchCanvasShortcut(keyEvent("[", { ctrl: true }))).toBe("layer-backward");
+    expect(matchCanvasShortcut(keyEvent("[", { meta: true }))).toBe("layer-backward");
+  });
+
+  it("maps Cmd/Ctrl+Shift+]/[ to layer front/back (P28)", () => {
+    expect(matchCanvasShortcut(keyEvent("]", { ctrl: true, shift: true }))).toBe("layer-front");
+    expect(matchCanvasShortcut(keyEvent("]", { meta: true, shift: true }))).toBe("layer-front");
+    expect(matchCanvasShortcut(keyEvent("[", { ctrl: true, shift: true }))).toBe("layer-back");
+    expect(matchCanvasShortcut(keyEvent("[", { meta: true, shift: true }))).toBe("layer-back");
+  });
+
+  it("never fires layer chords inside inputs/contenteditable (P28)", () => {
+    const input = { matches: () => true, closest: () => true } as unknown as HTMLElement;
+    expect(matchCanvasShortcut(keyEvent("]", { ctrl: true, target: input }))).toBeNull();
+    expect(matchCanvasShortcut(keyEvent("[", { ctrl: true, target: input }))).toBeNull();
+    expect(
+      matchCanvasShortcut(keyEvent("]", { ctrl: true, shift: true, target: input })),
+    ).toBeNull();
+  });
+
   it("does not hijack Cmd+Backspace (OS-level) or unhandled modifiers", () => {
     expect(matchCanvasShortcut(keyEvent("Backspace", { meta: true }))).toBeNull();
     expect(matchCanvasShortcut(keyEvent("x", { ctrl: true }))).toBeNull();

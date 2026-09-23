@@ -16,6 +16,7 @@
 import { memo } from "react";
 import type { ElementRect, ResizeHandle, Point } from "../engine/geometry";
 import { RESIZE_HANDLES } from "../engine/geometry";
+import type { LayerAction } from "../engine/layering";
 
 const HANDLE_SIZE = 8;
 
@@ -54,7 +55,78 @@ export interface SelectionOverlayProps {
   onHandleStart?: (handle: ResizeHandle, point: Point) => void;
   onDuplicate?: () => void;
   onDelete?: () => void;
+  /**
+   * P28 Slice 1 (D1): layer ordering affordances — wired by the layer for
+   * element/composite selections. Absent on the section-root box (page-level
+   * section ordering owns the root surface).
+   */
+  onLayerAction?: (action: LayerAction) => void;
+  /**
+   * P28 Slice 1 (REQ-1): per-action boundary flags — the action is a no-op at
+   * the corresponding sibling-stack boundary and the button reflects it.
+   */
+  layerBoundaries?: { atFront?: boolean; atBack?: boolean };
 }
+
+/** P28 Slice 1 (D1): the layer-order cluster — one button per action. */
+const LAYER_ACTIONS: Array<{
+  action: LayerAction;
+  testId: string;
+  label: string;
+  disabledBy: "atFront" | "atBack" | null;
+  icon: React.ReactNode;
+}> = [
+  {
+    action: "front",
+    testId: "canvas-layer-front",
+    label: "Bring to Front",
+    disabledBy: "atFront",
+    icon: (
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        {/* Box rising above a stack (Figma-style bring-to-front glyph). */}
+        <rect x="8" y="3" width="13" height="13" rx="2" />
+        <path d="M16 16v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2h3" />
+      </svg>
+    ),
+  },
+  {
+    action: "forward",
+    testId: "canvas-layer-forward",
+    label: "Move Forward",
+    disabledBy: "atFront",
+    icon: (
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <rect x="9" y="9" width="12" height="12" rx="2" />
+        <path d="M15 5l4 4-4 4" />
+      </svg>
+    ),
+  },
+  {
+    action: "backward",
+    testId: "canvas-layer-backward",
+    label: "Move Backward",
+    disabledBy: "atBack",
+    icon: (
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <rect x="3" y="3" width="12" height="12" rx="2" />
+        <path d="M9 19l-4-4 4-4" />
+      </svg>
+    ),
+  },
+  {
+    action: "back",
+    testId: "canvas-layer-back",
+    label: "Send to Back",
+    disabledBy: "atBack",
+    icon: (
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        {/* Box sinking beneath a stack (Figma-style send-to-back glyph). */}
+        <rect x="3" y="8" width="13" height="13" rx="2" />
+        <path d="M8 8V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-3" />
+      </svg>
+    ),
+  },
+];
 
 export const SelectionOverlay = memo(function SelectionOverlay({
   rect,
@@ -67,6 +139,8 @@ export const SelectionOverlay = memo(function SelectionOverlay({
   onHandleStart,
   onDuplicate,
   onDelete,
+  onLayerAction,
+  layerBoundaries,
 }: SelectionOverlayProps) {
   const dims = `${Math.round(rect.width)} × ${Math.round(rect.height)}`;
   const composite = selectionCount > 1;
@@ -166,6 +240,47 @@ export const SelectionOverlay = memo(function SelectionOverlay({
       >
         {dims}
       </div>
+
+      {/* P28 Slice 1 (D1): layer-order cluster — left of the quick actions.
+          Rendered only when the layer wires `onLayerAction` (element and
+          composite selections); never rendered on the section-root box. Every
+          button stops propagation so chrome never rewrites the selection it
+          operates on (P27 REQ-12 exclusion, inherited via the existing
+          `canvas-selection-box` closest() guard). Disabled at stack
+          boundaries (REQ-1). */}
+      {onLayerAction && (
+        <div
+          data-testid="canvas-layer-actions"
+          className="absolute -top-7 right-0 flex items-center gap-1 rounded-md bg-[#1a2235] pr-1.5 py-0.5 pl-1.5 shadow-sm"
+          style={{ pointerEvents: "auto", transform: "translateX(calc(-100% - 16px))" }}
+        >
+          {LAYER_ACTIONS.map(({ action, testId, label, disabledBy, icon }) => {
+            const disabled =
+              (disabledBy === "atFront" && layerBoundaries?.atFront) ||
+              (disabledBy === "atBack" && layerBoundaries?.atBack);
+            return (
+              <button
+                key={action}
+                type="button"
+                data-testid={testId}
+                data-action={action}
+                className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-white/90 hover:bg-white/20 disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
+                disabled={disabled}
+                aria-label={label}
+                title={label}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (disabled) return;
+                  onLayerAction(action);
+                }}
+              >
+                {icon}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Quick actions */}
       <div
