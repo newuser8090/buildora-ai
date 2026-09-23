@@ -29,8 +29,11 @@ import { FieldShell } from "./primitives";
 
 const CLICK_KINDS = [
   { value: "none", label: "None" },
-  { value: "navigate", label: "Navigate" },
+  { value: "navigate", label: "Open Link" },
   { value: "scroll-to", label: "Scroll to" },
+  // Stage 3 — zero-code commerce actions (no additional configuration).
+  { value: "open-cart", label: "Open Cart" },
+  { value: "whatsapp-order", label: "WhatsApp Order" },
 ] as const;
 
 const SHADOW_OPTIONS = [
@@ -247,6 +250,16 @@ export function InteractionField({
       if (first) {
         commitPatch({ click: { kind: "scroll-to", elementId: first.value } });
       }
+      return;
+    }
+    // Stage 3 — commerce actions carry no payload (runtime lives in the
+    // cart store; the WhatsApp number comes from the header section).
+    if (kind === "open-cart") {
+      commitPatch({ click: { kind: "open-cart" } });
+      return;
+    }
+    if (kind === "whatsapp-order") {
+      commitPatch({ click: { kind: "whatsapp-order" } });
     }
   };
 

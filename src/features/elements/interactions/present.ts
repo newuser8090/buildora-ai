@@ -26,6 +26,11 @@ import type { Page } from "@/types/project";
 import { isSafeColorValue } from "../inspector/validation";
 import { isSafeNavUrl, resolveNavTarget } from "../navigation/resolve";
 import type { ResolvedNavigation } from "../navigation/resolve";
+import {
+  buildWhatsAppOrderUri,
+  cartTotalPrice,
+  useCartStore,
+} from "@/features/commerce/cart-store";
 import type { AnimationType } from "../animation/types";
 import type {
   ElementAnimation,
@@ -336,12 +341,18 @@ export function resolveAnimationPresentation(node: ElementNode): AnimationPresen
 // ---------------------------------------------------------------------------
 
 export interface ResolvedClickAction {
-  kind: "navigate" | "scroll-to";
+  kind: "navigate" | "scroll-to" | "commerce";
   /** Safe href for navigate (only when safe). */
   href?: string;
   resolvedKind?: ResolvedNavigation["kind"];
   /** Target element id for scroll-to. */
   scrollElementId?: string;
+  /** Commerce action identity (open-cart / add-to-cart / whatsapp-order). */
+  commerceKind?: "open-cart" | "add-to-cart" | "whatsapp-order";
+  /** Product payload for add-to-cart (validated at the schema boundary). */
+  product?: { title: string; price: string; pack?: string; imageUrl?: string };
+  /** Source element id — used as the cart line id for add-to-cart. */
+  elementId?: string;
   /** True when the action resolves to a real, safe behavior. */
   safe: boolean;
 }
@@ -491,6 +502,28 @@ function resolveClickAction(
       safe: exists,
     };
   }
+  // Stage 3 — commerce actions always resolve safe (they carry no external
+  // target; runtime behavior lives in the cart store / drawer).
+  if (
+    click.kind === "open-cart" ||
+    click.kind === "whatsapp-order"
+  ) {
+    return { kind: "commerce", commerceKind: click.kind, safe: true };
+  }
+  if (click.kind === "add-to-cart") {
+    return {
+      kind: "commerce",
+      commerceKind: "add-to-cart",
+      elementId: node.id,
+      product: {
+        title: click.title,
+        price: click.price,
+        ...(click.pack !== undefined ? { pack: click.pack } : {}),
+        ...(click.imageUrl !== undefined ? { imageUrl: click.imageUrl } : {}),
+      },
+      safe: true,
+    };
+  }
   // toggle / open-modal / submit-form / custom / start-animation are EXPLICITLY
   // deferred in P22-G — they never produce renderable behavior.
   return null;
@@ -595,8 +628,38 @@ export function scrollElementIntoView(elementId: string): void {
   element.scrollIntoView(reduce ? {} : { behavior: "smooth" });
 }
 
-/** Perform a resolved click action (navigate / scroll-to / back). */
+/** Perform a resolved click action (navigate / scroll-to / commerce / back). */
 export function performClickAction(action: ResolvedClickAction): void {
+  if (action.kind === "commerce" && action.commerceKind) {
+    const store = useCartStore.getState();
+    switch (action.commerceKind) {
+      case "open-cart":
+        store.openCart();
+        break;
+      case "add-to-cart":
+        if (action.product) {
+          store.addItem({
+            id: action.elementId ?? action.product.title,
+            title: action.product.title,
+            price: action.product.price,
+            ...(action.product.pack !== undefined ? { pack: action.product.pack } : {}),
+            ...(action.product.imageUrl !== undefined ? { imageUrl: action.product.imageUrl } : {}),
+          });
+          store.openCart();
+        }
+        break;
+      case "whatsapp-order": {
+        const uri = buildWhatsAppOrderUri({
+          number: store.whatsappNumber,
+          items: store.items,
+          total: cartTotalPrice(store.items),
+        });
+        if (uri) window.open(uri, "_blank", "noopener,noreferrer");
+        break;
+      }
+    }
+    return;
+  }
   if (!action.safe) return;
   if (action.kind === "scroll-to") {
     if (action.scrollElementId) scrollElementIntoView(action.scrollElementId);

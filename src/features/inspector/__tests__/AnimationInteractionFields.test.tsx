@@ -228,6 +228,31 @@ describe("P22-G inspector — Interactions section", () => {
     expect(stored.click.target.pageId).toBe("page-1");
   });
 
+  it("exposes the Stage 3 commerce click options", async () => {
+    renderPanelFor("b1");
+    expandSection("interactions");
+    expect(screen.getByText("Open Cart")).toBeTruthy();
+    expect(screen.getByText("WhatsApp Order")).toBeTruthy();
+  });
+
+  it("configuring click → open-cart stores the commerce action", async () => {
+    renderPanelFor("b1");
+    expandSection("interactions");
+    fireEvent.click(screen.getByText("Open Cart"));
+    await waitFor(() => {
+      expect(storedInteraction("b1")).toMatchObject({ click: { kind: "open-cart" } });
+    });
+  });
+
+  it("configuring click → whatsapp-order stores the commerce action", async () => {
+    renderPanelFor("b1");
+    expandSection("interactions");
+    fireEvent.click(screen.getByText("WhatsApp Order"));
+    await waitFor(() => {
+      expect(storedInteraction("b1")).toMatchObject({ click: { kind: "whatsapp-order" } });
+    });
+  });
+
   it("enabling hover writes a bounded effect and disabling clears it", async () => {
     renderPanelFor("b1");
     expandSection("interactions");

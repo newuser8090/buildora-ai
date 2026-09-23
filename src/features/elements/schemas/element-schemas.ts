@@ -238,6 +238,16 @@ export const ElementActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("start-animation"), elementId: z.string().min(1).max(ELEMENT_MAX_STRING_LENGTH) }),
   z.object({ kind: z.literal("submit-form"), formId: z.string().min(1).max(ELEMENT_MAX_STRING_LENGTH) }),
   z.object({ kind: z.literal("custom"), handlerId: z.string().min(1).max(ELEMENT_MAX_STRING_LENGTH) }),
+  // ---- Stage 3 — zero-code commerce actions ----
+  z.object({ kind: z.literal("open-cart") }),
+  z.object({
+    kind: z.literal("add-to-cart"),
+    title: z.string().min(1).max(200),
+    price: z.string().min(1).max(32),
+    pack: z.string().max(64).optional(),
+    imageUrl: z.string().max(2048).optional(),
+  }),
+  z.object({ kind: z.literal("whatsapp-order") }),
 ]);
 
 export const ElementHoverEffectSchema = z.object({

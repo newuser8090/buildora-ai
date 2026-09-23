@@ -4,12 +4,22 @@ import {
   EditableHeading,
   EditableText,
 } from "@/features/inline-editing/components/EditableText";
+import { useInlineEditPageId } from "@/features/inline-editing/context/InlineEditPageContext";
 import { resolveSectionPadding } from "@/features/editor/utils/section-styles";
+import { useCartStore } from "@/features/commerce/cart-store";
 import type { BaseSection } from "@/types/section";
 import type { PricingSectionProps } from "@/types/section";
 
 export function PricingSection({ section }: { section: BaseSection }) {
   const props = section.props as unknown as PricingSectionProps;
+
+  // Stage 3 — visitor (interactive) surfaces see NO pageId. Only there do
+  // "+ Add" CTAs become real add-to-cart buttons; the editing canvas keeps
+  // the inert inline-editable text so clicks always just select.
+  const pageId = useInlineEditPageId();
+  const isVisitor = pageId === null;
+  const addItem = useCartStore((s) => s.addItem);
+  const openCart = useCartStore((s) => s.openCart);
 
   // Safety: ensure render-critical fields exist
   const title = typeof props.title === "string" ? props.title : "Pricing";
@@ -175,28 +185,65 @@ export function PricingSection({ section }: { section: BaseSection }) {
                     </ul>
                   )}
 
-                  <EditableText
-                    section={section}
-                    fieldId="pricing.plan.cta"
-                    index={idx}
-                    value={planCta}
-                    as="span"
-                    style={{
-                      display: "block",
-                      textAlign: "center",
-                      padding: "0.75rem",
-                      borderRadius: "0.5rem",
-                      background: highlighted
-                        ? "var(--primary, #7c5cfc)"
-                        : "var(--muted, #f5f5f5)",
-                      color: highlighted
-                        ? "#ffffff"
-                        : "var(--foreground, #0a0a0a)",
-                      fontWeight: 600,
-                      fontSize: "0.9375rem",
-                      cursor: "default",
-                    }}
-                  />
+                  {isVisitor && planCta.trim().toLowerCase() === "+ add" ? (
+                    <button
+                      type="button"
+                      data-testid={`pricing-add-to-cart-${idx}`}
+                      onClick={() => {
+                        addItem({
+                          id: `${section.id}:${idx}`,
+                          title: planName,
+                          price: planPrice,
+                          ...(planFeatures.length > 0
+                            ? { pack: planFeatures[0] }
+                            : {}),
+                        });
+                        openCart();
+                      }}
+                      style={{
+                        display: "block",
+                        width: "100%",
+                        textAlign: "center",
+                        padding: "0.75rem",
+                        borderRadius: "0.5rem",
+                        background: highlighted
+                          ? "var(--primary, #7c5cfc)"
+                          : "var(--muted, #f5f5f5)",
+                        color: highlighted
+                          ? "#ffffff"
+                          : "var(--foreground, #0a0a0a)",
+                        fontWeight: 600,
+                        fontSize: "0.9375rem",
+                        cursor: "pointer",
+                        border: "none",
+                      }}
+                    >
+                      {planCta}
+                    </button>
+                  ) : (
+                    <EditableText
+                      section={section}
+                      fieldId="pricing.plan.cta"
+                      index={idx}
+                      value={planCta}
+                      as="span"
+                      style={{
+                        display: "block",
+                        textAlign: "center",
+                        padding: "0.75rem",
+                        borderRadius: "0.5rem",
+                        background: highlighted
+                          ? "var(--primary, #7c5cfc)"
+                          : "var(--muted, #f5f5f5)",
+                        color: highlighted
+                          ? "#ffffff"
+                          : "var(--foreground, #0a0a0a)",
+                        fontWeight: 600,
+                        fontSize: "0.9375rem",
+                        cursor: "default",
+                      }}
+                    />
+                  )}
                 </div>
               );
             })}

@@ -62,6 +62,9 @@ export const HeaderSectionPropsSchema = z.object({
   navLinks: z.array(LinkItemSchema).default([]),
   ctaText: z.string().optional(),
   ctaHref: z.string().optional(),
+  // Stage 3 — optional business WhatsApp/phone number powering the cart
+  // drawer's "Order on WhatsApp" checkout (template-provided, zero-code).
+  whatsappNumber: z.string().max(32).optional(),
 });
 
 export const HeroSectionPropsSchema = z.object({

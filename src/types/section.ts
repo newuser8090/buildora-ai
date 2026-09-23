@@ -41,6 +41,8 @@ export interface HeaderSectionProps {
   navLinks: { text: string; href: string }[];
   ctaText?: string;
   ctaHref?: string;
+  /** Stage 3 — business WhatsApp/phone number for cart-based checkout. */
+  whatsappNumber?: string;
 }
 
 export interface HeroSectionProps {

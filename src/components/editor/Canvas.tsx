@@ -17,6 +17,7 @@ import { getMyBlocksAdapter } from "@/features/my-blocks/storage/my-blocks-singl
 import { insertMyBlock } from "@/features/my-blocks/services/insert-my-block";
 import { useMyBlocksUiStore } from "@/features/my-blocks/store/my-blocks-ui-store";
 import { CanvasManipulationLayer } from "@/features/canvas/components/CanvasManipulationLayer";
+import { CartDrawer } from "@/features/commerce/components/CartDrawer";
 
 
 // ---------------------------------------------------------------------------
@@ -392,6 +393,8 @@ export function Canvas() {
               />
               {/* Phase P22-B — canvas selection & manipulation layer (editor-only) */}
               <CanvasManipulationLayer contentRef={previewContentRef} />
+              {/* Stage 3 — interactive commerce drawer (renders nothing when closed) */}
+              <CartDrawer />
             </>
           ) : (
             !isGenerating &&

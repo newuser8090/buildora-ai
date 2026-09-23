@@ -23,6 +23,7 @@ import { useRegisterDefaultSections } from "@/features/editor/registry/register-
 import { computePageRoutes } from "@/features/routing/routes";
 import { classifyPreviewLink } from "@/features/preview/engine/navigation";
 import { VisitorPageView } from "@/features/preview/components/VisitorPageView";
+import { CartDrawer } from "@/features/commerce/components/CartDrawer";
 import { SectionAssetProvider } from "@/features/editor/hooks/useSectionAssets";
 import { getShareProvider, ShareLinkService } from "@/features/sharing/services/share-link-service";
 import { FeedbackSheet } from "@/features/sharing/components/FeedbackSheet";
@@ -252,6 +253,9 @@ export default function ShareReviewPage() {
           onClose={() => setFeedbackOpen(false)}
         />
       )}
+
+      {/* Stage 3 — interactive commerce drawer (renders nothing when closed) */}
+      <CartDrawer />
     </div>
   );
 }

@@ -458,3 +458,60 @@ describe("treeHasDynamicPresentation", () => {
     ).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Stage 3 — commerce click actions (open-cart / add-to-cart / whatsapp-order)
+// ---------------------------------------------------------------------------
+
+describe("commerce click resolution", () => {
+  it("open-cart resolves safe with the commerce kind", () => {
+    const pres = resolveInteractionPresentation(
+      node({ id: "btn", interaction: { click: { kind: "open-cart" } } }),
+      treeWith(node({ id: "btn" })),
+      PAGES,
+    );
+    expect(pres.click?.kind).toBe("commerce");
+    expect(pres.click?.commerceKind).toBe("open-cart");
+    expect(pres.click?.safe).toBe(true);
+  });
+
+  it("whatsapp-order resolves safe with the commerce kind", () => {
+    const pres = resolveInteractionPresentation(
+      node({ id: "btn", interaction: { click: { kind: "whatsapp-order" } } }),
+      treeWith(node({ id: "btn" })),
+      PAGES,
+    );
+    expect(pres.click?.kind).toBe("commerce");
+    expect(pres.click?.commerceKind).toBe("whatsapp-order");
+    expect(pres.click?.safe).toBe(true);
+  });
+
+  it("add-to-cart resolves safe and carries the product payload", () => {
+    const pres = resolveInteractionPresentation(
+      node({
+        id: "btn",
+        interaction: {
+          click: { kind: "add-to-cart", title: "Avocado", price: "₹80", pack: "500 g" },
+        },
+      }),
+      treeWith(node({ id: "btn" })),
+      PAGES,
+    );
+    expect(pres.click?.kind).toBe("commerce");
+    expect(pres.click?.commerceKind).toBe("add-to-cart");
+    expect(pres.click?.safe).toBe(true);
+    expect(pres.click?.product).toEqual({ title: "Avocado", price: "₹80", pack: "500 g" });
+  });
+
+  it("add-to-cart omits optional fields when absent", () => {
+    const pres = resolveInteractionPresentation(
+      node({
+        id: "btn",
+        interaction: { click: { kind: "add-to-cart", title: "A", price: "₹1" } },
+      }),
+      treeWith(node({ id: "btn" })),
+      PAGES,
+    );
+    expect(pres.click?.product).toEqual({ title: "A", price: "₹1" });
+  });
+});

@@ -23,7 +23,14 @@ export type ElementAction =
   | { kind: "open-modal"; elementId: string }
   | { kind: "start-animation"; elementId: string }
   | { kind: "submit-form"; formId: string }
-  | { kind: "custom"; handlerId: string };
+  | { kind: "custom"; handlerId: string }
+  // ---- Stage 3 — zero-code commerce actions (cart drawer runtime) ----
+  /** Open the interactive cart drawer. */
+  | { kind: "open-cart" }
+  /** Add the element's product payload to the cart, then open the drawer. */
+  | { kind: "add-to-cart"; title: string; price: string; pack?: string; imageUrl?: string }
+  /** Open WhatsApp with the current cart formatted as an order message. */
+  | { kind: "whatsapp-order" };
 
 export interface ElementHoverEffect {
   color?: string;

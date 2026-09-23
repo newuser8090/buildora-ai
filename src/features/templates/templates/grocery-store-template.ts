@@ -71,6 +71,7 @@ export const groceryStoreTemplate: BuildoraTemplate = {
                 ]),
                 ctaText: "Shop Now",
                 ctaHref: "#products",
+                whatsappNumber: "919876543210",
               },
             ),
             makeSection(

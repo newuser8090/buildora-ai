@@ -20,6 +20,7 @@ import {
 } from "../store/preview-store";
 import { classifyPreviewLink } from "../engine/navigation";
 import { VisitorPageView } from "./VisitorPageView";
+import { CartDrawer } from "@/features/commerce/components/CartDrawer";
 
 const DEVICES: PreviewDevice[] = ["phone", "tablet", "desktop", "full"];
 
@@ -206,6 +207,9 @@ export function PreviewShell() {
           </div>
         </div>
       </div>
+
+      {/* Stage 3 — interactive commerce drawer (renders nothing when closed) */}
+      <CartDrawer />
     </div>
   );
 }

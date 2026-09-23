@@ -22,6 +22,7 @@ import {
   type PreviewDevice,
 } from "@/features/preview/store/preview-store";
 import { VisitorPageView } from "@/features/preview/components/VisitorPageView";
+import { CartDrawer } from "@/features/commerce/components/CartDrawer";
 
 const DEVICES: PreviewDevice[] = ["phone", "tablet", "desktop", "full"];
 const DEVICE_ICONS: Record<PreviewDevice, typeof Smartphone> = {
@@ -205,6 +206,9 @@ export default function PreviewPage() {
           </div>
         </div>
       </div>
+
+      {/* Stage 3 — interactive commerce drawer (renders nothing when closed) */}
+      <CartDrawer />
     </div>
   );
 }
